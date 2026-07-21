@@ -2,6 +2,8 @@
 
 [日本語](README.md) | [中文](README.zh-CN.md)
 
+> **Multilingual UI:** Supports Japanese, English, and Chinese.
+
 BPSR MIDI to KEY Player is a Windows desktop tool that converts MIDI files and USB MIDI keyboard input into keyboard events.
 
 It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ordinary keyboard keys and sent to the currently focused application. The app also supports MIDI sound playback, track/channel selection, realtime input conversion, note range adjustment, custom key bindings, global shortcuts, themes, and task tray storage.

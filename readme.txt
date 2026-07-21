@@ -1,6 +1,10 @@
 BPSR MIDI to KEY Player
 =======================
 
+対応言語
+--------
+日本語 / English / 中文 のUI表示に対応しています。
+
 このソフトについて
 ------------------
 BPSR MIDI to KEY Player は、MIDIファイルやUSB MIDIキーボード入力を、Windows上のキーボード入力へ変換するツールです。
