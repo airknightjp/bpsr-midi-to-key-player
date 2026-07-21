@@ -6,6 +6,25 @@ from i18n import COLOR_THEME_NAMES, TEXT, normalize_color_theme
 
 
 class I18nTests(unittest.TestCase):
+    def test_log_tab_uses_short_label_in_every_language(self) -> None:
+        self.assertEqual(TEXT["ja"]["playback_log"], "\u30ed\u30b0")
+        self.assertEqual(TEXT["en"]["playback_log"], "Log")
+        self.assertEqual(TEXT["zh"]["playback_log"], "\u65e5\u5fd7")
+
+    def test_performance_optimization_group_exists_in_every_language(self) -> None:
+        self.assertEqual(
+            TEXT["ja"]["performance_optimization_settings"],
+            "\u6f14\u594f\u6700\u9069\u5316",
+        )
+        self.assertEqual(
+            TEXT["en"]["performance_optimization_settings"],
+            "Performance Optimization",
+        )
+        self.assertEqual(
+            TEXT["zh"]["performance_optimization_settings"],
+            "\u6f14\u594f\u4f18\u5316",
+        )
+
     def test_file_menu_and_exit_labels_exist_for_all_languages(self) -> None:
         expected = {
             "en": ("File", "Exit"),
@@ -18,11 +37,6 @@ class I18nTests(unittest.TestCase):
                 translations = TEXT[language]
                 self.assertEqual(translations["menu_midi"], labels[0])
                 self.assertEqual(translations["exit"], labels[1])
-
-    def test_disabled_button_text_uses_locked_wording(self) -> None:
-        self.assertEqual(TEXT["en"]["disabled"], "Locked")
-        self.assertEqual(TEXT["ja"]["disabled"], "\u30ed\u30c3\u30af\u4e2d")
-        self.assertEqual(TEXT["zh"]["disabled"], "\u5df2\u9501\u5b9a")
 
     def test_log_messages_are_english_for_all_languages(self) -> None:
         expected = {
@@ -83,6 +97,32 @@ class I18nTests(unittest.TestCase):
     def test_waiting_status_exists_for_all_languages(self) -> None:
         for translations in TEXT.values():
             self.assertEqual(translations["waiting"], "waiting..")
+
+    def test_performance_option_labels_use_current_names(self) -> None:
+        expected = {
+            "en": ("Chord voicing", "Natural timing", "In-chord onset spread"),
+            "ja": (
+                "\u548c\u97f3\u914d\u7f6e",
+                "\u30bf\u30a4\u30df\u30f3\u30b0\u306e\u81ea\u7136\u5316",
+                "\u548c\u97f3\u5185\u306e\u767a\u97f3\u5dee",
+            ),
+            "zh": (
+                "\u548c\u5f26\u914d\u7f6e",
+                "\u65f6\u5e8f\u81ea\u7136\u5316",
+                "\u548c\u5f26\u5185\u53d1\u97f3\u5dee",
+            ),
+        }
+
+        for language, labels in expected.items():
+            with self.subTest(language=language):
+                translations = TEXT[language]
+                self.assertEqual(translations["chord_optimization"], labels[0])
+                self.assertEqual(translations["humanize_timing"], labels[1])
+                self.assertEqual(translations["chord_strum"], labels[2])
+
+    def test_optimization_progress_exists_for_all_languages(self) -> None:
+        for translations in TEXT.values():
+            self.assertIn("{percent}", translations["optimization_progress"])
 
 
 if __name__ == "__main__":

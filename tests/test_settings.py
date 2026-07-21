@@ -26,6 +26,7 @@ class SettingsTests(unittest.TestCase):
                         transpose_semitones=-7,
                         octave_shift=2,
                         humanize_timing=True,
+                        chord_optimization=True,
                         chord_strum=True,
                         repeat_prevention=True,
                         playback_speed_percent=135,
@@ -59,6 +60,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.transpose_semitones, -7)
         self.assertEqual(loaded.octave_shift, 2)
         self.assertTrue(loaded.humanize_timing)
+        self.assertTrue(loaded.chord_optimization)
         self.assertTrue(loaded.chord_strum)
         self.assertTrue(loaded.repeat_prevention)
         self.assertEqual(loaded.playback_speed_percent, 135)
@@ -85,6 +87,15 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(loaded.transpose_semitones, 12)
         self.assertEqual(loaded.octave_shift, -3)
+
+    def test_ten_percent_playback_speed_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict("os.environ", {"APPDATA": temp_dir}):
+                save_settings(AppSettings(playback_speed_percent=10))
+
+                loaded = load_settings()
+
+        self.assertEqual(loaded.playback_speed_percent, 10)
 
     def test_interrupted_atomic_save_is_recovered(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import ctypes
 import sys
 import tkinter as tk
 import threading
@@ -8,7 +9,7 @@ import time
 import webbrowser
 import winsound
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from config import (
     DEFAULT_KEY_BINDINGS,
@@ -40,7 +41,7 @@ from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
 from tray_icon import TrayIcon
 
 
-CHANNEL_PANE_WIDTH = 128
+CHANNEL_PANE_WIDTH = 38
 DEFAULT_WINDOW_WIDTH = 900
 DEFAULT_WINDOW_HEIGHT = 560
 DEFAULT_WINDOW_SIZE = f"{DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}"
@@ -52,9 +53,10 @@ MIDI_LIST_COLUMNS = ("duration", "note_range")
 APP_ICON_RELATIVE_PATH = Path("assets") / "app_icon_starry_concept.ico"
 APP_ICON_PNG_RELATIVE_PATH = Path("assets") / "app_icon_starry_concept.png"
 APP_WINDOW_TITLE = "BPSR MIDI to KEY Player"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_COPYRIGHT = "\u00a9 2026 airknightjp"
 APP_REPOSITORY_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
+GAME_COUNTDOWN_KEY_HOLD_SECONDS = 0.12
 
 
 class App(tk.Tk):
@@ -92,6 +94,7 @@ class App(tk.Tk):
         self.countdown_sound_var = tk.BooleanVar(value=self.settings.countdown_sound)
         self.game_countdown_sound_var = tk.BooleanVar(value=self.settings.game_countdown_sound)
         self.humanize_timing_var = tk.BooleanVar(value=self.settings.humanize_timing)
+        self.chord_optimization_var = tk.BooleanVar(value=self.settings.chord_optimization)
         self.chord_strum_var = tk.BooleanVar(value=self.settings.chord_strum)
         self.repeat_prevention_var = tk.BooleanVar(value=self.settings.repeat_prevention)
         self.playback_speed_var = tk.IntVar(value=self.settings.playback_speed_percent)
@@ -129,6 +132,8 @@ class App(tk.Tk):
         self.realtime_sound_output: RealtimeMidiSoundOutput | None = None
         self.midi_input_devices: list[tuple[int, str]] = []
         self.style = ttk.Style(self)
+        self.section_heading_font = tkfont.nametofont("TkDefaultFont").copy()
+        self.section_heading_font.configure(weight="bold")
         self.active_shortcut_sequences: list[str] = []
         self.hotkey_queue: queue.Queue[str] = queue.Queue()
         self.global_hotkeys: GlobalHotkeyManager | None = None
@@ -157,6 +162,7 @@ class App(tk.Tk):
         self.countdown_sound_var.trace_add("write", self._on_countdown_sound_changed)
         self.game_countdown_sound_var.trace_add("write", self._on_game_countdown_sound_changed)
         self.humanize_timing_var.trace_add("write", self._on_humanize_timing_changed)
+        self.chord_optimization_var.trace_add("write", self._on_chord_optimization_changed)
         self.chord_strum_var.trace_add("write", self._on_chord_strum_changed)
         self.repeat_prevention_var.trace_add("write", self._on_repeat_prevention_changed)
         self.auto_fit_note_range_var.trace_add("write", self._on_auto_fit_note_range_changed)
@@ -215,7 +221,11 @@ class App(tk.Tk):
         self.position_label = ttk.Label(playback_status, text="00:00 / 00:00", width=15, anchor="e")
         self.position_label.grid(row=1, column=2, sticky="e")
 
-        self.key_settings = ttk.LabelFrame(root, padding=(8, 8))
+        self.key_settings = ttk.LabelFrame(
+            root,
+            padding=(8, 8),
+            style="PrimarySection.TLabelframe",
+        )
         self.key_settings.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         self.key_settings.columnconfigure(2, weight=1)
         self.play_button = ttk.Button(
@@ -223,7 +233,13 @@ class App(tk.Tk):
             command=self.toggle_keyboard_playback,
             width=ACTION_BUTTON_WIDTH,
         )
-        self.play_button.grid(row=0, column=0, padx=(0, 14))
+        self.play_button.grid(
+            row=0,
+            column=0,
+            rowspan=2,
+            sticky="ns",
+            padx=(0, 14),
+        )
         self.countdown_label = ttk.Label(self.key_settings, width=12, anchor="e")
         self.countdown_label.grid(row=0, column=1, sticky="e", padx=(0, 6))
         self.countdown_settings = tk.Frame(self.key_settings, borderwidth=1, relief=tk.GROOVE, padx=6, pady=4)
@@ -286,7 +302,11 @@ class App(tk.Tk):
         self.shortcut_lock_check.grid(row=0, column=4, sticky="w", padx=(6, 0))
         self._refresh_shortcut_lock_state()
 
-        self.midi_input_settings = ttk.LabelFrame(root, padding=(8, 8))
+        self.midi_input_settings = ttk.LabelFrame(
+            root,
+            padding=(8, 8),
+            style="PrimarySection.TLabelframe",
+        )
         self.midi_input_settings.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.midi_input_settings.columnconfigure(2, weight=1)
         self.midi_input_button = ttk.Button(
@@ -313,7 +333,11 @@ class App(tk.Tk):
         )
         self.refresh_midi_inputs_button.grid(row=0, column=3)
 
-        self.sound_settings = ttk.LabelFrame(root, padding=10)
+        self.sound_settings = ttk.LabelFrame(
+            root,
+            padding=10,
+            style="PrimarySection.TLabelframe",
+        )
         self.sound_settings.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         self.sound_settings.columnconfigure(3, weight=1)
         self.dry_run_check = tk.Checkbutton(self.sound_settings, variable=self.dry_run_var, anchor="w")
@@ -324,12 +348,6 @@ class App(tk.Tk):
             anchor="w",
         )
         self.auto_fit_note_range_check.grid(row=0, column=1, sticky="w", padx=(0, 14))
-        self.humanize_timing_check = tk.Checkbutton(
-            self.sound_settings,
-            variable=self.humanize_timing_var,
-            anchor="w",
-        )
-        self.humanize_timing_check.grid(row=0, column=2, sticky="w", padx=(0, 14))
         sound_controls = ttk.Frame(self.sound_settings)
         sound_controls.grid(row=0, column=3, sticky="ew")
         sound_controls.columnconfigure(1, weight=1)
@@ -357,30 +375,71 @@ class App(tk.Tk):
             anchor="e",
         )
         self.sound_volume_label.grid(row=0, column=2, sticky="e")
-        self.chord_strum_check = tk.Checkbutton(
-            self.sound_settings,
-            variable=self.chord_strum_var,
-            anchor="w",
-        )
-        self.chord_strum_check.grid(
-            row=1,
-            column=0,
-            sticky="w",
-            padx=(0, 14),
-            pady=(8, 0),
-        )
         self.repeat_prevention_check = tk.Checkbutton(
             self.sound_settings,
             variable=self.repeat_prevention_var,
             anchor="w",
         )
         self.repeat_prevention_check.grid(
-            row=1,
-            column=1,
-            columnspan=2,
+            row=0,
+            column=2,
             sticky="w",
             padx=(0, 14),
+        )
+        self.performance_optimization_settings = tk.Frame(
+            self.sound_settings,
+            borderwidth=1,
+            relief=tk.GROOVE,
+            padx=6,
+            pady=4,
+        )
+        self.performance_optimization_settings.grid(
+            row=1,
+            column=0,
+            columnspan=3,
+            sticky="w",
             pady=(8, 0),
+        )
+        self.humanize_timing_check = tk.Checkbutton(
+            self.performance_optimization_settings,
+            variable=self.humanize_timing_var,
+            anchor="w",
+        )
+        self.humanize_timing_check.grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self.chord_strum_check = tk.Checkbutton(
+            self.performance_optimization_settings,
+            variable=self.chord_strum_var,
+            anchor="w",
+        )
+        self.chord_strum_check.grid(row=0, column=1, sticky="w", padx=(0, 14))
+        self.chord_optimization_control = tk.Frame(
+            self.performance_optimization_settings,
+            borderwidth=0,
+            relief=tk.FLAT,
+        )
+        self.chord_optimization_control.grid(row=0, column=2, sticky="w")
+        self.chord_optimization_check = tk.Checkbutton(
+            self.chord_optimization_control,
+            variable=self.chord_optimization_var,
+            text="",
+            padx=0,
+            pady=0,
+        )
+        self.chord_optimization_check.pack(side=tk.LEFT)
+        self.chord_optimization_label = tk.Label(
+            self.chord_optimization_control,
+            anchor="w",
+            padx=2,
+            pady=1,
+        )
+        self.chord_optimization_label.pack(side=tk.LEFT, fill=tk.Y)
+        self.chord_optimization_control.bind(
+            "<Button-1>",
+            self._toggle_chord_optimization,
+        )
+        self.chord_optimization_label.bind(
+            "<Button-1>",
+            self._toggle_chord_optimization,
         )
         note_shift_controls = ttk.Frame(self.sound_settings)
         note_shift_controls.grid(
@@ -451,17 +510,19 @@ class App(tk.Tk):
         )
         self.playback_speed_label.grid(row=0, column=2, sticky="e")
 
-        self.channel_box = ttk.LabelFrame(
+        self.channel_box = tk.Frame(
             root,
-            padding=6,
-            style="TrackChannel.TLabelframe",
+            borderwidth=1,
+            relief=tk.GROOVE,
+            padx=0,
+            pady=0,
         )
         self.channel_box.configure(width=CHANNEL_PANE_WIDTH)
         self.channel_box.grid(row=7, column=0, sticky="nsw", padx=(0, 4), pady=(12, 0))
         self.channel_box.grid_propagate(False)
         self.channel_canvas = tk.Canvas(
             self.channel_box,
-            width=CHANNEL_PANE_WIDTH - 12,
+            width=CHANNEL_PANE_WIDTH - 2,
             borderwidth=0,
             highlightthickness=0,
         )
@@ -475,6 +536,7 @@ class App(tk.Tk):
         self.channel_frame.bind("<Configure>", self._on_channel_frame_configure)
         self.channel_canvas.bind("<Configure>", self._on_channel_canvas_configure)
         self.channel_canvas.bind("<MouseWheel>", self._on_channel_mousewheel)
+        self._set_channels(())
 
         self.detail_tabs = ttk.Notebook(root, style="Borderless.TNotebook")
         self.detail_tabs.grid(row=7, column=1, sticky="nsew", pady=(12, 0))
@@ -1108,6 +1170,7 @@ class App(tk.Tk):
             log=lambda message: self.log_queue.put(message),
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
+            repeat_prevention=self.repeat_prevention_var.get(),
         )
         self.realtime_sound_output.set_enabled(test_mode)
         self.midi_input_bridge = MidiInputKeyboardBridge(
@@ -1119,6 +1182,7 @@ class App(tk.Tk):
             auto_fit_note_range=self.auto_fit_note_range_var.get(),
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
+            repeat_prevention=self.repeat_prevention_var.get(),
             key_bindings=self._current_key_bindings(),
         )
         try:
@@ -1189,12 +1253,16 @@ class App(tk.Tk):
             log=lambda message: self.log_queue.put(message),
             on_state=lambda state, pid=playback_id: self.log_queue.put(f"__STATE__{pid}__{state}"),
             on_position=lambda position, pid=playback_id: self.log_queue.put(f"__POSITION__{pid}__{position}"),
+            on_optimization_progress=lambda progress, pid=playback_id: self.log_queue.put(
+                f"__OPTIMIZATION__{pid}__{'done' if progress is None else progress}"
+            ),
             enabled_channels=self._enabled_channels,
             enabled_sources=self._enabled_sources,
             auto_fit_note_range=self.auto_fit_note_range_var.get(),
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
             humanize_timing=self.humanize_timing_var.get(),
+            chord_optimization=self.chord_optimization_var.get(),
             chord_strum=self.chord_strum_var.get(),
             repeat_prevention=self.repeat_prevention_var.get(),
             playback_speed_percent=self.playback_speed_var.get(),
@@ -1235,6 +1303,9 @@ class App(tk.Tk):
             log=lambda message: self.log_queue.put(message),
             on_state=lambda state, pid=playback_id: self.log_queue.put(f"__SOUND_STATE__{pid}__{state}"),
             on_position=lambda position, pid=playback_id: self.log_queue.put(f"__POSITION__{pid}__{position}"),
+            on_optimization_progress=lambda progress, pid=playback_id: self.log_queue.put(
+                f"__OPTIMIZATION__{pid}__{'done' if progress is None else progress}"
+            ),
             enabled_channels=self._enabled_channels,
             enabled_sources=self._enabled_sources,
             volume=self.sound_volume_var.get(),
@@ -1242,6 +1313,7 @@ class App(tk.Tk):
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
             humanize_timing=self.humanize_timing_var.get(),
+            chord_optimization=self.chord_optimization_var.get(),
             chord_strum=self.chord_strum_var.get(),
             repeat_prevention=self.repeat_prevention_var.get(),
             playback_speed_percent=self.playback_speed_var.get(),
@@ -1403,12 +1475,16 @@ class App(tk.Tk):
             on_position=lambda current_position, pid=playback_id: self.log_queue.put(
                 f"__POSITION__{pid}__{current_position}"
             ),
+            on_optimization_progress=lambda progress, pid=playback_id: self.log_queue.put(
+                f"__OPTIMIZATION__{pid}__{'done' if progress is None else progress}"
+            ),
             enabled_channels=self._enabled_channels,
             enabled_sources=self._enabled_sources,
             auto_fit_note_range=self.auto_fit_note_range_var.get(),
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
             humanize_timing=self.humanize_timing_var.get(),
+            chord_optimization=self.chord_optimization_var.get(),
             chord_strum=self.chord_strum_var.get(),
             repeat_prevention=self.repeat_prevention_var.get(),
             playback_speed_percent=self.playback_speed_var.get(),
@@ -1436,8 +1512,12 @@ class App(tk.Tk):
             )
             self.enabled_channels_snapshot = selected_channels
         if self.current_play_mode == "keys" and self.player and self.player.is_playing:
+            if hasattr(self.player, "request_chord_optimization_refresh"):
+                self.player.request_chord_optimization_refresh()
             self.player.request_release_all()
         elif self.current_play_mode == "sound" and self.sound_player and self.sound_player.is_playing:
+            if hasattr(self.sound_player, "request_chord_optimization_refresh"):
+                self.sound_player.request_chord_optimization_refresh()
             self.sound_player.release_all()
 
     def _on_countdown_changed(self, *_args: object) -> None:
@@ -1457,6 +1537,18 @@ class App(tk.Tk):
             self.sound_player.set_humanize_timing(value)
         self._save_current_settings()
 
+    def _on_chord_optimization_changed(self, *_args: object) -> None:
+        value = self.chord_optimization_var.get()
+        if self.player:
+            self.player.set_chord_optimization(value)
+        if self.sound_player:
+            self.sound_player.set_chord_optimization(value)
+        self._save_current_settings()
+
+    def _toggle_chord_optimization(self, _event: tk.Event | None = None) -> str:
+        self.chord_optimization_var.set(not self.chord_optimization_var.get())
+        return "break"
+
     def _on_chord_strum_changed(self, *_args: object) -> None:
         value = self.chord_strum_var.get()
         if self.player:
@@ -1471,6 +1563,10 @@ class App(tk.Tk):
             self.player.set_repeat_prevention(value)
         if self.sound_player:
             self.sound_player.set_repeat_prevention(value)
+        if self.midi_input_bridge:
+            self.midi_input_bridge.set_repeat_prevention(value)
+        if self.realtime_sound_output:
+            self.realtime_sound_output.set_repeat_prevention(value)
         self._save_current_settings()
 
     def _on_auto_fit_note_range_changed(self, *_args: object) -> None:
@@ -1665,6 +1761,7 @@ class App(tk.Tk):
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
             humanize_timing=self.humanize_timing_var.get(),
+            chord_optimization=self.chord_optimization_var.get(),
             chord_strum=self.chord_strum_var.get(),
             repeat_prevention=self.repeat_prevention_var.get(),
             playback_speed_percent=self._read_int_var(
@@ -1818,34 +1915,76 @@ class App(tk.Tk):
     def _refresh_playback_buttons(self) -> None:
         sound_button = self.__dict__.get("sound_button")
         if self.current_play_mode == "keys":
-            self.play_button.configure(text=self._text("stop_keys"), state="normal")
+            self._configure_action_button(
+                self.play_button,
+                text=self._text("stop_keys"),
+                state="normal",
+                active=True,
+            )
             if sound_button is not None:
-                sound_button.configure(text=self._text("disabled"), state="disabled")
+                self._configure_action_button(sound_button, text=self._text("play_midi_sound"), state="disabled")
         elif self.current_play_mode == "sound":
-            self.play_button.configure(text=self._text("disabled"), state="disabled")
+            self._configure_action_button(self.play_button, text=self._text("play_keys"), state="disabled")
             if sound_button is not None:
-                sound_button.configure(text=self._text("stop_midi"), state="normal")
+                self._configure_action_button(
+                    sound_button,
+                    text=self._text("stop_midi"),
+                    state="normal",
+                    active=True,
+                )
         elif self._midi_input_is_running():
-            self.play_button.configure(text=self._text("disabled"), state="disabled")
+            self._configure_action_button(self.play_button, text=self._text("play_keys"), state="disabled")
             if sound_button is not None:
-                sound_button.configure(text=self._text("play_midi_sound"), state="normal")
+                self._configure_action_button(sound_button, text=self._text("play_midi_sound"), state="normal")
         else:
-            self.play_button.configure(text=self._text("play_keys"), state="normal")
+            self._configure_action_button(self.play_button, text=self._text("play_keys"), state="normal")
             if sound_button is not None:
-                sound_button.configure(text=self._text("play_midi_sound"), state="normal")
+                self._configure_action_button(sound_button, text=self._text("play_midi_sound"), state="normal")
 
     def _refresh_midi_input_button(self) -> None:
         if "midi_input_button" not in self.__dict__ or "midi_input_select" not in self.__dict__:
             return
         if self._midi_input_is_running():
-            self.midi_input_button.configure(text=self._text("stop_midi_input"), state="normal")
+            self._configure_action_button(
+                self.midi_input_button,
+                text=self._text("stop_midi_input"),
+                state="normal",
+                active=True,
+            )
             self.midi_input_select.configure(state="disabled")
         elif self.current_play_mode == "keys":
-            self.midi_input_button.configure(text=self._text("disabled"), state="disabled")
+            self._configure_action_button(
+                self.midi_input_button,
+                text=self._text("start_midi_input"),
+                state="disabled",
+            )
             self.midi_input_select.configure(state="readonly")
         else:
-            self.midi_input_button.configure(text=self._text("start_midi_input"), state="normal")
+            self._configure_action_button(
+                self.midi_input_button,
+                text=self._text("start_midi_input"),
+                state="normal",
+            )
             self.midi_input_select.configure(state="readonly")
+
+    def _configure_action_button(
+        self,
+        button: ttk.Button,
+        *,
+        text: str,
+        state: str,
+        active: bool = False,
+    ) -> None:
+        if state == "disabled":
+            button.configure(
+                text=text,
+                image="",
+                state=state,
+                style="DisabledAction.TButton",
+            )
+            return
+        style = "ActiveAction.TButton" if active else "TButton"
+        button.configure(text=text, image="", state=state, style=style)
 
     def _refresh_option_states(self) -> None:
         dry_run_state = tk.DISABLED if self.current_play_mode == "keys" or self._midi_input_is_running() else tk.NORMAL
@@ -1910,44 +2049,50 @@ class App(tk.Tk):
             for channel in track.channels
         ]
         selected_sources.intersection_update(available_sources)
+        self._add_channel_grid_header()
 
         if not available_sources:
             self.enabled_sources_snapshot = frozenset()
             self.enabled_channels_snapshot = frozenset()
-            label = tk.Label(
-                self.channel_frame,
-                text=self._text("no_channel_events"),
-                anchor="w",
-                justify="left",
-            )
-            label.pack(anchor="w", fill=tk.X)
-            self._style_channel_label(label)
-            label.bind("<MouseWheel>", self._on_channel_mousewheel)
             self.updating_channels = False
             self.channel_canvas.update_idletasks()
             self._update_channel_scrollregion()
             self.channel_canvas.yview_moveto(0.0)
             return
 
-        for track, channel in available_sources:
+        for row, (track, channel) in enumerate(available_sources, start=1):
             source = (track, channel)
             var = tk.BooleanVar(value=source in selected_sources)
             self.track_channel_vars[source] = var
-            check = tk.Checkbutton(
+            row_frame = tk.Frame(
                 self.channel_frame,
-                text=self._text("track_channel").format(
-                    track=track + 1,
-                    channel=channel + 1,
-                ),
-                variable=var,
-                command=self._on_channel_changed,
-                anchor="w",
-                justify="left",
-                padx=0,
+                borderwidth=0,
+                relief=tk.FLAT,
             )
-            check.pack(anchor="w", fill=tk.X)
-            self._style_checkbutton(check)
-            check.bind("<MouseWheel>", self._on_channel_mousewheel)
+            row_frame.grid(row=row, column=0, sticky="ew", pady=(0, 1))
+            row_frame.bind("<MouseWheel>", self._on_channel_mousewheel)
+            row_frame.bind(
+                "<Button-1>",
+                lambda _event, variable=var: self._toggle_channel_var(variable),
+            )
+            row_frame._channel_var = var  # type: ignore[attr-defined]
+
+            cell = tk.Label(
+                row_frame,
+                text=f"{track + 1}-{channel + 1}",
+                anchor="center",
+                borderwidth=0,
+                relief=tk.FLAT,
+                padx=0,
+                pady=3,
+            )
+            cell.pack(fill=tk.X)
+            cell.bind("<MouseWheel>", self._on_channel_mousewheel)
+            cell.bind(
+                "<Button-1>",
+                lambda _event, variable=var: self._toggle_channel_var(variable),
+            )
+            self._style_channel_row(row_frame, var)
 
         self.enabled_sources_snapshot = frozenset(selected_sources)
         self.enabled_channels_snapshot = frozenset(
@@ -1957,6 +2102,30 @@ class App(tk.Tk):
         self.channel_canvas.update_idletasks()
         self._update_channel_scrollregion()
         self.channel_canvas.yview_moveto(0.0)
+
+    def _add_channel_grid_header(self) -> None:
+        self.channel_frame.grid_columnconfigure(0, minsize=34)
+        header_frame = tk.Frame(self.channel_frame, borderwidth=0, relief=tk.FLAT)
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 1))
+        header_frame.bind("<MouseWheel>", self._on_channel_mousewheel)
+        label = tk.Label(
+            header_frame,
+            text="T-C",
+            anchor="center",
+            borderwidth=0,
+            relief=tk.FLAT,
+            padx=5,
+            pady=2,
+        )
+        label.pack(fill=tk.X)
+        label.bind("<MouseWheel>", self._on_channel_mousewheel)
+        self._style_channel_header_label(label)
+        self._style_channel_cell(header_frame)
+
+    def _toggle_channel_var(self, variable: tk.BooleanVar) -> None:
+        variable.set(not variable.get())
+        self._style_channel_grid_widgets(self.channel_frame, self._theme_palette())
+        self._on_channel_changed()
 
     def _on_channel_frame_configure(self, _event: tk.Event | None = None) -> None:
         self._update_channel_scrollregion()
@@ -1992,7 +2161,7 @@ class App(tk.Tk):
         return (
             0,
             0,
-            max(1, viewport_width, content_right),
+            max(1, content_right),
             max(1, viewport_height, content_bottom),
         )
 
@@ -2053,6 +2222,24 @@ class App(tk.Tk):
                 self._refresh_playback_buttons()
                 self._refresh_midi_input_button()
                 self._refresh_option_states()
+            elif message.startswith("__OPTIMIZATION__"):
+                parsed = self._parse_player_message(message, "__OPTIMIZATION__")
+                if parsed is None:
+                    continue
+                _playback_id, progress = parsed
+                if progress == "done":
+                    if self.current_play_mode == "keys":
+                        self.state_var.set("playing")
+                    elif self.current_play_mode == "sound":
+                        self.state_var.set("sound playing")
+                else:
+                    try:
+                        percent = max(0, min(100, int(progress)))
+                    except ValueError:
+                        continue
+                    self.state_var.set(
+                        self._text("optimization_progress").format(percent=percent)
+                    )
             elif message.startswith("__POSITION__"):
                 parsed = self._parse_player_message(message, "__POSITION__")
                 if parsed is None:
@@ -2084,6 +2271,7 @@ class App(tk.Tk):
         self.auto_fit_note_range_check.configure(text=self._text("auto_fit_note_range"))
         self.transpose_semitones_label.configure(text=self._text("transpose_semitones"))
         self.octave_shift_label.configure(text=self._text("octave_shift"))
+        self.chord_optimization_label.configure(text=self._text("chord_optimization"))
         self.chord_strum_check.configure(text=self._text("chord_strum"))
         self.repeat_prevention_check.configure(text=self._text("repeat_prevention"))
         self.color_theme_var.set(COLOR_THEME_NAMES[self.language][self.color_theme])
@@ -2094,7 +2282,10 @@ class App(tk.Tk):
         self.refresh_midi_inputs_button.configure(text=self._text("refresh_midi_inputs"))
         self.sound_settings.configure(text=self._text("midi_sound_settings"))
         self.dry_run_check.configure(text=self._text("dry_run"))
-        self.countdown_label.configure(text=self._text("countdown"))
+        countdown_text = self._text("countdown")
+        if self.language == "zh":
+            countdown_text += "\u3000"
+        self.countdown_label.configure(text=countdown_text)
         self.countdown_unit_label.configure(text=self._text("seconds_unit"))
         self.countdown_sound_check.configure(text=self._text("countdown_sound"))
         self.game_countdown_sound_check.configure(text=self._text("game_countdown_sound"))
@@ -2116,7 +2307,6 @@ class App(tk.Tk):
         self.sound_volume_title.grid_configure(padx=(0, self._sound_volume_label_padx()))
         self.sound_volume_title.configure(text=self._text("midi_sound_volume"))
         self.position_title.configure(text=self._text("playback_position"))
-        self.channel_box.configure(text=self._text("channels"))
         self.detail_tabs.tab(self.midi_list_tab, text=self._text("midi_list"))
         self.detail_tabs.tab(self.reload_tab, text="\u21bb")
         self.detail_tabs.tab(self.log_tab, text=self._text("playback_log"))
@@ -2337,11 +2527,11 @@ class App(tk.Tk):
 
         state = int(getattr(event, "state", 0))
         modifiers = []
-        if state & 0x0004:
+        if App._shortcut_modifier_pressed(event, state, 0x0004, 0x11):
             modifiers.append("Ctrl")
-        if state & 0x0008 or state & 0x0080 or state & 0x20000:
+        if App._shortcut_modifier_pressed(event, state, 0x0008, 0x12):
             modifiers.append("Alt")
-        if state & 0x0001:
+        if App._shortcut_modifier_pressed(event, state, 0x0001, 0x10):
             modifiers.append("Shift")
 
         key_aliases = {
@@ -2353,6 +2543,15 @@ class App(tk.Tk):
         if len(display_key) == 1:
             display_key = display_key.upper()
         return "+".join(modifiers + [display_key])
+
+    @staticmethod
+    def _shortcut_modifier_pressed(event: tk.Event, state: int, state_mask: int, virtual_key: int) -> bool:
+        if sys.platform == "win32" and hasattr(event, "serial"):
+            try:
+                return bool(ctypes.windll.user32.GetAsyncKeyState(virtual_key) & 0x8000)
+            except Exception:
+                pass
+        return bool(state & state_mask)
 
     @staticmethod
     def _shortcut_to_sequence(shortcut: str) -> str | None:
@@ -2419,6 +2618,17 @@ class App(tk.Tk):
         self.style.configure("TLabelFrame", background=palette["bg"], foreground=palette["fg"])
         self.style.configure("TLabelFrame.Label", background=palette["bg"], foreground=palette["fg"])
         self.style.configure(
+            "PrimarySection.TLabelframe",
+            background=palette["bg"],
+            foreground=palette["fg"],
+        )
+        self.style.configure(
+            "PrimarySection.TLabelframe.Label",
+            background=palette["bg"],
+            foreground=palette["fg"],
+            font=self.section_heading_font,
+        )
+        self.style.configure(
             "TrackChannel.TLabelframe",
             background=palette["bg"],
             foreground=palette["fg"],
@@ -2433,7 +2643,7 @@ class App(tk.Tk):
         self.style.map(
             "TButton",
             background=[
-                ("disabled", palette["disabled_bg"]),
+                ("disabled", palette["bg"]),
                 ("pressed", palette["select"]),
                 ("active", palette["field"]),
             ],
@@ -2441,6 +2651,34 @@ class App(tk.Tk):
                 ("disabled", palette["disabled_fg"]),
                 ("pressed", "#ffffff"),
             ],
+        )
+        self.style.configure(
+            "ActiveAction.TButton",
+            background=palette["select"],
+            foreground="#ffffff",
+        )
+        self.style.map(
+            "ActiveAction.TButton",
+            background=[
+                ("disabled", palette["bg"]),
+                ("pressed", palette["select"]),
+                ("active", palette["select"]),
+                ("!disabled", palette["select"]),
+            ],
+            foreground=[
+                ("disabled", palette["disabled_fg"]),
+                ("!disabled", "#ffffff"),
+            ],
+        )
+        self.style.configure(
+            "DisabledAction.TButton",
+            background=palette["bg"],
+            foreground=palette["disabled_fg"],
+        )
+        self.style.map(
+            "DisabledAction.TButton",
+            background=[("disabled", palette["bg"])],
+            foreground=[("disabled", palette["disabled_fg"])],
         )
         self.style.configure("TEntry", fieldbackground=palette["field"], foreground=palette["fg"])
         self.style.configure(
@@ -2547,14 +2785,24 @@ class App(tk.Tk):
             selectbackground=palette["select"],
             selectforeground="#ffffff",
         )
+        self.channel_box.configure(
+            background=palette["bg"],
+            highlightbackground=palette["panel"],
+            highlightcolor=palette["panel"],
+        )
         self.channel_canvas.configure(background=palette["bg"])
-        self.channel_frame.configure(background=palette["bg"])
+        self.channel_frame.configure(background=palette["track"])
         self.shortcut_settings.configure(
             background=palette["bg"],
             highlightbackground=palette["panel"],
             highlightcolor=palette["panel"],
         )
         self.countdown_settings.configure(
+            background=palette["bg"],
+            highlightbackground=palette["panel"],
+            highlightcolor=palette["panel"],
+        )
+        self.performance_optimization_settings.configure(
             background=palette["bg"],
             highlightbackground=palette["panel"],
             highlightcolor=palette["panel"],
@@ -2573,11 +2821,8 @@ class App(tk.Tk):
             self.shortcut_lock_check,
         ):
             self._style_checkbutton(check, palette)
-        for check in self.channel_frame.winfo_children():
-            if isinstance(check, tk.Checkbutton):
-                self._style_checkbutton(check, palette)
-            elif isinstance(check, tk.Label):
-                self._style_channel_label(check, palette)
+        self._style_chord_optimization_control(palette)
+        self._style_channel_grid_widgets(self.channel_frame, palette)
         self.__dict__.pop("_midi_scrollbar_heading_bottom", None)
         self.after_idle(self._align_midi_scrollbar)
 
@@ -2595,6 +2840,21 @@ class App(tk.Tk):
             relief=tk.FLAT,
         )
 
+    def _style_chord_optimization_control(
+        self,
+        palette: dict[str, str] | None = None,
+    ) -> None:
+        if palette is None:
+            palette = self._theme_palette()
+        self._style_checkbutton(self.chord_optimization_check, palette)
+        self.chord_optimization_control.configure(background=palette["panel"])
+        self.chord_optimization_label.configure(
+            background=palette["panel"],
+            foreground=palette["fg"],
+            activebackground=palette["field"],
+            activeforeground=palette["fg"],
+        )
+
     def _style_channel_label(
         self,
         label: tk.Label,
@@ -2604,8 +2864,73 @@ class App(tk.Tk):
             palette = self._theme_palette()
         label.configure(
             background=palette["bg"],
-            foreground=palette["disabled_fg"],
+            foreground=palette["fg"],
+            highlightbackground=palette["track"],
         )
+
+    def _style_channel_header_label(
+        self,
+        label: tk.Label,
+        palette: dict[str, str] | None = None,
+    ) -> None:
+        if palette is None:
+            palette = self._theme_palette()
+        label.configure(
+            background=palette["panel"],
+            foreground=palette["fg"],
+            highlightbackground=palette["track"],
+        )
+
+    def _style_channel_row(
+        self,
+        row: tk.Frame,
+        variable: tk.BooleanVar,
+        palette: dict[str, str] | None = None,
+    ) -> None:
+        if palette is None:
+            palette = self._theme_palette()
+        enabled = variable.get()
+        background = palette["select"] if enabled else palette["bg"]
+        foreground = "#ffffff" if enabled else palette["fg"]
+        row.configure(background=background)
+        for child in row.winfo_children():
+            if isinstance(child, tk.Label):
+                child.configure(
+                    background=background,
+                    foreground=foreground,
+                    highlightbackground=palette["track"],
+                )
+
+    def _style_channel_cell(
+        self,
+        cell: tk.Frame,
+        palette: dict[str, str] | None = None,
+    ) -> None:
+        if palette is None:
+            palette = self._theme_palette()
+        cell.configure(
+            background=palette["bg"],
+            highlightbackground=palette["track"],
+            highlightcolor=palette["track"],
+        )
+
+    def _style_channel_grid_widgets(
+        self,
+        widget: tk.Widget,
+        palette: dict[str, str],
+    ) -> None:
+        for child in widget.winfo_children():
+            if isinstance(child, tk.Checkbutton):
+                self._style_checkbutton(child, palette)
+            elif isinstance(child, tk.Label):
+                self._style_channel_header_label(child, palette)
+            elif isinstance(child, tk.Frame):
+                variable = getattr(child, "_channel_var", None)
+                if isinstance(variable, tk.BooleanVar):
+                    self._style_channel_row(child, variable, palette)
+                else:
+                    self._style_channel_cell(child, palette)
+                    self._style_channel_grid_widgets(child, palette)
 
     def _theme_palette(self) -> dict[str, str]:
         palettes = {
@@ -2788,8 +3113,16 @@ class App(tk.Tk):
         if output is None:
             return
         key = self._current_key_bindings()[48]
-        output.tap(key)
+        self._tap_countdown_game_key(output, key)
         self._log_from_worker(f"Countdown game key: {key}")
+
+    @staticmethod
+    def _tap_countdown_game_key(output: KeyboardOutput, key: str) -> None:
+        output.press(key)
+        try:
+            time.sleep(GAME_COUNTDOWN_KEY_HOLD_SECONDS)
+        finally:
+            output.release(key)
 
     def _log_from_worker(self, message: str) -> None:
         log_queue = self.__dict__.get("log_queue")

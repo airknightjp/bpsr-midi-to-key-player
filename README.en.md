@@ -14,19 +14,20 @@ It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ord
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.
 - Use test mode to log conversion output without sending real key input.
-- Adjust MIDI volume, playback position, and playback speed. Double-click the playback speed label to reset to 100%.
+- Adjust MIDI volume, playback position, and playback speed (10-200%). Double-click the playback speed label to reset to 100%.
 - Adjust window opacity. Double-click the opacity label to reset to 100%.
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) from Common Settings. Double-click either label to reset to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
-- Humanize timing, apply chord strum, and prevent rapid repeats.
+- Configure natural timing, in-chord onset spread, and chord voicing from Common Settings.
+- Configure rapid-repeat prevention under Common Settings.
 - Display used track/channel combinations in `T1 - C1` format.
 - Toggle each track/channel combination, with immediate changes during playback.
 - Convert sustain pedal CC64 to the Space key.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Log countdown ticks and in-game countdown key presses.
-- Configure global start/stop shortcuts by pressing keys.
+- Configure global start/stop shortcuts by pressing keys, including standalone function keys such as F11.
 - Lock shortcut settings to avoid accidental changes.
 - Edit the three-octave C3-B5 key bindings from `Settings > Key Bindings`.
 - Highlight duplicate key bindings in red.
@@ -57,6 +58,24 @@ The base BPSR keyboard range is C3-B5.
 
 Transpose and octave shift apply to MIDI file keyboard conversion, realtime input conversion, MIDI sound playback, and realtime preview sound. Range fitting or normal out-of-range handling is applied after the pitch shift.
 
+## Chord Voicing
+
+When `Chord voicing` is enabled, notes starting within approximately 35 ms are analyzed as one chord and rearranged by octaves into a playable form.
+
+- The top voice, bass, common tones, voice order, and smooth movement between adjacent chords are prioritized while excessive spacing, physical-key collisions, and frequent range switches are discouraged.
+- A sufficiently long rest is treated as a phrase boundary. After the boundary, the planner can select a range suited to the new phrase without being overly constrained by the preceding voicing.
+- With `Fit to 3 octaves` enabled, every optimized chord stays inside C3-B5.
+- With range fitting disabled, the low, normal, and high ranges are compared, and `<` or `>` is used only where the optimized chord benefits from a range change.
+- With range fitting disabled, the current playback speed is evaluated continuously. Slower playback can use the added real-time switching margin to select a wider range, while faster playback avoids unnatural consecutive range changes. Changes made during playback take effect immediately.
+- During initial planning, the status shows progress from `Optimizing 0%` through `Optimizing 100%`. The playback clock starts after the plan is ready.
+- Replanning during playback runs in the background and playback continues with the current plan until the replacement is ready. Continuous speed changes are debounced for 150 ms and obsolete calculations are cancelled.
+- If every note cannot be placed at once, redundant notes or inner voices are omitted before the top voice or bass.
+- This applies to MIDI file keyboard conversion and MIDI sound playback, not realtime input conversion.
+
+When `In-chord onset spread` is also enabled, exactly simultaneous chords lead with the top voice and delay inner voices slightly more than outer voices. Stronger notes are also biased toward earlier onsets, with a maximum difference of 12 ms. Existing onset differences in the MIDI are preserved. These planned offsets are not applied while `In-chord onset spread` is disabled.
+
+Natural timing remains a separate small timing variation applied to the chord as a group. Rapid-repeat prevention evaluates the converted physical key after chord voicing.
+
 ## Key Bindings
 
 Use `Settings > Key Bindings` to change the output keys for the C3-B5 three-octave range.
@@ -85,7 +104,7 @@ Keyboard output is sent to whichever application is focused at that moment.
 MIDI sound playback and realtime input conversion can be used at the same time.
 MIDI file keyboard conversion and realtime input conversion cannot be used at the same time.
 
-Repeat prevention applies to MIDI file keyboard conversion and MIDI sound playback. It does not apply to realtime input conversion.
+Repeat prevention applies to MIDI file keyboard conversion, MIDI sound playback, and realtime input conversion. For MIDI files, it evaluates the actual interval after playback speed, natural timing, and in-chord onset spread are applied; for realtime input, it evaluates the actual output interval after reception. Repeats to the same converted target below 50 ms are suppressed. Realtime preview sound follows the same rule, and the note-off belonging to a suppressed note is consumed without stopping an accepted note.
 
 ## Permissions
 
@@ -111,7 +130,7 @@ Settings are saved atomically to reduce the chance of broken settings after an i
 
 ## Version
 
-v1.1.0
+v1.1.1
 
 ## Copyright
 

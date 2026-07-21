@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from main import App
 from global_hotkeys import GlobalHotkeyManager, HotkeySpec, MOD_CONTROL, shortcut_to_hotkey_spec
@@ -24,6 +25,39 @@ class ShortcutTests(unittest.TestCase):
         self.assertIsNotNone(spec)
         assert spec is not None
         self.assertEqual(spec.vk, 0x74)
+        self.assertEqual(spec.action, "play")
+
+    def test_shortcut_from_key_event_supports_single_f11(self) -> None:
+        event = SimpleNamespace(keysym="F11", state=0)
+
+        self.assertEqual(App._shortcut_from_event(event), "F11")
+
+    def test_shortcut_from_key_event_does_not_treat_extended_state_as_alt(self) -> None:
+        event = SimpleNamespace(keysym="F11", state=0x20000)
+
+        self.assertEqual(App._shortcut_from_event(event), "F11")
+
+    def test_shortcut_from_real_key_event_uses_physical_alt_state(self) -> None:
+        event = SimpleNamespace(keysym="F11", state=0x0008, serial=1)
+
+        with patch("main.ctypes.windll.user32.GetAsyncKeyState", return_value=0):
+            self.assertEqual(App._shortcut_from_event(event), "F11")
+
+    def test_shortcut_from_real_key_event_keeps_actual_alt_f11(self) -> None:
+        event = SimpleNamespace(keysym="F11", state=0, serial=1)
+
+        with patch(
+            "main.ctypes.windll.user32.GetAsyncKeyState",
+            side_effect=lambda virtual_key: 0x8000 if virtual_key == 0x12 else 0,
+        ):
+            self.assertEqual(App._shortcut_from_event(event), "Alt+F11")
+
+    def test_shortcut_to_hotkey_spec_supports_single_f11(self) -> None:
+        spec = shortcut_to_hotkey_spec("F11", "play")
+
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        self.assertEqual(spec.vk, 0x7A)
         self.assertEqual(spec.action, "play")
 
     def test_shortcut_to_hotkey_spec_supports_ctrl_letters(self) -> None:

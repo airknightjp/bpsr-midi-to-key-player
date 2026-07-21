@@ -388,11 +388,20 @@ class MidiSwitchTests(unittest.TestCase):
     def test_sound_repeat_prevention_ignores_rapid_note_and_matching_note_off(self) -> None:
         player = RecordingShortMessageSoundPlayer(repeat_prevention=True)
 
-        player._handle_event(MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64))
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=1.0,
+        )
         player._handle_event(MidiEvent(time=0.01, kind="note_off", channel=0, note=60, velocity=0))
-        player._handle_event(MidiEvent(time=0.02, kind="note_on", channel=0, note=60, velocity=64))
+        player._handle_event(
+            MidiEvent(time=0.02, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=1.02,
+        )
         player._handle_event(MidiEvent(time=0.03, kind="note_off", channel=0, note=60, velocity=0))
-        player._handle_event(MidiEvent(time=0.05, kind="note_on", channel=0, note=60, velocity=64))
+        player._handle_event(
+            MidiEvent(time=0.05, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=1.05,
+        )
 
         self.assertEqual(
             player.messages,
@@ -402,6 +411,22 @@ class MidiSwitchTests(unittest.TestCase):
                 (0x90, 60, 64),
             ],
         )
+
+    def test_sound_repeat_prevention_uses_output_interval_after_speed_change(self) -> None:
+        player = RecordingShortMessageSoundPlayer(repeat_prevention=True)
+
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=10.0,
+        )
+        player._handle_event(MidiEvent(time=0.04, kind="note_off", channel=0, note=60, velocity=0))
+        player._handle_event(
+            MidiEvent(time=0.08, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=10.04,
+        )
+        player._handle_event(MidiEvent(time=0.12, kind="note_off", channel=0, note=60, velocity=0))
+
+        self.assertEqual(player.messages, [(0x90, 60, 64), (0x80, 60, 0)])
 
     def test_sound_player_filters_same_channel_by_track(self) -> None:
         enabled_sources = {(0, 0)}
@@ -460,6 +485,57 @@ class MidiSwitchTests(unittest.TestCase):
 
         self.assertEqual(player.messages, [(0x90, 62, 64), (0x80, 62, 0)])
 
+    def test_sound_player_uses_the_same_wide_chord_optimization_plan(self) -> None:
+        player = RecordingShortMessageSoundPlayer(
+            auto_fit_note_range=False,
+            chord_optimization=True,
+        )
+        note_ons = [
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=note, velocity=64, track=0)
+            for note in (36, 64, 79, 96)
+        ]
+        note_offs = [
+            MidiEvent(time=1.0, kind="note_off", channel=0, note=note, velocity=0, track=0)
+            for note in (36, 64, 79, 96)
+        ]
+        events = [*note_ons, *note_offs]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        for event in events:
+            player._handle_event(event)
+
+        self.assertEqual(
+            player.messages,
+            [
+                (0x90, 48, 64),
+                (0x90, 64, 64),
+                (0x90, 67, 64),
+                (0x90, 72, 64),
+                (0x80, 48, 0),
+                (0x80, 64, 0),
+                (0x80, 67, 0),
+                (0x80, 72, 0),
+            ],
+        )
+
+    def test_speed_change_rebuilds_sound_chord_optimization_plan(self) -> None:
+        player = RecordingShortMessageSoundPlayer(
+            chord_optimization=True,
+            playback_speed_percent=100,
+        )
+        events = [MidiEvent(time=0.0, kind="note_on", channel=0, note=84, velocity=80)]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        self.assertFalse(player._chord_optimization_plan_dirty)
+        self.assertEqual(player._chord_optimization_plan_speed, 100)
+
+        player.set_playback_speed(137)
+
+        self.assertTrue(player._chord_optimization_plan_dirty)
+        player._refresh_chord_optimization_plan(events)
+        player._optimization_planner.wait(timeout=1.0)
+        self.assertEqual(player._chord_optimization_plan_speed, 137)
+
     def test_sound_playback_receives_chord_strum_and_speed_settings(self) -> None:
         app = object.__new__(App)
         app.current_play_mode = None
@@ -473,6 +549,7 @@ class MidiSwitchTests(unittest.TestCase):
         app.transpose_semitones_var = type("Var", (), {"get": lambda self: 7})()
         app.octave_shift_var = type("Var", (), {"get": lambda self: -1})()
         app.humanize_timing_var = type("Var", (), {"get": lambda self: True})()
+        app.chord_optimization_var = type("Var", (), {"get": lambda self: True})()
         app.chord_strum_var = type("Var", (), {"get": lambda self: True})()
         app.repeat_prevention_var = type("Var", (), {"get": lambda self: True})()
         app.playback_speed_var = type("Var", (), {"get": lambda self: 140})()
@@ -486,6 +563,7 @@ class MidiSwitchTests(unittest.TestCase):
             App.play_sound(app)
 
         self.assertIsNotNone(ConfiguredSoundPlayer.instance)
+        self.assertTrue(ConfiguredSoundPlayer.instance.kwargs["chord_optimization"])
         self.assertTrue(ConfiguredSoundPlayer.instance.kwargs["chord_strum"])
         self.assertTrue(ConfiguredSoundPlayer.instance.kwargs["repeat_prevention"])
         self.assertEqual(ConfiguredSoundPlayer.instance.kwargs["transpose_semitones"], 7)

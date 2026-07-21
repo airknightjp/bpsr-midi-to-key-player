@@ -22,6 +22,7 @@ from config import (
     shift_midi_note,
 )
 from keyboard_output import KeyboardOutput
+from repeat_guard import RapidRepeatGuard
 
 
 MAXPNAMELEN = 32
@@ -31,7 +32,7 @@ MMSYSERR_NOERROR = 0
 
 LogCallback = Callable[[str], None]
 StateCallback = Callable[[str], None]
-MidiMessageCallback = Callable[[int, int, int, int], None]
+MidiMessageCallback = Callable[[int, int, int, int, float], None]
 NoteOwner = tuple[int, int]
 
 
@@ -81,6 +82,7 @@ class MidiInputKeyboardBridge:
         auto_fit_note_range: bool = False,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
+        repeat_prevention: bool = False,
         key_bindings: dict[int, str] | None = None,
     ):
         self.device_id = device_id
@@ -88,7 +90,7 @@ class MidiInputKeyboardBridge:
         self.log = log or (lambda _message: None)
         self.on_state = on_state or (lambda _state: None)
         self.on_midi_message = on_midi_message or (
-            lambda _event_type, _channel, _data1, _data2: None
+            lambda _event_type, _channel, _data1, _data2, _received_at: None
         )
         self.auto_fit_note_range = auto_fit_note_range
         self.transpose_semitones = max(
@@ -100,6 +102,7 @@ class MidiInputKeyboardBridge:
             min(MAX_OCTAVE_SHIFT, int(octave_shift)),
         )
         self.key_bindings = normalized_key_bindings(key_bindings)
+        self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
         self._handle = ctypes.c_void_p()
         self._callback = MidiInCallback(self._midi_callback)
         self._lock = threading.RLock()
@@ -107,6 +110,7 @@ class MidiInputKeyboardBridge:
         self._active_notes: dict[NoteOwner, list[str]] = defaultdict(list)
         self._active_key_owner: dict[str, NoteOwner] = {}
         self._sustain_channels: set[int] = set()
+        self._suppressed_note_offs: dict[NoteOwner, int] = defaultdict(int)
         self._octave_shift = 0
 
     @property
@@ -118,6 +122,8 @@ class MidiInputKeyboardBridge:
         with self._lock:
             if self._running:
                 raise RuntimeError("MIDI input is already running")
+            self._repeat_guard.reset()
+            self._suppressed_note_offs.clear()
         result = ctypes.windll.winmm.midiInOpen(
             ctypes.byref(self._handle),
             self.device_id,
@@ -158,6 +164,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._sustain_channels.clear()
+            self._reset_repeat_state()
             self.auto_fit_note_range = bool(enabled)
 
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
@@ -175,6 +182,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._sustain_channels.clear()
+            self._reset_repeat_state()
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
 
@@ -183,7 +191,12 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._sustain_channels.clear()
+            self._reset_repeat_state()
             self.key_bindings = normalized_key_bindings(key_bindings)
+
+    def set_repeat_prevention(self, enabled: bool) -> None:
+        with self._lock:
+            self._repeat_guard.set_enabled(enabled)
 
     def _shutdown_input(self) -> None:
         with self._lock:
@@ -215,6 +228,7 @@ class MidiInputKeyboardBridge:
             self._active_notes.clear()
             self._active_key_owner.clear()
             self._sustain_channels.clear()
+            self._reset_repeat_state()
             self._octave_shift = 0
         for error in errors:
             self.log(f"MIDI input cleanup failed: {error}")
@@ -234,15 +248,16 @@ class MidiInputKeyboardBridge:
         data2 = (param1 >> 16) & 0xFF
         event_type = status & 0xF0
         channel = status & 0x0F
+        received_at = time.perf_counter()
 
         try:
-            self.on_midi_message(event_type, channel, data1, data2)
+            self.on_midi_message(event_type, channel, data1, data2, received_at)
         except Exception as exc:
             self.log(f"Realtime MIDI sound event failed: {exc}")
 
         try:
             if event_type == 0x90 and data2 > 0:
-                self._note_on(channel, data1, data2)
+                self._note_on(channel, data1, data2, received_at)
             elif event_type in {0x80, 0x90}:
                 self._note_off(channel, data1)
             elif event_type == 0xB0 and data1 == 64:
@@ -258,7 +273,13 @@ class MidiInputKeyboardBridge:
                     self.log(f"MIDI input cleanup failed: {cleanup_exc}")
             self.on_state("midi input failed")
 
-    def _note_on(self, channel: int, note: int, velocity: int) -> None:
+    def _note_on(
+        self,
+        channel: int,
+        note: int,
+        velocity: int,
+        received_at: float | None = None,
+    ) -> None:
         playable_note = self._playable_note(note)
         if playable_note is None:
             self.log(f"   input ch {channel} skip note {note}")
@@ -273,6 +294,14 @@ class MidiInputKeyboardBridge:
         with self._lock:
             if not self._running:
                 return
+            repeat_token = (mapping.octave_shift, mapping.key)
+            if self._repeat_guard.should_suppress(repeat_token, received_at):
+                self._suppressed_note_offs[(channel, note)] += 1
+                self.log(
+                    f"   input ch {channel} skip rapid repeat "
+                    f"{mapping.note_name:<3} -> {mapping.key}"
+                )
+                return
             self._move_to_octave_shift(mapping.octave_shift)
             owner = (channel, note)
             self._press_note_key(mapping.key, owner=owner)
@@ -285,6 +314,13 @@ class MidiInputKeyboardBridge:
             if not self._running:
                 return
             owner = (channel, note)
+            suppressed_count = self._suppressed_note_offs.get(owner, 0)
+            if suppressed_count > 0:
+                if suppressed_count == 1:
+                    self._suppressed_note_offs.pop(owner, None)
+                else:
+                    self._suppressed_note_offs[owner] = suppressed_count - 1
+                return
             keys = self._active_notes.get(owner)
             if not keys:
                 return
@@ -395,3 +431,7 @@ class MidiInputKeyboardBridge:
                     released.add(key)
         self._active_notes.clear()
         self._active_key_owner.clear()
+
+    def _reset_repeat_state(self) -> None:
+        self._repeat_guard.reset()
+        self._suppressed_note_offs.clear()

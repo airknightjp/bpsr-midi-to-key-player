@@ -79,6 +79,19 @@ class RealtimeMidiSoundOutputTests(unittest.TestCase):
 
         self.assertEqual(output.messages[:2], [(0x90, 62, 100), (0x80, 62, 0)])
 
+    def test_repeat_prevention_suppresses_realtime_sound_and_consumes_note_off(self) -> None:
+        output = RecordingRealtimeMidiSoundOutput(repeat_prevention=True)
+        output.set_enabled(True)
+
+        output.process_message(0x90, 0, 60, 100, received_at=1.0)
+        output.process_message(0x90, 0, 60, 100, received_at=1.02)
+        output.process_message(0x80, 0, 60, 0)
+
+        self.assertEqual(output.messages, [(0x90, 60, 100)])
+
+        output.process_message(0x80, 0, 60, 0)
+        self.assertEqual(output.messages, [(0x90, 60, 100), (0x80, 60, 0)])
+
 
 class FakeVar:
     def __init__(self, value):
@@ -144,6 +157,7 @@ class RealtimeInputSoundModeTests(unittest.TestCase):
                 app.auto_fit_note_range_var = FakeVar(False)
                 app.transpose_semitones_var = FakeVar(-4)
                 app.octave_shift_var = FakeVar(1)
+                app.repeat_prevention_var = FakeVar(True)
                 app.log_queue = queue.Queue()
                 app._selected_midi_input_device_id = lambda: 2
                 app._save_current_settings = lambda: None
@@ -166,6 +180,12 @@ class RealtimeInputSoundModeTests(unittest.TestCase):
                     -4,
                 )
                 self.assertEqual(ConfiguredMidiInputBridge.instance.kwargs["octave_shift"], 1)
+                self.assertTrue(
+                    ConfiguredRealtimeSoundOutput.instance.kwargs["repeat_prevention"]
+                )
+                self.assertTrue(
+                    ConfiguredMidiInputBridge.instance.kwargs["repeat_prevention"]
+                )
 
 
 if __name__ == "__main__":

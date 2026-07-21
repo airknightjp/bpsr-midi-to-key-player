@@ -107,6 +107,9 @@ class FakeRunningPlayer:
     def set_humanize_timing(self, enabled: bool) -> None:
         self.humanize_timing = enabled
 
+    def set_chord_optimization(self, enabled: bool) -> None:
+        self.chord_optimization = enabled
+
     def set_chord_strum(self, enabled: bool) -> None:
         self.chord_strum = enabled
 
@@ -122,6 +125,77 @@ class FakeRunningPlayer:
 
 
 class KeyPlaybackTests(unittest.TestCase):
+    def test_keyboard_optimization_reports_progress_and_completion(self) -> None:
+        progress: list[int | None] = []
+        player = MidiKeyboardPlayer(
+            output=FakeOutput(),
+            chord_optimization=True,
+            on_optimization_progress=progress.append,
+        )
+        events = [
+            MidiEvent(time=index * 0.1, kind="note_on", channel=0, note=60, velocity=80)
+            for index in range(20)
+        ]
+
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        self.assertEqual(progress[0], 0)
+        self.assertIn(100, progress)
+        self.assertIsNone(progress[-1])
+
+    def test_optimization_queue_message_uses_localized_status(self) -> None:
+        app = object.__new__(App)
+        app.log_queue = queue.Queue()
+        app.log_queue.put("__OPTIMIZATION__4__42")
+        app.playback_id = 4
+        app.current_play_mode = "keys"
+        app.language = "ja"
+        app.state_var = FakeVar("")
+        app.after = lambda _delay, _callback: None
+
+        App._drain_log_queue(app)
+
+        self.assertEqual(app.state_var.get(), "最適化中 42%")
+
+    def test_chord_optimization_keeps_label_color_and_uses_common_checkbox_color(self) -> None:
+        app = object.__new__(App)
+
+        for theme in (
+            "light",
+            "dark",
+            "green",
+            "yellow",
+            "blue",
+            "sky_blue",
+            "red",
+            "pink",
+            "orange",
+        ):
+            app.color_theme = theme
+            palette = App._theme_palette(app)
+            app.chord_optimization_control = FakeLabel()
+            app.chord_optimization_check = FakeLabel()
+            app.chord_optimization_label = FakeLabel()
+
+            App._style_chord_optimization_control(app, palette)
+
+            self.assertEqual(
+                app.chord_optimization_check.config["background"],
+                palette["bg"],
+            )
+            self.assertEqual(
+                app.chord_optimization_check.config["selectcolor"],
+                palette["field"],
+            )
+            self.assertEqual(
+                app.chord_optimization_label.config["background"],
+                palette["panel"],
+            )
+            self.assertEqual(
+                app.chord_optimization_label.config["foreground"],
+                palette["fg"],
+            )
+
     def test_play_keys_passes_countdown_setting_to_player(self) -> None:
         app = object.__new__(App)
         app.events = [MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64)]
@@ -130,6 +204,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app.countdown_var = FakeVar(4)
         app.countdown_sound_var = FakeVar(False)
         app.humanize_timing_var = FakeVar(True)
+        app.chord_optimization_var = FakeVar(True)
         app.chord_strum_var = FakeVar(False)
         app.repeat_prevention_var = FakeVar(True)
         app.playback_speed_var = FakeVar(100)
@@ -155,6 +230,7 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertIsNone(FakeKeyboardPlayer.calls[0]["on_countdown_tick"])
         self.assertEqual(app.current_play_mode, "keys")
         self.assertTrue(app.player.kwargs["humanize_timing"])
+        self.assertTrue(app.player.kwargs["chord_optimization"])
         self.assertTrue(app.player.kwargs["repeat_prevention"])
         self.assertEqual(app.player.kwargs["transpose_semitones"], 3)
         self.assertEqual(app.player.kwargs["octave_shift"], -1)
@@ -167,6 +243,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app.countdown_var = FakeVar(4)
         app.countdown_sound_var = FakeVar(True)
         app.humanize_timing_var = FakeVar(False)
+        app.chord_optimization_var = FakeVar(False)
         app.chord_strum_var = FakeVar(False)
         app.repeat_prevention_var = FakeVar(False)
         app.playback_speed_var = FakeVar(100)
@@ -197,6 +274,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app.dry_run_var = FakeVar(True)
         app.auto_fit_note_range_var = FakeVar(False)
         app.humanize_timing_var = FakeVar(True)
+        app.chord_optimization_var = FakeVar(True)
         app.chord_strum_var = FakeVar(True)
         app.repeat_prevention_var = FakeVar(True)
         app.playback_speed_var = FakeVar(125)
@@ -217,6 +295,7 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertTrue(app.seeking_keys)
         self.assertEqual(FakeKeyboardPlayer.calls[0]["start_time"], 2.5)
         self.assertTrue(app.player.kwargs["humanize_timing"])
+        self.assertTrue(app.player.kwargs["chord_optimization"])
         self.assertTrue(app.player.kwargs["chord_strum"])
         self.assertTrue(app.player.kwargs["repeat_prevention"])
         self.assertEqual(app.player.kwargs["playback_speed_percent"], 125)
@@ -274,7 +353,7 @@ class KeyPlaybackTests(unittest.TestCase):
             App._key_binding_from_event(SimpleNamespace(keysym="F1", char="")),
         )
 
-    def test_game_countdown_tick_taps_c3_binding(self) -> None:
+    def test_game_countdown_tick_holds_c3_binding(self) -> None:
         app = object.__new__(App)
         output = FakeOutput()
         app.log_queue = queue.Queue()
@@ -285,7 +364,8 @@ class KeyPlaybackTests(unittest.TestCase):
 
         App._play_countdown_tick(app, 2)
 
-        self.assertEqual(output.tapped, ["z"])
+        self.assertEqual(output.pressed, ["z"])
+        self.assertEqual(output.released, ["z"])
         self.assertEqual(app.log_queue.get_nowait(), "Countdown: 2")
         self.assertEqual(app.log_queue.get_nowait(), "Countdown game key: z")
 
@@ -388,6 +468,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app.countdown_var = FakeVar(0)
         app.countdown_sound_var = FakeVar(False)
         app.humanize_timing_var = FakeVar(False)
+        app.chord_optimization_var = FakeVar(False)
         app.chord_strum_var = FakeVar(False)
         app.repeat_prevention_var = FakeVar(False)
         app.playback_speed_var = FakeVar(100)
@@ -459,13 +540,39 @@ class KeyPlaybackTests(unittest.TestCase):
         output = FakeOutput()
         player = MidiKeyboardPlayer(output=output, repeat_prevention=True)
 
-        player._handle_event(MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64))
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=1.0,
+        )
         player._handle_event(MidiEvent(time=0.01, kind="note_off", channel=0, note=60, velocity=0))
-        player._handle_event(MidiEvent(time=0.02, kind="note_on", channel=0, note=60, velocity=64))
+        player._handle_event(
+            MidiEvent(time=0.02, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=1.02,
+        )
         player._handle_event(MidiEvent(time=0.03, kind="note_off", channel=0, note=60, velocity=0))
-        player._handle_event(MidiEvent(time=0.05, kind="note_on", channel=0, note=60, velocity=64))
+        player._handle_event(
+            MidiEvent(time=0.05, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=1.05,
+        )
 
         self.assertEqual(output.pressed, ["a", "a"])
+        self.assertEqual(output.released, ["a"])
+
+    def test_repeat_prevention_uses_output_interval_after_speed_change(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(output=output, repeat_prevention=True)
+
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=10.0,
+        )
+        player._handle_event(MidiEvent(time=0.04, kind="note_off", channel=0, note=60, velocity=0))
+        player._handle_event(
+            MidiEvent(time=0.08, kind="note_on", channel=0, note=60, velocity=64),
+            emitted_at=10.04,
+        )
+
+        self.assertEqual(output.pressed, ["a"])
         self.assertEqual(output.released, ["a"])
 
     def test_keyboard_player_applies_transpose_and_octave_shift(self) -> None:
@@ -482,6 +589,60 @@ class KeyPlaybackTests(unittest.TestCase):
 
         self.assertEqual(output.pressed, ["s"])
         self.assertEqual(output.released, ["s"])
+
+    def test_keyboard_optimization_uses_one_external_range_for_a_high_chord(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(output=output, chord_optimization=True)
+        events = [
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=note, velocity=80, track=0)
+            for note in (84, 88, 91)
+        ]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        for event in events:
+            player._handle_event(event)
+
+        self.assertEqual(output.tapped, [">"])
+        self.assertEqual(output.pressed[-3:], ["z", "c", "b"])
+
+    def test_speed_change_rebuilds_keyboard_chord_optimization_plan(self) -> None:
+        player = MidiKeyboardPlayer(
+            output=FakeOutput(),
+            chord_optimization=True,
+            playback_speed_percent=100,
+        )
+        events = [MidiEvent(time=0.0, kind="note_on", channel=0, note=84, velocity=80)]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        self.assertFalse(player._chord_optimization_plan_dirty)
+        self.assertEqual(player._chord_optimization_plan_speed, 100)
+
+        player.set_playback_speed(73)
+
+        self.assertTrue(player._chord_optimization_plan_dirty)
+        player._refresh_chord_optimization_plan(events)
+        player._optimization_planner.wait(timeout=1.0)
+        self.assertEqual(player._chord_optimization_plan_speed, 73)
+
+    def test_optimized_note_still_uses_rapid_repeat_prevention(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(
+            output=output,
+            chord_optimization=True,
+            repeat_prevention=True,
+        )
+        events = [
+            MidiEvent(time=0.00, kind="note_on", channel=0, note=96, velocity=80, track=0),
+            MidiEvent(time=0.01, kind="note_off", channel=0, note=96, velocity=0, track=0),
+            MidiEvent(time=0.04, kind="note_on", channel=0, note=96, velocity=80, track=0),
+            MidiEvent(time=0.05, kind="note_off", channel=0, note=96, velocity=0, track=0),
+        ]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        for event in events:
+            player._handle_event(event, emitted_at=1.0 + event.time)
+
+        self.assertEqual(output.pressed.count("a"), 1)
 
     def test_humanized_schedule_keeps_chords_together_and_event_order(self) -> None:
         class FixedRandom:
@@ -561,19 +722,39 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertTrue(key_player.chord_strum)
         self.assertTrue(sound_player.chord_strum)
 
-    def test_repeat_prevention_change_updates_active_key_and_sound_players(self) -> None:
+    def test_chord_optimization_change_updates_active_key_and_sound_players(self) -> None:
         key_player = FakeRunningPlayer()
         sound_player = FakeRunningPlayer()
+        app = object.__new__(App)
+        app.chord_optimization_var = FakeVar(True)
+        app.player = key_player
+        app.sound_player = sound_player
+        app._save_current_settings = lambda: None
+
+        App._on_chord_optimization_changed(app)
+
+        self.assertTrue(key_player.chord_optimization)
+        self.assertTrue(sound_player.chord_optimization)
+
+    def test_repeat_prevention_change_updates_all_active_midi_paths(self) -> None:
+        key_player = FakeRunningPlayer()
+        sound_player = FakeRunningPlayer()
+        midi_input_bridge = FakeRunningPlayer()
+        realtime_sound_output = FakeRunningPlayer()
         app = object.__new__(App)
         app.repeat_prevention_var = FakeVar(True)
         app.player = key_player
         app.sound_player = sound_player
+        app.midi_input_bridge = midi_input_bridge
+        app.realtime_sound_output = realtime_sound_output
         app._save_current_settings = lambda: None
 
         App._on_repeat_prevention_changed(app)
 
         self.assertTrue(key_player.repeat_prevention)
         self.assertTrue(sound_player.repeat_prevention)
+        self.assertTrue(midi_input_bridge.repeat_prevention)
+        self.assertTrue(realtime_sound_output.repeat_prevention)
 
     def test_note_shift_change_updates_all_active_midi_paths(self) -> None:
         key_player = FakeRunningPlayer()

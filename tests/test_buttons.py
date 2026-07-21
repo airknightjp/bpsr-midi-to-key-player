@@ -96,7 +96,11 @@ class ButtonStateTests(unittest.TestCase):
 
         self.assertEqual(app.play_button.config["text"], "stop_keys")
         self.assertEqual(app.play_button.config["state"], "normal")
+        self.assertEqual(app.play_button.config["style"], "ActiveAction.TButton")
         self.assertEqual(app.sound_button.config["state"], "disabled")
+        self.assertEqual(app.sound_button.config["text"], "play_midi_sound")
+        self.assertEqual(app.sound_button.config["image"], "")
+        self.assertEqual(app.sound_button.config["style"], "DisabledAction.TButton")
 
     def test_midi_mode_turns_keyboard_button_into_disabled(self) -> None:
         app = self.make_app("sound")
@@ -105,8 +109,11 @@ class ButtonStateTests(unittest.TestCase):
 
         self.assertEqual(app.sound_button.config["text"], "stop_midi")
         self.assertEqual(app.sound_button.config["state"], "normal")
-        self.assertEqual(app.play_button.config["text"], "disabled")
+        self.assertEqual(app.sound_button.config["style"], "ActiveAction.TButton")
+        self.assertEqual(app.play_button.config["text"], "play_keys")
+        self.assertEqual(app.play_button.config["image"], "")
         self.assertEqual(app.play_button.config["state"], "disabled")
+        self.assertEqual(app.play_button.config["style"], "DisabledAction.TButton")
 
     def test_midi_input_mode_turns_keyboard_button_into_disabled(self) -> None:
         app = self.make_app(None)
@@ -114,8 +121,10 @@ class ButtonStateTests(unittest.TestCase):
 
         App._refresh_playback_buttons(app)
 
-        self.assertEqual(app.play_button.config["text"], "disabled")
+        self.assertEqual(app.play_button.config["text"], "play_keys")
+        self.assertEqual(app.play_button.config["image"], "")
         self.assertEqual(app.play_button.config["state"], "disabled")
+        self.assertEqual(app.play_button.config["style"], "DisabledAction.TButton")
 
     def test_keyboard_mode_turns_midi_input_button_into_disabled(self) -> None:
         app = object.__new__(App)
@@ -127,8 +136,10 @@ class ButtonStateTests(unittest.TestCase):
 
         App._refresh_midi_input_button(app)
 
-        self.assertEqual(app.midi_input_button.config["text"], "disabled")
+        self.assertEqual(app.midi_input_button.config["text"], "start_midi_input")
+        self.assertEqual(app.midi_input_button.config["image"], "")
         self.assertEqual(app.midi_input_button.config["state"], "disabled")
+        self.assertEqual(app.midi_input_button.config["style"], "DisabledAction.TButton")
 
     def test_midi_sound_mode_keeps_midi_input_button_enabled(self) -> None:
         app = object.__new__(App)
@@ -142,6 +153,23 @@ class ButtonStateTests(unittest.TestCase):
 
         self.assertEqual(app.midi_input_button.config["text"], "start_midi_input")
         self.assertEqual(app.midi_input_button.config["state"], "normal")
+        self.assertEqual(app.midi_input_button.config["style"], "TButton")
+        self.assertEqual(app.midi_input_button.config["image"], "")
+
+    def test_running_midi_input_keeps_pressed_button_color(self) -> None:
+        app = object.__new__(App)
+        app.current_play_mode = None
+        app.midi_input_button = FakeButton()
+        app.midi_input_select = FakeSelect()
+        app.midi_input_bridge = type("Bridge", (), {"is_running": True})()
+        app._text = lambda key: key
+
+        App._refresh_midi_input_button(app)
+
+        self.assertEqual(app.midi_input_button.config["text"], "stop_midi_input")
+        self.assertEqual(app.midi_input_button.config["state"], "normal")
+        self.assertEqual(app.midi_input_button.config["style"], "ActiveAction.TButton")
+        self.assertEqual(app.midi_input_button.config["image"], "")
 
     def test_keyboard_mode_keeps_humanize_option_enabled(self) -> None:
         app = object.__new__(App)

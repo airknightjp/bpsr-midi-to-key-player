@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from live_midi_input import MIM_DATA, MidiInputKeyboardBridge
 
@@ -189,6 +190,66 @@ class LiveMidiInputTests(unittest.TestCase):
             ],
         )
 
+    def test_repeat_prevention_suppresses_realtime_same_target_and_consumes_note_off(self) -> None:
+        output = FakeOutput()
+        logs: list[str] = []
+        bridge = self._running_bridge(
+            output,
+            log=logs.append,
+            repeat_prevention=True,
+        )
+
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=1.0)
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=1.049)
+        bridge._note_off(channel=0, note=60)
+
+        self.assertEqual(output.events, [("press", "a")])
+        self.assertTrue(any("skip rapid repeat" in message for message in logs))
+
+        bridge._note_off(channel=0, note=60)
+        self.assertEqual(output.events, [("press", "a"), ("release", "a")])
+
+    def test_repeat_prevention_uses_converted_realtime_target(self) -> None:
+        output = FakeOutput()
+        bridge = self._running_bridge(
+            output,
+            auto_fit_note_range=True,
+            repeat_prevention=True,
+        )
+
+        bridge._note_on(channel=0, note=72, velocity=100, received_at=2.0)
+        bridge._note_off(channel=0, note=72)
+        bridge._note_on(channel=0, note=84, velocity=100, received_at=2.04)
+        bridge._note_off(channel=0, note=84)
+
+        self.assertEqual(output.events, [("press", "q"), ("release", "q")])
+
+    def test_enabling_repeat_prevention_during_realtime_input_takes_effect_immediately(self) -> None:
+        output = FakeOutput()
+        bridge = self._running_bridge(output)
+
+        bridge.set_repeat_prevention(True)
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=3.0)
+        bridge._note_off(channel=0, note=60)
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=3.02)
+        bridge._note_off(channel=0, note=60)
+
+        self.assertEqual(output.events, [("press", "a"), ("release", "a")])
+
+    def test_disabling_repeat_prevention_keeps_pending_suppressed_note_off(self) -> None:
+        output = FakeOutput()
+        bridge = self._running_bridge(output, repeat_prevention=True)
+
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=4.0)
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=4.02)
+        bridge.set_repeat_prevention(False)
+        bridge._note_off(channel=0, note=60)
+
+        self.assertEqual(output.events, [("press", "a")])
+
+        bridge._note_off(channel=0, note=60)
+        self.assertEqual(output.events, [("press", "a"), ("release", "a")])
+
     def test_note_event_after_stop_is_ignored(self) -> None:
         output = FakeOutput()
         bridge = MidiInputKeyboardBridge(device_id=0, output=output)
@@ -210,19 +271,20 @@ class LiveMidiInputTests(unittest.TestCase):
 
     def test_raw_midi_messages_are_forwarded_to_sound_callback(self) -> None:
         output = FakeOutput()
-        messages: list[tuple[int, int, int, int]] = []
+        messages: list[tuple[int, int, int, int, float]] = []
         bridge = self._running_bridge(output, on_midi_message=lambda *message: messages.append(message))
 
-        bridge._midi_callback(None, MIM_DATA, 0, 0x90 | (60 << 8) | (100 << 16), 0)
-        bridge._midi_callback(None, MIM_DATA, 0, 0x80 | (60 << 8), 0)
-        bridge._midi_callback(None, MIM_DATA, 0, 0xB0 | (64 << 8) | (127 << 16), 0)
+        with patch("live_midi_input.time.perf_counter", return_value=12.5):
+            bridge._midi_callback(None, MIM_DATA, 0, 0x90 | (60 << 8) | (100 << 16), 0)
+            bridge._midi_callback(None, MIM_DATA, 0, 0x80 | (60 << 8), 0)
+            bridge._midi_callback(None, MIM_DATA, 0, 0xB0 | (64 << 8) | (127 << 16), 0)
 
         self.assertEqual(
             messages,
             [
-                (0x90, 0, 60, 100),
-                (0x80, 0, 60, 0),
-                (0xB0, 0, 64, 127),
+                (0x90, 0, 60, 100, 12.5),
+                (0x80, 0, 60, 0, 12.5),
+                (0xB0, 0, 64, 127, 12.5),
             ],
         )
 

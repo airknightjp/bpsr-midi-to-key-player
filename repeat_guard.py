@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Hashable
 
 
@@ -29,17 +30,21 @@ class RapidRepeatGuard:
         with self._lock:
             self._last_accepted_at.clear()
 
-    def should_suppress(self, token: Hashable, event_time: float) -> bool:
+    def should_suppress(
+        self,
+        token: Hashable,
+        emitted_at: float | None = None,
+    ) -> bool:
         with self._lock:
             if not self._enabled:
                 return False
 
-            event_time = float(event_time)
+            output_time = time.perf_counter() if emitted_at is None else float(emitted_at)
             previous_time = self._last_accepted_at.get(token)
             if previous_time is not None:
-                elapsed = event_time - previous_time
+                elapsed = output_time - previous_time
                 if 0.0 <= elapsed < self._min_interval_seconds:
                     return True
 
-            self._last_accepted_at[token] = event_time
+            self._last_accepted_at[token] = output_time
             return False

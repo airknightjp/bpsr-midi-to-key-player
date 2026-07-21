@@ -13,7 +13,7 @@ from midi_parser import MidiEvent
 HUMANIZE_MAX_JITTER_SECONDS = 0.018
 CHORD_STRUM_MAX_OFFSET_SECONDS = 0.012
 CHORD_STRUM_MIN_NOTES = 2
-MIN_PLAYBACK_SPEED_PERCENT = 50
+MIN_PLAYBACK_SPEED_PERCENT = 10
 MAX_PLAYBACK_SPEED_PERCENT = 200
 
 
@@ -26,6 +26,7 @@ class ScheduledMidiEvent:
 def prepare_playback_events(
     events: list[MidiEvent],
     random_source: random.Random | None = None,
+    chord_offset_provider: Callable[[MidiEvent], float | None] | None = None,
 ) -> list[ScheduledMidiEvent]:
     if random_source is None:
         random_source = random.Random()
@@ -58,13 +59,20 @@ def prepare_playback_events(
                 for note, offset in raw_offsets.items()
             }
 
+        def offset_for(event: MidiEvent) -> float:
+            if chord_offset_provider is not None:
+                optimized_offset = chord_offset_provider(event)
+                if optimized_offset is not None:
+                    return optimized_offset
+            return note_offsets.get(event.note, 0.0)
+
         ordered.extend(ScheduledMidiEvent(event) for event in other_events)
         ordered.extend(
-            ScheduledMidiEvent(event, note_offsets.get(event.note, 0.0))
+            ScheduledMidiEvent(event, offset_for(event))
             for event in sorted(
                 note_ons,
                 key=lambda event: (
-                    note_offsets.get(event.note, 0.0),
+                    offset_for(event),
                     event.note if event.note is not None else -1,
                     event.track if event.track is not None else -1,
                     event.channel if event.channel is not None else -1,
@@ -109,6 +117,7 @@ class PlaybackTimeline:
         scheduled: ScheduledMidiEvent | MidiEvent,
         humanize_timing: bool = False,
         chord_strum: bool = False,
+        chord_optimization_offset: float | None = None,
     ) -> float:
         if isinstance(scheduled, MidiEvent):
             scheduled = ScheduledMidiEvent(scheduled)
@@ -125,7 +134,14 @@ class PlaybackTimeline:
             )
 
         jitter = self._group_jitter if humanize_timing else 0.0
-        strum_offset = scheduled.strum_offset if chord_strum else 0.0
+        if chord_strum:
+            strum_offset = (
+                scheduled.strum_offset
+                if chord_optimization_offset is None
+                else chord_optimization_offset
+            )
+        else:
+            strum_offset = 0.0
         return max(
             self.start_time,
             self._previous_scheduled_time,

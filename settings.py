@@ -15,6 +15,7 @@ from config import (
     normalized_key_bindings,
 )
 from i18n import normalize_color_theme, normalize_language
+from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 
 
 APP_DIR_NAME = "BPSR_MIDI_to_KEY_Player"
@@ -33,6 +34,7 @@ class AppSettings:
     transpose_semitones: int = 0
     octave_shift: int = 0
     humanize_timing: bool = False
+    chord_optimization: bool = False
     chord_strum: bool = False
     repeat_prevention: bool = False
     playback_speed_percent: int = 100
@@ -119,12 +121,13 @@ def load_settings() -> AppSettings:
             default=0,
         ),
         humanize_timing=_parse_bool(data.get("humanize_timing"), default=False),
+        chord_optimization=_parse_bool(data.get("chord_optimization"), default=False),
         chord_strum=_parse_bool(data.get("chord_strum"), default=False),
         repeat_prevention=_parse_bool(data.get("repeat_prevention"), default=False),
         playback_speed_percent=_clamp_int(
             data.get("playback_speed_percent"),
-            minimum=50,
-            maximum=200,
+            minimum=MIN_PLAYBACK_SPEED_PERCENT,
+            maximum=MAX_PLAYBACK_SPEED_PERCENT,
             default=100,
         ),
         language=normalize_language(data.get("language")),
@@ -158,6 +161,7 @@ def save_settings(settings: AppSettings) -> None:
             "transpose_semitones": settings.transpose_semitones,
             "octave_shift": settings.octave_shift,
             "humanize_timing": settings.humanize_timing,
+            "chord_optimization": settings.chord_optimization,
             "chord_strum": settings.chord_strum,
             "repeat_prevention": settings.repeat_prevention,
             "playback_speed_percent": settings.playback_speed_percent,
