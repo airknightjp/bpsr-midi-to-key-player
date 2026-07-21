@@ -13,12 +13,17 @@ class IconAssetTests(unittest.TestCase):
     def test_only_current_icon_assets_remain(self) -> None:
         self.assertEqual(
             {path.name for path in ASSETS_DIR.iterdir() if path.is_file()},
-            {"app_icon_whale.ico", "app_icon_whale.png"},
+            {
+                "app_icon_whale.ico",
+                "app_icon_whale.png",
+                "app_icon_whale_flipped.png",
+                "check_white.svg",
+            },
         )
 
     def test_active_files_do_not_reference_the_previous_icon(self) -> None:
         for relative_path in (
-            "main.py",
+            "qt_main_window.py",
             "build_exe.ps1",
             "BPSR_MIDI_to_KEY_Player.spec",
         ):
@@ -29,8 +34,11 @@ class IconAssetTests(unittest.TestCase):
 
     def test_png_has_alpha_and_ico_contains_multiple_sizes(self) -> None:
         png_data = (ASSETS_DIR / "app_icon_whale.png").read_bytes()
+        flipped_png_data = (ASSETS_DIR / "app_icon_whale_flipped.png").read_bytes()
         self.assertEqual(png_data[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(flipped_png_data[:8], b"\x89PNG\r\n\x1a\n")
         self.assertEqual(png_data[25], 6)
+        self.assertEqual(flipped_png_data[25], 6)
 
         ico_data = (ASSETS_DIR / "app_icon_whale.ico").read_bytes()
         reserved, icon_type, image_count = struct.unpack("<HHH", ico_data[:6])

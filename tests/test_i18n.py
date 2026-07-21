@@ -94,6 +94,12 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(normalize_color_theme("sky_blue"), "sky_blue")
         self.assertEqual(normalize_color_theme("missing"), "sky_blue")
 
+    def test_sky_blue_theme_is_first_without_text_marker(self) -> None:
+        for language, theme_names in COLOR_THEME_NAMES.items():
+            with self.subTest(language=language):
+                self.assertEqual(next(iter(theme_names)), "sky_blue")
+                self.assertNotIn("\u2605", theme_names["sky_blue"])
+
     def test_note_range_column_label_exists_for_all_languages(self) -> None:
         self.assertEqual(TEXT["en"]["note_range"], "Range")
         self.assertEqual(TEXT["ja"]["note_range"], "\u97f3\u57df")

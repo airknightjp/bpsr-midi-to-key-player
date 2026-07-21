@@ -4,7 +4,7 @@ import inspect
 import unittest
 from unittest.mock import patch
 
-from main import App
+from legacy_tk_main import App
 
 
 class FakeButton:
@@ -263,7 +263,7 @@ class MidiScrollbarTests(unittest.TestCase):
         app._scaled_dimension = lambda value: value * 2
         font = type("Font", (), {"metrics": lambda self, _name: 45})()
 
-        with patch("main.tkfont.nametofont", return_value=font):
+        with patch("legacy_tk_main.tkfont.nametofont", return_value=font):
             row_height = App._midi_tree_row_height(app)
 
         self.assertEqual(row_height, 53)

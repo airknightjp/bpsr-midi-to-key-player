@@ -10,6 +10,15 @@ from settings import AppSettings, consume_settings_error, load_settings, save_se
 
 
 class SettingsTests(unittest.TestCase):
+    def test_display_and_shortcut_defaults(self) -> None:
+        settings = AppSettings()
+
+        self.assertEqual(settings.ui_scale_percent, 100)
+        self.assertEqual(settings.window_width, 900)
+        self.assertEqual(settings.keyboard_play_shortcut, "F9")
+        self.assertEqual(settings.keyboard_pause_shortcut, "F10")
+        self.assertEqual(settings.keyboard_stop_shortcut, "F11")
+
     def test_default_theme_is_sky_blue(self) -> None:
         self.assertEqual(AppSettings().color_theme, "sky_blue")
 
@@ -41,6 +50,7 @@ class SettingsTests(unittest.TestCase):
                         window_height=720,
                         last_midi_folder=str(Path(temp_dir) / "midis"),
                         keyboard_play_shortcut="Ctrl+P",
+                        keyboard_pause_shortcut="Ctrl+R",
                         keyboard_stop_shortcut="Ctrl+S",
                         shortcut_locked=False,
                         midi_input_device="USB MIDI",
@@ -71,6 +81,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.playback_speed_percent, 135)
         self.assertTrue(loaded.last_midi_folder.endswith("midis"))
         self.assertEqual(loaded.keyboard_play_shortcut, "Ctrl+P")
+        self.assertEqual(loaded.keyboard_pause_shortcut, "Ctrl+R")
         self.assertEqual(loaded.keyboard_stop_shortcut, "Ctrl+S")
         self.assertFalse(loaded.shortcut_locked)
         self.assertEqual(loaded.midi_input_device, "USB MIDI")
@@ -93,6 +104,24 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(loaded.transpose_semitones, 12)
         self.assertEqual(loaded.octave_shift, -3)
+
+    def test_previous_default_shortcuts_are_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict("os.environ", {"APPDATA": temp_dir}):
+                settings_dir = Path(temp_dir) / "BPSR_MIDI_to_KEY_Player"
+                settings_dir.mkdir()
+                (settings_dir / "settings.json").write_text(
+                    '{"keyboard_play_shortcut":"F5",'
+                    '"keyboard_pause_shortcut":"F7",'
+                    '"keyboard_stop_shortcut":"F6"}',
+                    encoding="utf-8",
+                )
+
+                loaded = load_settings()
+
+        self.assertEqual(loaded.keyboard_play_shortcut, "F9")
+        self.assertEqual(loaded.keyboard_pause_shortcut, "F10")
+        self.assertEqual(loaded.keyboard_stop_shortcut, "F11")
 
     def test_ten_percent_playback_speed_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

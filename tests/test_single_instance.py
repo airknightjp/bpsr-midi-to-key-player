@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-import main as app_main
-from main import App
+import legacy_tk_main as app_main
+from legacy_tk_main import App
 
 
 class FakeSingleInstance:
@@ -34,7 +34,7 @@ class SingleInstanceTests(unittest.TestCase):
     def test_secondary_instance_notifies_existing_without_creating_app(self) -> None:
         instance = FakeSingleInstance(is_primary=False)
 
-        with patch("main.SingleInstance", return_value=instance), patch("main.App") as app:
+        with patch("legacy_tk_main.SingleInstance", return_value=instance), patch("legacy_tk_main.App") as app:
             app_main.main()
 
         app.assert_not_called()

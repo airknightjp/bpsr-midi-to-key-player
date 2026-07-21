@@ -228,6 +228,11 @@ class MidiKeyboardPlayer:
         self._thread.join(timeout)
         self._optimization_planner.wait(timeout=0.2)
 
+    def current_position(self) -> float | None:
+        with self._config_lock:
+            clock = self._clock
+        return clock.position() if clock is not None else None
+
     def _run(
         self,
         events: list[MidiEvent],

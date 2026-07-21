@@ -1,1 +1,1 @@
-# No external Python dependencies are required.
+PySide6==6.11.1

@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from main import App
+from legacy_tk_main import App
 from midi_parser import MidiEvent
 from playback_timing import PlaybackTimeline
 from player import MidiKeyboardPlayer
@@ -213,7 +213,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app._log = lambda _message: None
 
         FakeKeyboardPlayer.calls.clear()
-        with patch("main.MidiKeyboardPlayer", FakeKeyboardPlayer):
+        with patch("legacy_tk_main.MidiKeyboardPlayer", FakeKeyboardPlayer):
             App.play(app)
 
         self.assertEqual(FakeKeyboardPlayer.calls[0]["countdown_seconds"], 4)
@@ -252,7 +252,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app._log = lambda _message: None
 
         FakeKeyboardPlayer.calls.clear()
-        with patch("main.MidiKeyboardPlayer", FakeKeyboardPlayer):
+        with patch("legacy_tk_main.MidiKeyboardPlayer", FakeKeyboardPlayer):
             App.play(app)
 
         self.assertIsNotNone(FakeKeyboardPlayer.calls[0]["on_countdown_tick"])
@@ -279,7 +279,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app._refresh_playback_buttons = lambda: None
 
         FakeKeyboardPlayer.calls.clear()
-        with patch("main.MidiKeyboardPlayer", FakeKeyboardPlayer):
+        with patch("legacy_tk_main.MidiKeyboardPlayer", FakeKeyboardPlayer):
             App._restart_keys_from(app, 2.5)
 
         self.assertTrue(app.seeking_keys)
@@ -477,7 +477,7 @@ class KeyPlaybackTests(unittest.TestCase):
         app._log = lambda _message: None
 
         FakeKeyboardPlayer.calls.clear()
-        with patch("main.MidiKeyboardPlayer", FakeKeyboardPlayer):
+        with patch("legacy_tk_main.MidiKeyboardPlayer", FakeKeyboardPlayer):
             App.play(app)
 
         self.assertEqual(FakeKeyboardPlayer.calls[0]["events"], app.events)

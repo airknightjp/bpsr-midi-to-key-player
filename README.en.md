@@ -14,20 +14,20 @@ It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ord
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.
 - Use test mode to log conversion output without sending real key input.
-- Adjust MIDI volume, playback position, and playback speed (10-200%). Double-click the playback speed label to reset to 100%.
+- Adjust volume, playback position, and playback speed (10-200%). Double-click the volume or speed label to reset it to 100%.
 - Adjust UI scale (100-200%) and window opacity from the View menu.
-- Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) from Common Settings. Double-click either label to reset to 0.
+- Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
 - Configure timing variation, chord spread, and chord reconstruction under Performance Correction.
 - Configure rapid-repeat prevention under Common Settings.
-- Display used track/channel combinations under a `T-C` header in `1-1` format.
+- Display used track/channel combinations under a `TC` header in `11` format.
 - Toggle each track/channel combination, with immediate changes during playback.
 - Convert sustain pedal CC64 to the Space key.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Log countdown ticks and in-game countdown key presses.
-- Configure global start/stop shortcuts by pressing keys, including standalone function keys such as F11.
+- Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported.
 - Lock shortcut settings to avoid accidental changes.
 - Edit the three-octave C3-B5 key bindings from `Settings > Key Bindings`.
 - Highlight duplicate key bindings in red.

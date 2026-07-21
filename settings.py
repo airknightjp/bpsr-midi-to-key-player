@@ -8,6 +8,9 @@ from pathlib import Path
 from config import (
     DEFAULT_COUNTDOWN_SECONDS,
     DEFAULT_KEY_BINDINGS,
+    DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
+    DEFAULT_KEYBOARD_PLAY_SHORTCUT,
+    DEFAULT_KEYBOARD_STOP_SHORTCUT,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
@@ -47,8 +50,9 @@ class AppSettings:
     window_width: int = 900
     window_height: int = 560
     last_midi_folder: str = ""
-    keyboard_play_shortcut: str = "F5"
-    keyboard_stop_shortcut: str = "F6"
+    keyboard_play_shortcut: str = DEFAULT_KEYBOARD_PLAY_SHORTCUT
+    keyboard_pause_shortcut: str = DEFAULT_KEYBOARD_PAUSE_SHORTCUT
+    keyboard_stop_shortcut: str = DEFAULT_KEYBOARD_STOP_SHORTCUT
     shortcut_locked: bool = True
     midi_input_device: str = ""
     key_bindings: dict[int, str] | None = None
@@ -88,6 +92,27 @@ def load_settings() -> AppSettings:
     if not isinstance(data, dict):
         _last_settings_error = "Settings could not be loaded: " + "; ".join(errors)
         return AppSettings()
+
+    keyboard_shortcuts = (
+        _parse_shortcut(
+            data.get("keyboard_play_shortcut"),
+            default=DEFAULT_KEYBOARD_PLAY_SHORTCUT,
+        ),
+        _parse_shortcut(
+            data.get("keyboard_pause_shortcut"),
+            default=DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
+        ),
+        _parse_shortcut(
+            data.get("keyboard_stop_shortcut"),
+            default=DEFAULT_KEYBOARD_STOP_SHORTCUT,
+        ),
+    )
+    if keyboard_shortcuts == ("F5", "F7", "F6"):
+        keyboard_shortcuts = (
+            DEFAULT_KEYBOARD_PLAY_SHORTCUT,
+            DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
+            DEFAULT_KEYBOARD_STOP_SHORTCUT,
+        )
 
     settings = AppSettings(
         countdown_seconds=_clamp_int(
@@ -137,8 +162,9 @@ def load_settings() -> AppSettings:
         window_width=_clamp_int(data.get("window_width"), minimum=1, maximum=10000, default=900),
         window_height=_clamp_int(data.get("window_height"), minimum=1, maximum=2000, default=560),
         last_midi_folder=_parse_str(data.get("last_midi_folder")),
-        keyboard_play_shortcut=_parse_shortcut(data.get("keyboard_play_shortcut"), default="F5"),
-        keyboard_stop_shortcut=_parse_shortcut(data.get("keyboard_stop_shortcut"), default="F6"),
+        keyboard_play_shortcut=keyboard_shortcuts[0],
+        keyboard_pause_shortcut=keyboard_shortcuts[1],
+        keyboard_stop_shortcut=keyboard_shortcuts[2],
         shortcut_locked=_parse_bool(data.get("shortcut_locked"), default=True),
         midi_input_device=_parse_str(data.get("midi_input_device")),
         key_bindings=normalized_key_bindings(data.get("key_bindings")),
@@ -175,6 +201,7 @@ def save_settings(settings: AppSettings) -> None:
             "window_height": settings.window_height,
             "last_midi_folder": settings.last_midi_folder,
             "keyboard_play_shortcut": settings.keyboard_play_shortcut,
+            "keyboard_pause_shortcut": settings.keyboard_pause_shortcut,
             "keyboard_stop_shortcut": settings.keyboard_stop_shortcut,
             "shortcut_locked": settings.shortcut_locked,
             "midi_input_device": settings.midi_input_device,

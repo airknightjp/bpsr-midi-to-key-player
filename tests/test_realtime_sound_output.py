@@ -4,7 +4,7 @@ import queue
 import unittest
 from unittest.mock import patch
 
-from main import App
+from legacy_tk_main import App
 from sound_player import RealtimeMidiSoundOutput
 
 
@@ -166,9 +166,9 @@ class RealtimeInputSoundModeTests(unittest.TestCase):
                 app._refresh_option_states = lambda: None
 
                 with (
-                    patch("main.KeyboardOutput", ConfiguredKeyboardOutput),
-                    patch("main.RealtimeMidiSoundOutput", ConfiguredRealtimeSoundOutput),
-                    patch("main.MidiInputKeyboardBridge", ConfiguredMidiInputBridge),
+                    patch("legacy_tk_main.KeyboardOutput", ConfiguredKeyboardOutput),
+                    patch("legacy_tk_main.RealtimeMidiSoundOutput", ConfiguredRealtimeSoundOutput),
+                    patch("legacy_tk_main.MidiInputKeyboardBridge", ConfiguredMidiInputBridge),
                 ):
                     App.start_midi_input(app)
 

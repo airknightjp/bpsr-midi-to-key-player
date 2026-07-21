@@ -7,7 +7,7 @@ import queue
 from pathlib import Path
 from unittest.mock import patch
 
-from main import MIDI_LIST_COLUMNS, App
+from legacy_tk_main import MIDI_LIST_COLUMNS, App
 from midi_parser import MidiEvent, MidiSummary
 from sound_player import MidiSoundPlayer
 
@@ -156,7 +156,7 @@ class MidiSwitchTests(unittest.TestCase):
         new_events = [MidiEvent(time=0.0, kind="note_on", channel=1, note=64, velocity=80)]
         new_summary = MidiSummary(Path("new.mid"), 3.0, (1,), 1)
 
-        with patch("main.parse_midi", return_value=(new_events, new_summary)):
+        with patch("legacy_tk_main.parse_midi", return_value=(new_events, new_summary)):
             App._on_midi_selected(app, None)
 
         self.assertEqual(app.events, new_events)
@@ -272,7 +272,7 @@ class MidiSwitchTests(unittest.TestCase):
         app = self.make_app()
         app.updating_midi_selection = True
 
-        with patch("main.parse_midi") as parse:
+        with patch("legacy_tk_main.parse_midi") as parse:
             App._on_midi_selected(app, None)
 
         parse.assert_not_called()
@@ -283,7 +283,7 @@ class MidiSwitchTests(unittest.TestCase):
 
         self.assertTrue(App._select_midi_path(app, Path("old.mid")))
 
-        with patch("main.parse_midi") as parse:
+        with patch("legacy_tk_main.parse_midi") as parse:
             App._on_midi_selected(app, None)
 
         parse.assert_not_called()
@@ -296,7 +296,7 @@ class MidiSwitchTests(unittest.TestCase):
         logs: list[str] = []
         app._log = logs.append
 
-        with patch("main.parse_midi") as parse:
+        with patch("legacy_tk_main.parse_midi") as parse:
             App._on_midi_selected(app, None)
 
         parse.assert_not_called()
@@ -551,7 +551,7 @@ class MidiSwitchTests(unittest.TestCase):
         app._refresh_playback_buttons = lambda: None
         app._text = lambda key: key
 
-        with patch("main.MidiSoundPlayer", ConfiguredSoundPlayer):
+        with patch("legacy_tk_main.MidiSoundPlayer", ConfiguredSoundPlayer):
             App.play_sound(app)
 
         self.assertIsNotNone(ConfiguredSoundPlayer.instance)
