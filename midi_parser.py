@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -102,14 +101,6 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
         note_range=note_range,
     )
     return events, summary
-
-
-def filter_channels(events: Iterable[MidiEvent], enabled_channels: set[int]) -> list[MidiEvent]:
-    return [
-        event
-        for event in events
-        if event.channel is None or event.channel in enabled_channels
-    ]
 
 
 def _read_smf(data: bytes) -> tuple[int, list[bytes]]:

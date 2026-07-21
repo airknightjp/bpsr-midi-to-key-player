@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from unittest.mock import patch
 
 from main import App
 
@@ -24,49 +25,6 @@ class FakeStringVar:
 
     def set(self, value: str) -> None:
         self.value = value
-
-
-class FakeTabs:
-    def __init__(self, clicked_index: int, reload_index: int = 0):
-        self.clicked_index = clicked_index
-        self.reload_index = reload_index
-
-    def index(self, tab: object) -> int:
-        if isinstance(tab, str) and tab.startswith("@"):
-            return self.clicked_index
-        return self.reload_index
-
-
-class FakePointerEvent:
-    x = 24
-    y = 8
-
-
-class FakeMidiTree:
-    def winfo_exists(self) -> bool:
-        return True
-
-    def winfo_height(self) -> int:
-        return 100
-
-    def identify_region(self, _x: int, y: int) -> str:
-        if 2 <= y < 22:
-            return "heading"
-        return "tree" if y >= 22 else "nothing"
-
-
-class FakePlacedScrollbar:
-    def __init__(self):
-        self.place_config: dict[str, object] = {}
-        self.lifted = False
-        self.place_count = 0
-
-    def place(self, **kwargs: object) -> None:
-        self.place_config = kwargs
-        self.place_count += 1
-
-    def lift(self) -> None:
-        self.lifted = True
 
 
 class FakeSoundPlayer:
@@ -242,58 +200,86 @@ class ButtonStateTests(unittest.TestCase):
 
 
 class ReloadTabTests(unittest.TestCase):
+    def test_view_menu_places_scale_before_opacity(self) -> None:
+        source = inspect.getsource(App._build_menu_bar)
+        scale_entry = 'view_menu.add_cascade(label=self._text("ui_scale")'
+        opacity_entry = 'view_menu.add_cascade(label=self._text("window_opacity")'
+
+        self.assertLess(source.index(scale_entry), source.index(opacity_entry))
+
+    def test_scale_and_opacity_menus_rely_on_variable_traces_only(self) -> None:
+        source = inspect.getsource(App._build_menu_bar)
+        opacity_block = source[source.index("for opacity in"):source.index("scale_menu =")]
+        scale_block = source[source.index("for percent in"):source.index("view_menu =")]
+
+        self.assertNotIn("command=", opacity_block)
+        self.assertNotIn("command=", scale_block)
+
+    def test_text_refresh_keeps_midi_device_refresh_button_as_an_icon(self) -> None:
+        self.assertNotIn(
+            "refresh_midi_inputs_button.configure",
+            inspect.getsource(App._refresh_text),
+        )
+
     def test_text_refresh_has_no_reference_to_removed_reload_button(self) -> None:
         self.assertNotIn("reload_button", inspect.getsource(App._refresh_text))
 
-    def test_clicking_reload_tab_reloads_without_selecting_empty_tab(self) -> None:
+    def test_reload_button_restores_color_without_a_timer(self) -> None:
         app = object.__new__(App)
-        app.reload_tab = "reload"
-        app.detail_tabs = FakeTabs(clicked_index=0)
-        reloaded: list[bool] = []
-        app.reload_midi_folder = lambda: reloaded.append(True)
+        app.reload_tab_button = FakeButton()
+        app._theme_palette = lambda: {
+            "panel": "panel",
+            "select": "select",
+            "fg": "foreground",
+        }
+        rendered_colors: list[str] = []
+        colors_during_reload: list[str] = []
+        app.update_idletasks = lambda: rendered_colors.append(
+            app.reload_tab_button.config["background"]
+        )
+        app.reload_midi_folder = lambda: colors_during_reload.append(
+            app.reload_tab_button.config["background"]
+        )
 
-        result = App._on_detail_tab_pointer(app, FakePointerEvent())
+        result = App._on_reload_tab_button(app)
 
-        self.assertEqual(reloaded, [True])
         self.assertEqual(result, "break")
-
-    def test_clicking_regular_tab_does_not_reload(self) -> None:
-        app = object.__new__(App)
-        app.reload_tab = "reload"
-        app.detail_tabs = FakeTabs(clicked_index=1)
-        reloaded: list[bool] = []
-        app.reload_midi_folder = lambda: reloaded.append(True)
-
-        result = App._on_detail_tab_pointer(app, FakePointerEvent())
-
-        self.assertEqual(reloaded, [])
-        self.assertIsNone(result)
+        self.assertEqual(rendered_colors, ["select"])
+        self.assertEqual(colors_during_reload, ["select"])
+        self.assertEqual(app.reload_tab_button.config["background"], "panel")
+        self.assertEqual(app.reload_tab_button.config["foreground"], "foreground")
+        self.assertNotIn("reload_button_restore_after_id", app.__dict__)
 
 
 class MidiScrollbarTests(unittest.TestCase):
-    def test_scrollbar_starts_below_column_headings(self) -> None:
+    def test_ui_layout_does_not_use_place_geometry_manager(self) -> None:
+        self.assertNotIn(".place(", inspect.getsource(App))
+
+    def test_channel_refresh_does_not_rebuild_fixed_header(self) -> None:
+        self.assertNotIn("_add_channel_grid_header", inspect.getsource(App._set_channels))
+
+    def test_midi_tree_row_height_scales_and_fits_the_font(self) -> None:
         app = object.__new__(App)
-        app.midi_tree = FakeMidiTree()
-        app.midi_scrollbar = FakePlacedScrollbar()
+        app._scaled_dimension = lambda value: value * 2
+        font = type("Font", (), {"metrics": lambda self, _name: 45})()
 
-        App._align_midi_scrollbar(app)
+        with patch("main.tkfont.nametofont", return_value=font):
+            row_height = App._midi_tree_row_height(app)
 
-        self.assertEqual(
-            app.midi_scrollbar.place_config,
-            {
-                "relx": 1.0,
-                "x": 0,
-                "y": 22,
-                "anchor": "ne",
-                "relheight": 1.0,
-                "height": -22,
-            },
-        )
-        self.assertTrue(app.midi_scrollbar.lifted)
+        self.assertEqual(row_height, 53)
 
-        App._align_midi_scrollbar(app)
+    def test_window_configure_remembers_width_and_height(self) -> None:
+        app = object.__new__(App)
+        app.saved_window_width = 900
+        app.saved_window_height = 560
+        app.state = lambda: "normal"
+        app._visible_section_min_height = lambda: 1
+        event = type("Event", (), {"widget": app, "width": 1440, "height": 900})()
 
-        self.assertEqual(app.midi_scrollbar.place_count, 1)
+        App._on_window_configure(app, event)
+
+        self.assertEqual(app.saved_window_width, 1440)
+        self.assertEqual(app.saved_window_height, 900)
 
 
 if __name__ == "__main__":

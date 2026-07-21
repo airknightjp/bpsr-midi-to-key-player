@@ -24,8 +24,6 @@ from i18n import (
     COLOR_THEME_NAMES,
     LANGUAGE_NAMES,
     TEXT,
-    color_theme_code_from_name,
-    language_code_from_name,
     normalize_color_theme,
     normalize_language,
 )
@@ -39,21 +37,29 @@ from settings import AppSettings, consume_settings_error, load_settings, save_se
 from single_instance import SingleInstance
 from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
 from tray_icon import TrayIcon
+from ui_tokens import UiSize, UiSpace
 
 
-CHANNEL_PANE_WIDTH = 38
-DEFAULT_WINDOW_WIDTH = 900
-DEFAULT_WINDOW_HEIGHT = 560
-DEFAULT_WINDOW_SIZE = f"{DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}"
-MIN_WINDOW_WIDTH = 760
-MIN_WINDOW_HEIGHT = 480
-ROOT_HORIZONTAL_PADDING = 24
-ACTION_BUTTON_WIDTH = 16
+CHANNEL_PANE_WIDTH = UiSize.channel_pane_width
+PLAYER_SLIDER_PANE_WIDTH = UiSize.player_slider_pane_width
+MIDI_NAME_COLUMN_WIDTH = UiSize.midi_name_column_width
+MIDI_NAME_COLUMN_MIN_WIDTH = UiSize.midi_name_column_min_width
+MIDI_DURATION_COLUMN_WIDTH = UiSize.midi_duration_column_width
+MIDI_DURATION_COLUMN_MIN_WIDTH = UiSize.midi_duration_column_min_width
+MIDI_NOTE_RANGE_COLUMN_WIDTH = UiSize.midi_note_range_column_width
+MIDI_NOTE_RANGE_COLUMN_MIN_WIDTH = UiSize.midi_note_range_column_min_width
+DEFAULT_WINDOW_WIDTH = UiSize.default_window_width
+MIN_WINDOW_WIDTH = UiSize.min_window_width
+MIN_WINDOW_HEIGHT = UiSize.min_window_height
+UI_SCALE_PERCENT_OPTIONS = (100, 110, 125, 150, 175, 200)
+DEFAULT_UI_SCALE_PERCENT = 100
+ROOT_HORIZONTAL_PADDING = UiSpace.root_horizontal_padding
+ACTION_BUTTON_WIDTH = UiSize.action_button_width
 MIDI_LIST_COLUMNS = ("duration", "note_range")
-APP_ICON_RELATIVE_PATH = Path("assets") / "app_icon_starry_concept.ico"
-APP_ICON_PNG_RELATIVE_PATH = Path("assets") / "app_icon_starry_concept.png"
+APP_ICON_RELATIVE_PATH = Path("assets") / "app_icon_whale.ico"
+APP_ICON_PNG_RELATIVE_PATH = Path("assets") / "app_icon_whale.png"
 APP_WINDOW_TITLE = "BPSR MIDI to KEY Player"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 APP_COPYRIGHT = "\u00a9 2026 airknightjp"
 APP_REPOSITORY_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 GAME_COUNTDOWN_KEY_HOLD_SECONDS = 0.12
@@ -66,8 +72,18 @@ class App(tk.Tk):
         self.title(APP_WINDOW_TITLE)
         self.settings = load_settings()
         self.settings_load_error = consume_settings_error()
-        self.saved_window_height = max(MIN_WINDOW_HEIGHT, self.settings.window_height)
-        self.geometry(f"{DEFAULT_WINDOW_WIDTH}x{self.saved_window_height}")
+        initial_scale_percent = self._normalize_ui_scale_percent(self.settings.ui_scale_percent)
+        self.saved_window_width = max(1, self.settings.window_width)
+        self.saved_window_height = max(
+            1 if initial_scale_percent != DEFAULT_UI_SCALE_PERCENT else MIN_WINDOW_HEIGHT,
+            self.settings.window_height,
+        )
+        initial_window_width = (
+            self.saved_window_width
+            if initial_scale_percent != DEFAULT_UI_SCALE_PERCENT
+            else DEFAULT_WINDOW_WIDTH
+        )
+        self.geometry(f"{initial_window_width}x{self.saved_window_height}")
         self.minsize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         self.resizable(False, True)
 
@@ -102,16 +118,19 @@ class App(tk.Tk):
         self.transpose_semitones_var = tk.IntVar(value=self.settings.transpose_semitones)
         self.octave_shift_var = tk.IntVar(value=self.settings.octave_shift)
         self.sound_volume_var = tk.IntVar(value=self.settings.midi_sound_volume)
-        self.color_theme_var = tk.StringVar(value=COLOR_THEME_NAMES[self.language][self.color_theme])
         self.color_theme_menu_var = tk.StringVar(value=self.color_theme)
         self.always_on_top_var = tk.BooleanVar(value=self.settings.always_on_top)
         self.tray_resident_var = tk.BooleanVar(value=self.settings.tray_resident)
         self.window_opacity_var = tk.IntVar(value=self.settings.window_opacity)
+        self.ui_scale_percent_var = tk.IntVar(value=self.settings.ui_scale_percent)
+        self.show_midi_input_section_var = tk.BooleanVar(value=True)
+        self.show_key_playback_section_var = tk.BooleanVar(value=True)
+        self.show_common_settings_section_var = tk.BooleanVar(value=True)
+        self.show_player_section_var = tk.BooleanVar(value=True)
         self.keyboard_play_shortcut_var = tk.StringVar(value=self.settings.keyboard_play_shortcut)
         self.keyboard_stop_shortcut_var = tk.StringVar(value=self.settings.keyboard_stop_shortcut)
         self.shortcut_lock_var = tk.BooleanVar(value=self.settings.shortcut_locked)
         self.midi_input_device_var = tk.StringVar(value=self.settings.midi_input_device)
-        self.language_var = tk.StringVar(value=LANGUAGE_NAMES[self.language])
         self.language_menu_var = tk.StringVar(value=self.language)
         self.key_bindings = normalized_key_bindings(self.settings.key_bindings)
         self.position_var = tk.DoubleVar(value=0.0)
@@ -132,7 +151,10 @@ class App(tk.Tk):
         self.realtime_sound_output: RealtimeMidiSoundOutput | None = None
         self.midi_input_devices: list[tuple[int, str]] = []
         self.style = ttk.Style(self)
+        self.base_tk_scaling = float(self.tk.call("tk", "scaling"))
+        self.base_font_sizes = self._capture_base_font_sizes()
         self.section_heading_font = tkfont.nametofont("TkDefaultFont").copy()
+        self.section_heading_base_size = int(self.section_heading_font.cget("size"))
         self.section_heading_font.configure(weight="bold")
         self.active_shortcut_sequences: list[str] = []
         self.hotkey_queue: queue.Queue[str] = queue.Queue()
@@ -146,7 +168,6 @@ class App(tk.Tk):
         self._build_ui()
         if self.settings_load_error:
             self._log(self.settings_load_error)
-        self._fit_window_width_to_key_settings()
         self.update_idletasks()
         icon_path = self._resource_path(APP_ICON_RELATIVE_PATH)
         icon_png_path = self._resource_path(APP_ICON_PNG_RELATIVE_PATH)
@@ -172,7 +193,9 @@ class App(tk.Tk):
         self.always_on_top_var.trace_add("write", self._on_always_on_top_changed)
         self.tray_resident_var.trace_add("write", self._on_tray_resident_changed)
         self.window_opacity_var.trace_add("write", self._on_window_opacity_changed)
+        self.ui_scale_percent_var.trace_add("write", self._on_ui_scale_percent_changed)
         self.shortcut_lock_var.trace_add("write", self._on_shortcut_lock_changed)
+        self._apply_ui_scale(self.ui_scale_percent_var.get(), resize_window=False)
         self._apply_theme()
         self._apply_always_on_top()
         self._apply_window_opacity()
@@ -197,17 +220,18 @@ class App(tk.Tk):
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(0, weight=0)
         root.columnconfigure(1, weight=1)
+        root.columnconfigure(2, weight=0, minsize=PLAYER_SLIDER_PANE_WIDTH + 6)
         root.rowconfigure(7, weight=1)
 
-        playback_status = ttk.Frame(root)
-        playback_status.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        playback_status.columnconfigure(1, weight=1)
-        self.status_label = ttk.Label(playback_status, textvariable=self.state_var, anchor="w")
+        self.playback_status = ttk.Frame(root)
+        self.playback_status.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.playback_status.columnconfigure(1, weight=1)
+        self.status_label = ttk.Label(self.playback_status, textvariable=self.state_var, anchor="w")
         self.status_label.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
-        self.position_title = ttk.Label(playback_status, anchor="w")
+        self.position_title = ttk.Label(self.playback_status, anchor="w")
         self.position_title.grid(row=1, column=0, sticky="w", padx=(0, 6))
         self.position_slider = ttk.Scale(
-            playback_status,
+            self.playback_status,
             from_=0,
             to=0,
             orient="horizontal",
@@ -218,7 +242,7 @@ class App(tk.Tk):
         self.position_slider.bind("<ButtonPress-1>", self._on_position_pointer_down)
         self.position_slider.bind("<B1-Motion>", self._on_position_pointer_move)
         self.position_slider.bind("<ButtonRelease-1>", self._on_position_drag_end)
-        self.position_label = ttk.Label(playback_status, text="00:00 / 00:00", width=15, anchor="e")
+        self.position_label = ttk.Label(self.playback_status, text="00:00 / 00:00", width=15, anchor="e")
         self.position_label.grid(row=1, column=2, sticky="e")
 
         self.key_settings = ttk.LabelFrame(
@@ -226,7 +250,7 @@ class App(tk.Tk):
             padding=(8, 8),
             style="PrimarySection.TLabelframe",
         )
-        self.key_settings.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.key_settings.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
         self.key_settings.columnconfigure(2, weight=1)
         self.play_button = ttk.Button(
             self.key_settings,
@@ -307,7 +331,7 @@ class App(tk.Tk):
             padding=(8, 8),
             style="PrimarySection.TLabelframe",
         )
-        self.midi_input_settings.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.midi_input_settings.grid(row=0, column=0, columnspan=3, sticky="ew")
         self.midi_input_settings.columnconfigure(2, weight=1)
         self.midi_input_button = ttk.Button(
             self.midi_input_settings,
@@ -328,198 +352,156 @@ class App(tk.Tk):
         self.midi_input_select.bind("<<ComboboxSelected>>", self._on_midi_input_device_changed)
         self.refresh_midi_inputs_button = ttk.Button(
             self.midi_input_settings,
+            text="\u21bb",
             command=self._refresh_midi_input_devices,
-            width=10,
+            width=3,
         )
         self.refresh_midi_inputs_button.grid(row=0, column=3)
 
-        self.sound_settings = ttk.LabelFrame(
+        self.sound_settings = ttk.Frame(
             root,
             padding=10,
-            style="PrimarySection.TLabelframe",
         )
-        self.sound_settings.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        self.sound_settings.columnconfigure(3, weight=1)
-        self.dry_run_check = tk.Checkbutton(self.sound_settings, variable=self.dry_run_var, anchor="w")
-        self.dry_run_check.grid(row=0, column=0, sticky="w", padx=(0, 14))
-        self.auto_fit_note_range_check = tk.Checkbutton(
+        self.sound_settings.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        self.sound_settings.columnconfigure(2, weight=1)
+        self.common_settings_label = ttk.Label(
             self.sound_settings,
+            anchor="w",
+            font=self.section_heading_font,
+        )
+        self.common_settings_label.grid(row=0, column=0, sticky="w")
+        self.performance_correction_label = ttk.Label(
+            self.sound_settings,
+            anchor="w",
+            font=self.section_heading_font,
+        )
+        self.performance_correction_label.grid(row=0, column=1, sticky="w")
+        self.basic_common_settings = ttk.Frame(self.sound_settings)
+        self.basic_common_settings.grid(row=1, column=0, sticky="nw", padx=(0, 14))
+        self.dry_run_check = tk.Checkbutton(self.basic_common_settings, variable=self.dry_run_var, anchor="w")
+        self.dry_run_check.grid(row=0, column=0, sticky="w")
+        self.auto_fit_note_range_check = tk.Checkbutton(
+            self.basic_common_settings,
             variable=self.auto_fit_note_range_var,
             anchor="w",
         )
-        self.auto_fit_note_range_check.grid(row=0, column=1, sticky="w", padx=(0, 14))
-        sound_controls = ttk.Frame(self.sound_settings)
-        sound_controls.grid(row=0, column=3, sticky="ew")
-        sound_controls.columnconfigure(1, weight=1)
-        self.sound_volume_title = ttk.Label(
-            sound_controls,
-            width=self._sound_volume_label_width(),
-            anchor=self._sound_volume_label_anchor(),
-        )
-        self.sound_volume_title.grid(row=0, column=0, sticky="w", padx=(0, self._sound_volume_label_padx()))
-        self.sound_volume = ttk.Scale(
-            sound_controls,
-            from_=0,
-            to=100,
-            orient="horizontal",
-            variable=self.sound_volume_var,
-            command=self._on_sound_volume_changed,
-        )
-        self.sound_volume.grid(row=0, column=1, sticky="ew", padx=(0, 6))
-        self.sound_volume.bind("<ButtonPress-1>", self._on_sound_volume_pointer)
-        self.sound_volume.bind("<B1-Motion>", self._on_sound_volume_pointer)
-        self.sound_volume_label = ttk.Label(
-            sound_controls,
-            text=f"{self.sound_volume_var.get()}%",
-            width=5,
-            anchor="e",
-        )
-        self.sound_volume_label.grid(row=0, column=2, sticky="e")
+        self.auto_fit_note_range_check.grid(row=1, column=0, sticky="w")
         self.repeat_prevention_check = tk.Checkbutton(
-            self.sound_settings,
+            self.basic_common_settings,
             variable=self.repeat_prevention_var,
             anchor="w",
         )
         self.repeat_prevention_check.grid(
-            row=0,
-            column=2,
+            row=2,
+            column=0,
             sticky="w",
-            padx=(0, 14),
         )
         self.performance_optimization_settings = tk.Frame(
             self.sound_settings,
-            borderwidth=1,
-            relief=tk.GROOVE,
-            padx=6,
-            pady=4,
+            borderwidth=0,
+            relief=tk.FLAT,
+            padx=0,
+            pady=0,
         )
         self.performance_optimization_settings.grid(
             row=1,
-            column=0,
-            columnspan=3,
-            sticky="w",
-            pady=(8, 0),
+            column=1,
+            sticky="nw",
         )
         self.humanize_timing_check = tk.Checkbutton(
             self.performance_optimization_settings,
             variable=self.humanize_timing_var,
             anchor="w",
         )
-        self.humanize_timing_check.grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self.humanize_timing_check.grid(row=0, column=0, sticky="w")
         self.chord_strum_check = tk.Checkbutton(
             self.performance_optimization_settings,
             variable=self.chord_strum_var,
             anchor="w",
         )
-        self.chord_strum_check.grid(row=0, column=1, sticky="w", padx=(0, 14))
-        self.chord_optimization_control = tk.Frame(
-            self.performance_optimization_settings,
-            borderwidth=0,
-            relief=tk.FLAT,
-        )
-        self.chord_optimization_control.grid(row=0, column=2, sticky="w")
+        self.chord_strum_check.grid(row=1, column=0, sticky="w")
         self.chord_optimization_check = tk.Checkbutton(
-            self.chord_optimization_control,
+            self.performance_optimization_settings,
             variable=self.chord_optimization_var,
-            text="",
-            padx=0,
-            pady=0,
-        )
-        self.chord_optimization_check.pack(side=tk.LEFT)
-        self.chord_optimization_label = tk.Label(
-            self.chord_optimization_control,
             anchor="w",
-            padx=2,
-            pady=1,
         )
-        self.chord_optimization_label.pack(side=tk.LEFT, fill=tk.Y)
-        self.chord_optimization_control.bind(
-            "<Button-1>",
-            self._toggle_chord_optimization,
+        self.chord_optimization_check.grid(row=2, column=0, sticky="w")
+        self.player_area = ttk.Frame(root)
+        self.player_area.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(12, 0))
+        self.player_area.columnconfigure(0, weight=0)
+        self.player_area.columnconfigure(1, weight=0)
+        self.player_area.columnconfigure(2, weight=1)
+        self.player_area.rowconfigure(0, weight=1)
+
+        self.player_sliders = ttk.Frame(self.player_area, width=PLAYER_SLIDER_PANE_WIDTH)
+        self.player_sliders.grid(row=0, column=0, sticky="ns")
+        self.player_sliders.grid_propagate(False)
+        self.player_sliders.columnconfigure(0, weight=0)
+        self.player_sliders.columnconfigure(1, weight=0)
+        self.player_sliders.columnconfigure(2, weight=1)
+        self.player_sliders.rowconfigure(1, weight=1)
+
+        volume_controls = ttk.Frame(self.player_sliders)
+        volume_controls.grid(row=0, column=0, rowspan=2, sticky="nsw")
+        volume_controls.rowconfigure(1, weight=1)
+        self.sound_volume_title = ttk.Label(volume_controls, anchor="center", justify="center", wraplength=42)
+        self.sound_volume_title.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.sound_volume = ttk.Scale(
+            volume_controls,
+            from_=100,
+            to=0,
+            orient="vertical",
+            variable=self.sound_volume_var,
+            command=self._on_sound_volume_changed,
         )
-        self.chord_optimization_label.bind(
-            "<Button-1>",
-            self._toggle_chord_optimization,
+        self.sound_volume.grid(row=1, column=0, sticky="ns")
+        self.sound_volume.bind("<ButtonPress-1>", self._on_sound_volume_pointer)
+        self.sound_volume.bind("<B1-Motion>", self._on_sound_volume_pointer)
+        self.sound_volume_label = ttk.Label(
+            volume_controls,
+            text=str(self.sound_volume_var.get()),
+            width=3,
+            anchor="center",
         )
-        note_shift_controls = ttk.Frame(self.sound_settings)
-        note_shift_controls.grid(
-            row=2,
-            column=0,
-            columnspan=3,
-            sticky="w",
-            pady=(8, 0),
-        )
-        self.transpose_semitones_label = ttk.Label(note_shift_controls, anchor="e")
-        self.transpose_semitones_label.grid(row=0, column=0, sticky="e", padx=(0, 6))
-        self.transpose_semitones_spinbox = ttk.Spinbox(
-            note_shift_controls,
-            from_=MIN_TRANSPOSE_SEMITONES,
-            to=MAX_TRANSPOSE_SEMITONES,
-            textvariable=self.transpose_semitones_var,
-            width=4,
-        )
-        self.transpose_semitones_spinbox.grid(row=0, column=1, sticky="w", padx=(0, 18))
-        self.transpose_semitones_label.bind("<Double-Button-1>", self._reset_transpose_semitones)
-        self.octave_shift_label = ttk.Label(note_shift_controls, anchor="e")
-        self.octave_shift_label.grid(row=0, column=2, sticky="e", padx=(0, 6))
-        self.octave_shift_spinbox = ttk.Spinbox(
-            note_shift_controls,
-            from_=MIN_OCTAVE_SHIFT,
-            to=MAX_OCTAVE_SHIFT,
-            textvariable=self.octave_shift_var,
-            width=4,
-        )
-        self.octave_shift_spinbox.grid(row=0, column=3, sticky="w")
-        self.octave_shift_label.bind("<Double-Button-1>", self._reset_octave_shift)
-        speed_controls = ttk.Frame(self.sound_settings)
-        speed_controls.grid(
-            row=1,
-            column=3,
-            sticky="ew",
-            pady=(8, 0),
-        )
-        speed_controls.columnconfigure(1, weight=1)
-        self.playback_speed_title = ttk.Label(
-            speed_controls,
-            width=self._sound_volume_label_width(),
-            anchor=self._sound_volume_label_anchor(),
-        )
-        self.playback_speed_title.grid(
-            row=0,
-            column=0,
-            sticky="w",
-            padx=(0, self._sound_volume_label_padx()),
-        )
+        self.sound_volume_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+
+        speed_controls = ttk.Frame(self.player_sliders)
+        speed_controls.grid(row=0, column=1, rowspan=2, sticky="nsw")
+        speed_controls.rowconfigure(1, weight=1)
+        self.playback_speed_title = ttk.Label(speed_controls, anchor="center", justify="center", wraplength=42)
+        self.playback_speed_title.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self.playback_speed_title.bind("<Double-Button-1>", self._reset_playback_speed)
         self.playback_speed = ttk.Scale(
             speed_controls,
-            from_=MIN_PLAYBACK_SPEED_PERCENT,
-            to=MAX_PLAYBACK_SPEED_PERCENT,
-            orient="horizontal",
+            from_=MAX_PLAYBACK_SPEED_PERCENT,
+            to=MIN_PLAYBACK_SPEED_PERCENT,
+            orient="vertical",
             variable=self.playback_speed_var,
             command=self._on_playback_speed_changed,
         )
-        self.playback_speed.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        self.playback_speed.grid(row=1, column=0, sticky="ns")
         self.playback_speed.bind("<ButtonPress-1>", self._on_playback_speed_pointer)
         self.playback_speed.bind("<B1-Motion>", self._on_playback_speed_pointer)
+        self.playback_speed.bind("<Double-Button-1>", self._reset_playback_speed)
         self.playback_speed_label = ttk.Label(
             speed_controls,
-            text=f"{self.playback_speed_var.get()}%",
-            width=5,
-            anchor="e",
+            text=str(self.playback_speed_var.get()),
+            width=3,
+            anchor="center",
         )
-        self.playback_speed_label.grid(row=0, column=2, sticky="e")
+        self.playback_speed_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
         self.channel_box = tk.Frame(
-            root,
+            self.player_area,
             borderwidth=1,
             relief=tk.GROOVE,
             padx=0,
             pady=0,
         )
         self.channel_box.configure(width=CHANNEL_PANE_WIDTH)
-        self.channel_box.grid(row=7, column=0, sticky="nsw", padx=(0, 4), pady=(12, 0))
+        self.channel_box.grid(row=0, column=1, sticky="nsw", padx=(0, 2))
         self.channel_box.grid_propagate(False)
+        self._add_channel_grid_header()
         self.channel_canvas = tk.Canvas(
             self.channel_box,
             width=CHANNEL_PANE_WIDTH - 2,
@@ -538,37 +520,105 @@ class App(tk.Tk):
         self.channel_canvas.bind("<MouseWheel>", self._on_channel_mousewheel)
         self._set_channels(())
 
-        self.detail_tabs = ttk.Notebook(root, style="Borderless.TNotebook")
-        self.detail_tabs.grid(row=7, column=1, sticky="nsew", pady=(12, 0))
+        self.detail_tabs = ttk.Frame(self.player_area)
+        self.detail_tabs.grid(row=0, column=2, sticky="nsew")
+        self.detail_tabs.rowconfigure(1, weight=1)
+        self.detail_tabs.columnconfigure(0, weight=1)
+        self.detail_header = tk.Frame(self.detail_tabs, borderwidth=0, highlightthickness=0)
+        self.detail_header.grid(row=0, column=0, sticky="ew")
+        self.detail_header.columnconfigure(4, weight=1)
+        self.reload_tab_button = tk.Label(
+            self.detail_header,
+            text="\u21bb",
+            borderwidth=1,
+            relief=tk.RAISED,
+            padx=5,
+            pady=2,
+        )
+        self.reload_tab_button.grid(row=0, column=0, sticky="w")
+        self.reload_tab_button.bind("<Button-1>", self._on_reload_tab_button)
+        self.midi_list_tab_button = tk.Label(
+            self.detail_header,
+            borderwidth=1,
+            relief=tk.SUNKEN,
+            padx=5,
+            pady=2,
+        )
+        self.midi_list_tab_button.grid(row=0, column=1, sticky="w")
+        self.midi_list_tab_button.bind("<Button-1>", lambda _event: self._select_detail_view("midi"))
+        self.log_tab_button = tk.Label(
+            self.detail_header,
+            borderwidth=1,
+            relief=tk.RAISED,
+            padx=5,
+            pady=2,
+        )
+        self.log_tab_button.grid(row=0, column=2, sticky="w")
+        self.log_tab_button.bind("<Button-1>", lambda _event: self._select_detail_view("log"))
+        self._build_note_shift_controls_in_detail_header()
+        self.detail_content = ttk.Frame(self.detail_tabs, padding=0)
+        self.detail_content.grid(row=1, column=0, sticky="nsew")
+        self.detail_content.rowconfigure(0, weight=1)
+        self.detail_content.columnconfigure(0, weight=1)
+        self.active_detail_view = "midi"
 
-        self.midi_list_tab = ttk.Frame(self.detail_tabs, padding=0)
-        self.midi_list_tab.rowconfigure(0, weight=1)
+        self.midi_list_tab = ttk.Frame(self.detail_content, padding=0)
+        self.midi_list_tab.rowconfigure(1, weight=1)
         self.midi_list_tab.columnconfigure(0, weight=1)
+        self.midi_header = tk.Frame(self.midi_list_tab, borderwidth=0, highlightthickness=0)
+        self.midi_header.grid(row=0, column=0, sticky="ew")
+        self.midi_header.columnconfigure(0, weight=1, minsize=MIDI_NAME_COLUMN_WIDTH)
+        self.midi_header.columnconfigure(1, weight=0, minsize=MIDI_DURATION_COLUMN_WIDTH)
+        self.midi_header.columnconfigure(2, weight=0, minsize=MIDI_NOTE_RANGE_COLUMN_WIDTH)
+        self.midi_name_header = tk.Label(self.midi_header, anchor="w", borderwidth=1, relief=tk.GROOVE, padx=4)
+        self.midi_name_header.grid(row=0, column=0, sticky="ew")
+        self.midi_duration_header = tk.Label(self.midi_header, anchor="w", borderwidth=1, relief=tk.GROOVE, padx=4)
+        self.midi_duration_header.grid(row=0, column=1, sticky="ew")
+        self.midi_note_range_header = tk.Label(self.midi_header, anchor="w", borderwidth=1, relief=tk.GROOVE, padx=4)
+        self.midi_note_range_header.grid(row=0, column=2, sticky="ew")
         self.midi_tree = ttk.Treeview(
             self.midi_list_tab,
             columns=MIDI_LIST_COLUMNS,
-            show="tree headings",
+            show="tree",
             selectmode="browse",
         )
         self.midi_tree.heading("#0", text=self._text("name"), anchor="w")
         self.midi_tree.heading("duration", text=self._text("duration"), anchor="w")
         self.midi_tree.heading("note_range", text=self._text("note_range"), anchor="w")
-        self.midi_tree.column("#0", width=200, minwidth=120, stretch=True, anchor="w")
-        self.midi_tree.column("duration", width=80, minwidth=70, stretch=False, anchor="w")
-        self.midi_tree.column("note_range", width=90, minwidth=75, stretch=False, anchor="w")
-        self.midi_tree.grid(row=0, column=0, sticky="nsew")
+        self.midi_tree.column(
+            "#0",
+            width=MIDI_NAME_COLUMN_WIDTH,
+            minwidth=MIDI_NAME_COLUMN_MIN_WIDTH,
+            stretch=True,
+            anchor="w",
+        )
+        self.midi_tree.column(
+            "duration",
+            width=MIDI_DURATION_COLUMN_WIDTH,
+            minwidth=MIDI_DURATION_COLUMN_MIN_WIDTH,
+            stretch=False,
+            anchor="w",
+        )
+        self.midi_tree.column(
+            "note_range",
+            width=MIDI_NOTE_RANGE_COLUMN_WIDTH,
+            minwidth=MIDI_NOTE_RANGE_COLUMN_MIN_WIDTH,
+            stretch=False,
+            anchor="w",
+        )
+        self.midi_tree.grid(row=1, column=0, sticky="nsew")
         self.midi_scrollbar = ttk.Scrollbar(
             self.midi_list_tab,
             orient="vertical",
             command=self.midi_tree.yview,
             style="MidiList.Vertical.TScrollbar",
         )
+        self.midi_scrollbar.grid(row=0, column=1, rowspan=2, sticky="ns")
         self.midi_tree.configure(yscrollcommand=self.midi_scrollbar.set)
         self.midi_tree.bind("<<TreeviewSelect>>", self._on_midi_selected)
         self.midi_tree.bind("<Double-1>", self._on_midi_double_click)
-        self.after_idle(self._align_midi_scrollbar)
 
-        self.log_tab = ttk.Frame(self.detail_tabs, padding=0)
+        self.log_tab = ttk.Frame(self.detail_content, padding=0)
         self.log_tab.rowconfigure(0, weight=1)
         self.log_tab.columnconfigure(0, weight=1)
         self.log_text = tk.Text(
@@ -581,17 +631,36 @@ class App(tk.Tk):
             relief=tk.FLAT,
         )
         self.log_text.grid(row=0, column=0, sticky="nsew")
-        self.reload_tab = ttk.Frame(self.detail_tabs)
-        self.detail_tabs.add(self.reload_tab, text="\u21bb", padding=(5, 2))
-        self.detail_tabs.add(
-            self.midi_list_tab,
-            text=self._text("midi_list"),
-        )
-        self.detail_tabs.add(self.log_tab, text=self._text("playback_log"))
-        self.detail_tabs.select(self.midi_list_tab)
-        self.detail_tabs.bind("<Button-1>", self._on_detail_tab_pointer, add="+")
+        self._select_detail_view("midi")
         self._refresh_text()
+        self._apply_scaled_layout_dimensions()
         self._refresh_midi_input_devices()
+
+    def _build_note_shift_controls_in_detail_header(self) -> None:
+        self.note_shift_controls = ttk.Frame(self.detail_header)
+        self.note_shift_controls.grid(row=0, column=3, sticky="w", padx=(4, 0))
+        self.transpose_semitones_label = ttk.Label(self.note_shift_controls, anchor="e")
+        self.transpose_semitones_label.grid(row=0, column=0, sticky="e", padx=(0, 4))
+        self.transpose_semitones_spinbox = ttk.Spinbox(
+            self.note_shift_controls,
+            from_=MIN_TRANSPOSE_SEMITONES,
+            to=MAX_TRANSPOSE_SEMITONES,
+            textvariable=self.transpose_semitones_var,
+            width=4,
+        )
+        self.transpose_semitones_spinbox.grid(row=0, column=1, sticky="w", padx=(0, 10))
+        self.transpose_semitones_label.bind("<Double-Button-1>", self._reset_transpose_semitones)
+        self.octave_shift_label = ttk.Label(self.note_shift_controls, anchor="e")
+        self.octave_shift_label.grid(row=0, column=2, sticky="e", padx=(0, 4))
+        self.octave_shift_spinbox = ttk.Spinbox(
+            self.note_shift_controls,
+            from_=MIN_OCTAVE_SHIFT,
+            to=MAX_OCTAVE_SHIFT,
+            textvariable=self.octave_shift_var,
+            width=4,
+        )
+        self.octave_shift_spinbox.grid(row=0, column=3, sticky="w")
+        self.octave_shift_label.bind("<Double-Button-1>", self._reset_octave_shift)
 
     def _build_menu_bar(self) -> None:
         menu_bar = tk.Menu(self, tearoff=False)
@@ -614,16 +683,45 @@ class App(tk.Tk):
                 label=f"{opacity}%",
                 variable=self.window_opacity_var,
                 value=opacity,
-                command=lambda value=opacity: self._set_window_opacity(value),
+            )
+
+        scale_menu = tk.Menu(menu_bar, tearoff=False)
+        for percent in UI_SCALE_PERCENT_OPTIONS:
+            scale_menu.add_radiobutton(
+                label=f"{percent}%",
+                variable=self.ui_scale_percent_var,
+                value=percent,
             )
 
         view_menu = tk.Menu(menu_bar, tearoff=False)
+        view_menu.add_cascade(label=self._text("ui_scale"), menu=scale_menu)
         view_menu.add_cascade(label=self._text("window_opacity"), menu=opacity_menu)
         view_menu.add_separator()
         view_menu.add_checkbutton(
             label=self._text("always_on_top"),
             variable=self.always_on_top_var,
             command=self._on_always_on_top_changed,
+        )
+        view_menu.add_separator()
+        view_menu.add_checkbutton(
+            label=self._text("midi_input_settings"),
+            variable=self.show_midi_input_section_var,
+            command=self._on_section_visibility_changed,
+        )
+        view_menu.add_checkbutton(
+            label=self._text("key_playback_settings"),
+            variable=self.show_key_playback_section_var,
+            command=self._on_section_visibility_changed,
+        )
+        view_menu.add_checkbutton(
+            label=self._text("midi_sound_settings"),
+            variable=self.show_common_settings_section_var,
+            command=self._on_section_visibility_changed,
+        )
+        view_menu.add_checkbutton(
+            label=self._text("player_section"),
+            variable=self.show_player_section_var,
+            command=self._on_section_visibility_changed,
         )
         menu_bar.add_cascade(label=self._text("menu_view"), menu=view_menu)
 
@@ -669,13 +767,105 @@ class App(tk.Tk):
 
         self.menu_bar = menu_bar
         self.midi_menu = midi_menu
-        self.opacity_menu = opacity_menu
         self.view_menu = view_menu
         self.theme_menu = theme_menu
         self.language_menu_widget = language_menu
         self.settings_menu = settings_menu
         self.other_menu = other_menu
         self.configure(menu=menu_bar)
+
+    def _on_section_visibility_changed(self) -> None:
+        self._relayout_visible_sections()
+        self._fit_window_height_to_visible_sections()
+
+    def _relayout_visible_sections(self) -> None:
+        visible = {
+            "midi_input": self.show_midi_input_section_var.get(),
+            "key_playback": self.show_key_playback_section_var.get(),
+            "common_settings": self.show_common_settings_section_var.get(),
+            "player": self.show_player_section_var.get(),
+        }
+        for row in range(8):
+            self.root_frame.rowconfigure(row, weight=0)
+
+        if all(visible.values()):
+            self.midi_input_settings.grid(row=0, column=0, columnspan=3, sticky="ew")
+            self.key_settings.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+            self.sound_settings.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+            self.playback_status.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+            self.player_area.grid(row=7, column=0, columnspan=3, sticky="nsew", pady=(12, 0))
+            self.root_frame.rowconfigure(7, weight=1)
+            return
+
+        for section_id, widgets in (
+            ("midi_input", (self.midi_input_settings,)),
+            ("key_playback", (self.key_settings,)),
+            ("common_settings", (self.sound_settings,)),
+            ("player", (self.playback_status, self.player_area)),
+        ):
+            if not visible[section_id]:
+                for widget in widgets:
+                    widget.grid_remove()
+
+        row = 0
+        first = True
+        if visible["midi_input"]:
+            self.midi_input_settings.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 0))
+            row += 1
+            first = False
+        if visible["key_playback"]:
+            self.key_settings.grid(
+                row=row,
+                column=0,
+                columnspan=3,
+                sticky="ew",
+                pady=(0, 0) if first else (12, 0),
+            )
+            row += 1
+            first = False
+        if visible["common_settings"]:
+            self.sound_settings.grid(
+                row=row,
+                column=0,
+                columnspan=3,
+                sticky="ew",
+                pady=(0, 0) if first else (12, 0),
+            )
+            row += 1
+            first = False
+        if visible["player"]:
+            self.playback_status.grid(
+                row=row,
+                column=0,
+                columnspan=3,
+                sticky="ew",
+                pady=(0, 0) if first else (12, 0),
+            )
+            self.player_area.grid(row=row + 1, column=0, columnspan=3, sticky="nsew", pady=(12, 0))
+            self.root_frame.rowconfigure(row + 1, weight=1)
+
+    def _visible_section_min_height(self) -> int:
+        if self._ui_scale_factor() != 1.0:
+            return 1
+        visibility_vars = (
+            self.show_midi_input_section_var,
+            self.show_key_playback_section_var,
+            self.show_common_settings_section_var,
+            self.show_player_section_var,
+        )
+        return 1 if any(not variable.get() for variable in visibility_vars) else MIN_WINDOW_HEIGHT
+
+    def _fit_window_height_to_visible_sections(self) -> None:
+        self.update_idletasks()
+        unrestricted = self._ui_scale_factor() != 1.0
+        min_height = self._visible_section_min_height()
+        self._apply_window_size_policy()
+        min_width = 1 if unrestricted else MIN_WINDOW_WIDTH
+        requested_width = self.root_frame.winfo_reqwidth() + ROOT_HORIZONTAL_PADDING if unrestricted else DEFAULT_WINDOW_WIDTH
+        width = max(requested_width, min_width)
+        requested_height = self.root_frame.winfo_reqheight()
+        height = max(min_height, requested_height if unrestricted else min(2000, requested_height))
+        self.geometry(f"{width}x{height}")
 
     def _show_about_window(self) -> None:
         existing = self.__dict__.get("about_window")
@@ -848,50 +1038,84 @@ class App(tk.Tk):
             )
             entry.configure(style=style)
 
-    def _on_detail_tab_pointer(self, event: tk.Event) -> str | None:
+    def _on_reload_tab_button(self, _event: tk.Event | None = None) -> str:
+        self._set_reload_button_pressed(True)
         try:
-            clicked_tab = self.detail_tabs.index(f"@{event.x},{event.y}")
-            reload_tab = self.detail_tabs.index(self.reload_tab)
-        except tk.TclError:
-            return None
-        if clicked_tab != reload_tab:
-            return None
-        self.reload_midi_folder()
+            if "reload_tab_button" in self.__dict__:
+                self.update_idletasks()
+            self.reload_midi_folder()
+        finally:
+            self._set_reload_button_pressed(False)
         return "break"
 
-    def _align_midi_scrollbar(self, _event: tk.Event | None = None) -> None:
-        if not self.midi_tree.winfo_exists():
+    def _set_reload_button_pressed(self, pressed: bool) -> None:
+        if "reload_tab_button" not in self.__dict__:
             return
-        heading_seen = False
-        heading_bottom = 0
-        for y in range(min(self.midi_tree.winfo_height(), 80)):
-            region = self.midi_tree.identify_region(1, y)
-            if region == "heading":
-                heading_seen = True
-            elif heading_seen:
-                heading_bottom = y
-                break
-        if heading_bottom <= 0:
-            return
-        if self.__dict__.get("_midi_scrollbar_heading_bottom") == heading_bottom:
-            return
-        self._midi_scrollbar_heading_bottom = heading_bottom
-        self.midi_scrollbar.place(
-            relx=1.0,
-            x=0,
-            y=heading_bottom,
-            anchor="ne",
-            relheight=1.0,
-            height=-heading_bottom,
+        palette = self._theme_palette()
+        self.reload_tab_button.configure(
+            background=palette["select"] if pressed else palette["panel"],
+            foreground="#ffffff" if pressed else palette["fg"],
+            relief=tk.SUNKEN if pressed else tk.RAISED,
         )
-        self.midi_scrollbar.lift()
+
+    def _select_detail_view(self, view: str) -> str:
+        self.active_detail_view = "log" if view == "log" else "midi"
+        if self.active_detail_view == "log":
+            self.midi_list_tab.grid_remove()
+            self.log_tab.grid(row=0, column=0, sticky="nsew")
+        else:
+            self.log_tab.grid_remove()
+            self.midi_list_tab.grid(row=0, column=0, sticky="nsew")
+        self._refresh_detail_tab_styles()
+        return "break"
+
+    def _refresh_detail_tab_styles(self) -> None:
+        if "midi_list_tab_button" not in self.__dict__:
+            return
+        palette = self._theme_palette()
+        for view, label in (
+            ("midi", self.midi_list_tab_button),
+            ("log", self.log_tab_button),
+        ):
+            selected = self.__dict__.get("active_detail_view", "midi") == view
+            label.configure(
+                background=palette["field"] if selected else palette["panel"],
+                foreground=palette["fg"],
+                relief=tk.SUNKEN if selected else tk.RAISED,
+            )
+        self.reload_tab_button.configure(
+            background=palette["panel"],
+            foreground=palette["fg"],
+            relief=tk.RAISED,
+        )
+        self._refresh_midi_header_styles()
+
+    def _refresh_midi_header_styles(self) -> None:
+        if "midi_header" not in self.__dict__:
+            return
+        palette = self._theme_palette()
+        self.midi_header.configure(background=palette["bg"])
+        for label in (
+            self.midi_name_header,
+            self.midi_duration_header,
+            self.midi_note_range_header,
+        ):
+            label.configure(
+                background=palette["panel"],
+                foreground=palette["fg"],
+                highlightbackground=palette["track"],
+            )
 
     def _fit_window_width_to_key_settings(self) -> None:
         self.update_idletasks()
-        screen_limit = max(MIN_WINDOW_WIDTH, self.winfo_screenwidth() - 80)
-        window_width = max(MIN_WINDOW_WIDTH, min(DEFAULT_WINDOW_WIDTH, screen_limit))
-        window_height = max(self.saved_window_height, self.winfo_height(), MIN_WINDOW_HEIGHT)
-        self.minsize(window_width, MIN_WINDOW_HEIGHT)
+        min_height = self._visible_section_min_height()
+        unrestricted = self._ui_scale_factor() != 1.0
+        min_width = 1 if unrestricted else MIN_WINDOW_WIDTH
+        requested_width = self.root_frame.winfo_reqwidth() + ROOT_HORIZONTAL_PADDING if unrestricted else DEFAULT_WINDOW_WIDTH
+        screen_limit = max(min_width, self.winfo_screenwidth() - 80)
+        window_width = max(min_width, requested_width if unrestricted else min(requested_width, screen_limit))
+        window_height = max(self.saved_window_height, self.winfo_height(), min_height)
+        self._apply_window_size_policy()
         self.geometry(f"{window_width}x{window_height}")
 
     def load_midi_folder(self) -> None:
@@ -984,14 +1208,14 @@ class App(tk.Tk):
         if sound_playing:
             if self.summary is not None:
                 self._select_midi_path(self.summary.path)
-            self.detail_tabs.select(self.midi_list_tab)
+            self._select_detail_view("midi")
             return
 
         first_item = self.midi_tree.get_children()[0]
         self.midi_tree.selection_set(first_item)
         self.midi_tree.focus(first_item)
         self._on_midi_selected(None)
-        self.detail_tabs.select(self.midi_list_tab)
+        self._select_detail_view("midi")
 
     def _select_midi_path(self, target_path: Path) -> bool:
         target_name = target_path.name
@@ -1358,7 +1582,7 @@ class App(tk.Tk):
     def _on_sound_volume_changed(self, _value: str) -> None:
         volume = int(float(_value))
         self.sound_volume_var.set(volume)
-        self.sound_volume_label.configure(text=f"{volume}%")
+        self.sound_volume_label.configure(text=str(volume))
         self._save_current_settings()
         if self.sound_player:
             self.sound_player.set_volume(volume)
@@ -1380,7 +1604,7 @@ class App(tk.Tk):
     def _on_playback_speed_changed(self, value: str) -> None:
         speed = int(round(float(value)))
         self.playback_speed_var.set(speed)
-        self.playback_speed_label.configure(text=f"{speed}%")
+        self.playback_speed_label.configure(text=str(speed))
         if self.player:
             self.player.set_playback_speed(speed)
         if self.sound_player:
@@ -1545,10 +1769,6 @@ class App(tk.Tk):
             self.sound_player.set_chord_optimization(value)
         self._save_current_settings()
 
-    def _toggle_chord_optimization(self, _event: tk.Event | None = None) -> str:
-        self.chord_optimization_var.set(not self.chord_optimization_var.get())
-        return "break"
-
     def _on_chord_strum_changed(self, *_args: object) -> None:
         value = self.chord_strum_var.get()
         if self.player:
@@ -1615,15 +1835,8 @@ class App(tk.Tk):
     def _on_dry_run_changed(self, *_args: object) -> None:
         self._save_current_settings()
 
-    def _on_color_theme_changed(self, *_args: object) -> None:
-        self.color_theme = color_theme_code_from_name(self.language, self.color_theme_var.get())
-        self.color_theme_menu_var.set(self.color_theme)
-        self._apply_theme()
-        self._save_current_settings()
-
     def _set_color_theme(self, theme: str) -> None:
         self.color_theme = normalize_color_theme(theme)
-        self.color_theme_var.set(COLOR_THEME_NAMES[self.language][self.color_theme])
         self.color_theme_menu_var.set(self.color_theme)
         self._apply_theme()
         self._save_current_settings()
@@ -1641,21 +1854,9 @@ class App(tk.Tk):
         self._apply_window_opacity()
         self._save_current_settings()
 
-    def _set_window_opacity(self, opacity: int) -> None:
-        self.window_opacity_var.set(max(30, min(100, opacity)))
-        self._apply_window_opacity()
+    def _on_ui_scale_percent_changed(self, *_args: object) -> None:
+        self._apply_ui_scale(self.ui_scale_percent_var.get())
         self._save_current_settings()
-
-    def _on_opacity_slider_changed(self, value: str) -> None:
-        opacity = int(round(float(value)))
-        self.window_opacity_var.set(opacity)
-        self._apply_window_opacity()
-        self._save_current_settings()
-
-    def _reset_window_opacity(self, _event: tk.Event | None = None) -> str:
-        self.window_opacity_var.set(100)
-        self._on_opacity_slider_changed("100")
-        return "break"
 
     def _on_play_shortcut_key_pressed(self, event: tk.Event) -> str:
         if self.shortcut_lock_var.get():
@@ -1695,26 +1896,11 @@ class App(tk.Tk):
         self._refresh_shortcut_lock_state()
         self._save_current_settings()
 
-    def _on_language_changed(self, *_args: object) -> None:
-        previous_theme = self.color_theme
-        self.language = language_code_from_name(self.language_var.get())
-        self.color_theme = previous_theme
-        self.language_menu_var.set(self.language)
-        self.color_theme_var.set(COLOR_THEME_NAMES[self.language][self.color_theme])
-        self.color_theme_menu_var.set(self.color_theme)
-        self._refresh_text()
-        self._fit_window_width_to_key_settings()
-        channels = self.summary.channels if self.summary is not None else ()
-        self._set_channels(channels, selected_sources=self._enabled_sources())
-        self._save_current_settings()
-
     def _set_language(self, language: str) -> None:
         previous_theme = self.color_theme
         self.language = normalize_language(language)
         self.color_theme = previous_theme
-        self.language_var.set(LANGUAGE_NAMES[self.language])
         self.language_menu_var.set(self.language)
-        self.color_theme_var.set(COLOR_THEME_NAMES[self.language][self.color_theme])
         self.color_theme_menu_var.set(self.color_theme)
         self._refresh_text()
         self._fit_window_width_to_key_settings()
@@ -1775,7 +1961,9 @@ class App(tk.Tk):
             always_on_top=self.always_on_top_var.get(),
             tray_resident=self.tray_resident_var.get(),
             window_opacity=self._read_int_var(self.window_opacity_var, minimum=30, maximum=100, default=100),
-            window_height=max(MIN_WINDOW_HEIGHT, self.saved_window_height),
+            ui_scale_percent=self._normalize_ui_scale_percent(self.ui_scale_percent_var.get()),
+            window_width=max(1, self.saved_window_width),
+            window_height=max(self._visible_section_min_height(), self.saved_window_height),
             last_midi_folder=self.last_midi_folder,
             keyboard_play_shortcut=self.keyboard_play_shortcut_var.get().strip() or "F5",
             keyboard_stop_shortcut=self.keyboard_stop_shortcut_var.get().strip() or "F6",
@@ -1833,8 +2021,11 @@ class App(tk.Tk):
             return
         if self.state() == "withdrawn":
             return
+        width = int(event.width)
         height = int(event.height)
-        if height >= MIN_WINDOW_HEIGHT:
+        if width >= 1:
+            self.saved_window_width = width
+        if height >= self._visible_section_min_height():
             self.saved_window_height = height
 
     def _on_close(self) -> None:
@@ -2039,6 +2230,8 @@ class App(tk.Tk):
                 }
 
         self.updating_channels = True
+        palette = self._theme_palette()
+        self.channel_frame.configure(background=palette["bg"])
         for child in self.channel_frame.winfo_children():
             child.destroy()
         self.channel_vars.clear()
@@ -2049,7 +2242,6 @@ class App(tk.Tk):
             for channel in track.channels
         ]
         selected_sources.intersection_update(available_sources)
-        self._add_channel_grid_header()
 
         if not available_sources:
             self.enabled_sources_snapshot = frozenset()
@@ -2058,9 +2250,10 @@ class App(tk.Tk):
             self.channel_canvas.update_idletasks()
             self._update_channel_scrollregion()
             self.channel_canvas.yview_moveto(0.0)
+            self.channel_frame.configure(background=palette["track"])
             return
 
-        for row, (track, channel) in enumerate(available_sources, start=1):
+        for row, (track, channel) in enumerate(available_sources):
             source = (track, channel)
             var = tk.BooleanVar(value=source in selected_sources)
             self.track_channel_vars[source] = var
@@ -2084,7 +2277,7 @@ class App(tk.Tk):
                 borderwidth=0,
                 relief=tk.FLAT,
                 padx=0,
-                pady=3,
+                pady=self._scaled_dimension(3),
             )
             cell.pack(fill=tk.X)
             cell.bind("<MouseWheel>", self._on_channel_mousewheel)
@@ -2102,25 +2295,29 @@ class App(tk.Tk):
         self.channel_canvas.update_idletasks()
         self._update_channel_scrollregion()
         self.channel_canvas.yview_moveto(0.0)
+        self.channel_frame.configure(background=palette["track"])
 
     def _add_channel_grid_header(self) -> None:
-        self.channel_frame.grid_columnconfigure(0, minsize=34)
-        header_frame = tk.Frame(self.channel_frame, borderwidth=0, relief=tk.FLAT)
-        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 1))
-        header_frame.bind("<MouseWheel>", self._on_channel_mousewheel)
-        label = tk.Label(
-            header_frame,
+        self.channel_header_frame = tk.Frame(
+            self.channel_box,
+            borderwidth=0,
+            relief=tk.FLAT,
+        )
+        self.channel_header_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 1))
+        self.channel_header_frame.bind("<MouseWheel>", self._on_channel_mousewheel)
+        self.channel_header_label = tk.Label(
+            self.channel_header_frame,
             text="T-C",
             anchor="center",
             borderwidth=0,
             relief=tk.FLAT,
-            padx=5,
-            pady=2,
+            padx=self._scaled_dimension(5),
+            pady=self._scaled_dimension(2),
         )
-        label.pack(fill=tk.X)
-        label.bind("<MouseWheel>", self._on_channel_mousewheel)
-        self._style_channel_header_label(label)
-        self._style_channel_cell(header_frame)
+        self.channel_header_label.pack(fill=tk.X)
+        self.channel_header_label.bind("<MouseWheel>", self._on_channel_mousewheel)
+        self._style_channel_header_label(self.channel_header_label)
+        self._style_channel_cell(self.channel_header_frame)
 
     def _toggle_channel_var(self, variable: tk.BooleanVar) -> None:
         variable.set(not variable.get())
@@ -2271,16 +2468,17 @@ class App(tk.Tk):
         self.auto_fit_note_range_check.configure(text=self._text("auto_fit_note_range"))
         self.transpose_semitones_label.configure(text=self._text("transpose_semitones"))
         self.octave_shift_label.configure(text=self._text("octave_shift"))
-        self.chord_optimization_label.configure(text=self._text("chord_optimization"))
+        self.chord_optimization_check.configure(text=self._text("chord_optimization"))
         self.chord_strum_check.configure(text=self._text("chord_strum"))
         self.repeat_prevention_check.configure(text=self._text("repeat_prevention"))
-        self.color_theme_var.set(COLOR_THEME_NAMES[self.language][self.color_theme])
         self.key_settings.configure(text=self._text("key_playback_settings"))
         self.midi_input_settings.configure(text=self._text("midi_input_settings"))
+        self.common_settings_label.configure(text=self._text("common_settings_label"))
+        self.performance_correction_label.configure(
+            text=self._text("performance_optimization_settings")
+        )
         self._refresh_midi_input_button()
         self.midi_input_device_label.configure(text=self._text("midi_input_device"))
-        self.refresh_midi_inputs_button.configure(text=self._text("refresh_midi_inputs"))
-        self.sound_settings.configure(text=self._text("midi_sound_settings"))
         self.dry_run_check.configure(text=self._text("dry_run"))
         countdown_text = self._text("countdown")
         if self.language == "zh":
@@ -2290,26 +2488,20 @@ class App(tk.Tk):
         self.countdown_sound_check.configure(text=self._text("countdown_sound"))
         self.game_countdown_sound_check.configure(text=self._text("game_countdown_sound"))
         self.humanize_timing_check.configure(text=self._text("humanize_timing"))
-        self.playback_speed_title.configure(text=self._text("playback_speed"))
-        self.playback_speed_title.configure(
-            width=self._sound_volume_label_width(),
-            anchor=self._sound_volume_label_anchor(),
-        )
-        self.playback_speed_title.grid_configure(padx=(0, self._sound_volume_label_padx()))
+        self.playback_speed_title.configure(text=self._vertical_label_text(self._text("playback_speed")))
         self.shortcut_label.configure(text=self._text("shortcut_settings"))
         self.keyboard_play_shortcut_label.configure(text=self._text("shortcut_start"))
         self.keyboard_stop_shortcut_label.configure(text=self._text("shortcut_end"))
         self.shortcut_lock_check.configure(text=self._text("shortcut_lock"))
-        self.sound_volume_title.configure(
-            width=self._sound_volume_label_width(),
-            anchor=self._sound_volume_label_anchor(),
-        )
-        self.sound_volume_title.grid_configure(padx=(0, self._sound_volume_label_padx()))
-        self.sound_volume_title.configure(text=self._text("midi_sound_volume"))
+        self.sound_volume_title.configure(text=self._vertical_label_text(self._text("midi_sound_volume")))
         self.position_title.configure(text=self._text("playback_position"))
-        self.detail_tabs.tab(self.midi_list_tab, text=self._text("midi_list"))
-        self.detail_tabs.tab(self.reload_tab, text="\u21bb")
-        self.detail_tabs.tab(self.log_tab, text=self._text("playback_log"))
+        self.reload_tab_button.configure(text="\u21bb")
+        self.midi_list_tab_button.configure(text=self._text("midi_list"))
+        self.log_tab_button.configure(text=self._text("playback_log"))
+        self._refresh_detail_tab_styles()
+        self.midi_name_header.configure(text=self._text("name"))
+        self.midi_duration_header.configure(text=self._text("duration"))
+        self.midi_note_range_header.configure(text=self._text("note_range"))
         self.midi_tree.heading("#0", text=self._text("name"), anchor="w")
         self.midi_tree.heading("duration", text=self._text("duration"), anchor="w")
         self.midi_tree.heading("note_range", text=self._text("note_range"), anchor="w")
@@ -2328,8 +2520,13 @@ class App(tk.Tk):
 
         self.midi_menu.entryconfigure(0, label=self._text("load_midi"))
         self.midi_menu.entryconfigure(2, label=self._text("exit"))
-        self.view_menu.entryconfigure(0, label=self._text("window_opacity"))
-        self.view_menu.entryconfigure(2, label=self._text("always_on_top"))
+        self.view_menu.entryconfigure(0, label=self._text("ui_scale"))
+        self.view_menu.entryconfigure(1, label=self._text("window_opacity"))
+        self.view_menu.entryconfigure(3, label=self._text("always_on_top"))
+        self.view_menu.entryconfigure(5, label=self._text("midi_input_settings"))
+        self.view_menu.entryconfigure(6, label=self._text("key_playback_settings"))
+        self.view_menu.entryconfigure(7, label=self._text("midi_sound_settings"))
+        self.view_menu.entryconfigure(8, label=self._text("player_section"))
         self.settings_menu.entryconfigure(0, label=self._text("color_theme"))
         self.settings_menu.entryconfigure(1, label=self._text("language"))
         self.settings_menu.entryconfigure(2, label=self._text("key_bindings"))
@@ -2359,17 +2556,136 @@ class App(tk.Tk):
     def _text(self, key: str) -> str:
         return TEXT[self.language][key]
 
-    def _sound_volume_label_width(self) -> int:
-        return 18 if self.language == "en" else 10
+    @staticmethod
+    def _vertical_label_text(text: str) -> str:
+        return "\n".join(character for character in text if not character.isspace())
 
-    def _opacity_label_width(self) -> int:
-        return 7 if self.language == "en" else 6
+    def _capture_base_font_sizes(self) -> dict[str, int]:
+        sizes: dict[str, int] = {}
+        for name in (
+            "TkDefaultFont",
+            "TkTextFont",
+            "TkFixedFont",
+            "TkMenuFont",
+            "TkHeadingFont",
+            "TkCaptionFont",
+            "TkSmallCaptionFont",
+            "TkIconFont",
+            "TkTooltipFont",
+        ):
+            try:
+                sizes[name] = int(tkfont.nametofont(name).cget("size"))
+            except tk.TclError:
+                continue
+        return sizes
 
-    def _sound_volume_label_anchor(self) -> str:
-        return "w" if self.language == "en" else "e"
+    @staticmethod
+    def _normalize_ui_scale_percent(percent: object) -> int:
+        try:
+            value = int(percent)
+        except (TypeError, ValueError):
+            return DEFAULT_UI_SCALE_PERCENT
+        return min(UI_SCALE_PERCENT_OPTIONS, key=lambda option: abs(option - value))
 
-    def _sound_volume_label_padx(self) -> int:
-        return 6 if self.language == "en" else 8
+    @staticmethod
+    def _scaled_font_size(size: int, scale: float) -> int:
+        sign = -1 if size < 0 else 1
+        return sign * max(1, int(round(abs(size) * scale)))
+
+    def _scaled_dimension(self, value: int) -> int:
+        return max(1, int(round(value * self._ui_scale_factor())))
+
+    def _scaled_style_font(self, family: str, size: int, *options: str) -> tuple[object, ...]:
+        return (family, self._scaled_font_size(size, self._ui_scale_factor()), *options)
+
+    def _midi_tree_row_height(self) -> int:
+        minimum_height = self._scaled_dimension(UiSize.midi_tree_row_height)
+        try:
+            line_height = int(tkfont.nametofont("TkDefaultFont").metrics("linespace"))
+        except tk.TclError:
+            return minimum_height
+        return max(minimum_height, line_height + self._scaled_dimension(UiSpace.sm))
+
+    def _ui_scale_factor(self) -> float:
+        return self._normalize_ui_scale_percent(self.ui_scale_percent_var.get()) / 100.0
+
+    def _apply_ui_scale(self, percent: int, resize_window: bool = True) -> None:
+        normalized = self._normalize_ui_scale_percent(percent)
+        if self.ui_scale_percent_var.get() != normalized:
+            self.ui_scale_percent_var.set(normalized)
+            return
+
+        scale = normalized / 100.0
+        self.tk.call("tk", "scaling", self.base_tk_scaling)
+        for name, base_size in self.base_font_sizes.items():
+            try:
+                tkfont.nametofont(name).configure(size=self._scaled_font_size(base_size, scale))
+            except tk.TclError:
+                continue
+        self.section_heading_font.configure(
+            size=self._scaled_font_size(self.section_heading_base_size, scale)
+        )
+        self._apply_window_size_policy()
+        if "style" in self.__dict__ and "root_frame" in self.__dict__:
+            self._apply_scaled_layout_dimensions()
+            self._apply_theme()
+            self._refresh_text()
+            self._set_channels(
+                self.summary.channels if self.summary is not None else (),
+                selected_sources=self._enabled_sources(),
+            )
+            if resize_window:
+                self._fit_window_height_to_visible_sections()
+
+    def _apply_window_size_policy(self) -> None:
+        unrestricted = self._normalize_ui_scale_percent(self.ui_scale_percent_var.get()) != DEFAULT_UI_SCALE_PERCENT
+        if unrestricted:
+            self.resizable(True, True)
+            self.minsize(1, 1)
+            return
+        self.resizable(False, True)
+        self.minsize(MIN_WINDOW_WIDTH, self._visible_section_min_height())
+
+    def _apply_scaled_layout_dimensions(self) -> None:
+        slider_width = self._scaled_dimension(PLAYER_SLIDER_PANE_WIDTH)
+        channel_width = self._scaled_dimension(CHANNEL_PANE_WIDTH)
+        self.sound_volume_title.configure(wraplength=self._scaled_dimension(42))
+        self.playback_speed_title.configure(wraplength=self._scaled_dimension(42))
+        self.update_idletasks()
+        requested_slider_width = sum(
+            child.winfo_reqwidth()
+            for child in self.player_sliders.winfo_children()
+            if child.winfo_manager()
+        )
+        slider_width = max(slider_width, requested_slider_width)
+        self.root_frame.columnconfigure(
+            2,
+            weight=0,
+            minsize=slider_width + self._scaled_dimension(UiSpace.md),
+        )
+        self.player_sliders.configure(width=slider_width)
+        self.channel_box.configure(width=channel_width)
+        self.channel_canvas.configure(width=max(1, channel_width - self._scaled_dimension(UiSpace.xs)))
+        self.channel_frame.grid_columnconfigure(0, minsize=max(1, channel_width - self._scaled_dimension(UiSpace.sm)))
+        self.midi_header.columnconfigure(0, minsize=self._scaled_dimension(MIDI_NAME_COLUMN_WIDTH))
+        self.midi_header.columnconfigure(1, minsize=self._scaled_dimension(MIDI_DURATION_COLUMN_WIDTH))
+        self.midi_header.columnconfigure(2, minsize=self._scaled_dimension(MIDI_NOTE_RANGE_COLUMN_WIDTH))
+        self.midi_tree.column(
+            "#0",
+            width=self._scaled_dimension(MIDI_NAME_COLUMN_WIDTH),
+            minwidth=self._scaled_dimension(MIDI_NAME_COLUMN_MIN_WIDTH),
+        )
+        self.midi_tree.column(
+            "duration",
+            width=self._scaled_dimension(MIDI_DURATION_COLUMN_WIDTH),
+            minwidth=self._scaled_dimension(MIDI_DURATION_COLUMN_MIN_WIDTH),
+        )
+        self.midi_tree.column(
+            "note_range",
+            width=self._scaled_dimension(MIDI_NOTE_RANGE_COLUMN_WIDTH),
+            minwidth=self._scaled_dimension(MIDI_NOTE_RANGE_COLUMN_MIN_WIDTH),
+        )
+        self._update_channel_scrollregion()
 
     def _set_position(self, position: float) -> None:
         position = max(0.0, min(self.duration_seconds, position))
@@ -2407,8 +2723,14 @@ class App(tk.Tk):
     def _scale_value_from_event(scale: ttk.Scale, event: tk.Event) -> float:
         start = float(scale.cget("from"))
         end = float(scale.cget("to"))
-        width = max(1, scale.winfo_width())
-        ratio = max(0.0, min(1.0, event.x / width))
+        orient = str(scale.cget("orient"))
+        if orient == "vertical":
+            span = max(1, scale.winfo_height())
+            coordinate = event.y
+        else:
+            span = max(1, scale.winfo_width())
+            coordinate = event.x
+        ratio = max(0.0, min(1.0, coordinate / span))
         return start + (end - start) * ratio
 
     def _bind_keyboard_shortcuts(self) -> None:
@@ -2590,12 +2912,6 @@ class App(tk.Tk):
             key = key.lower()
         return f"<{'-'.join(modifiers + [key])}>"
 
-    @staticmethod
-    def _sequence_to_display(sequence: str) -> str:
-        value = sequence.strip("<>")
-        value = value.replace("Control", "Ctrl")
-        return value.replace("-", "+")
-
     def _apply_theme(self) -> None:
         palette = self._theme_palette()
 
@@ -2613,7 +2929,7 @@ class App(tk.Tk):
             "Credit.TLabel",
             background=palette["bg"],
             foreground=palette["disabled_fg"],
-            font=("Segoe UI", 8),
+            font=self._scaled_style_font("Segoe UI", 8),
         )
         self.style.configure("TLabelFrame", background=palette["bg"], foreground=palette["fg"])
         self.style.configure("TLabelFrame.Label", background=palette["bg"], foreground=palette["fg"])
@@ -2714,6 +3030,13 @@ class App(tk.Tk):
             darkcolor=palette["track"],
         )
         self.style.configure(
+            "Vertical.TScale",
+            background=palette["bg"],
+            troughcolor=palette["track"],
+            lightcolor=palette["track"],
+            darkcolor=palette["track"],
+        )
+        self.style.configure(
             "TScrollbar",
             background=palette["track"],
             troughcolor=palette["field"],
@@ -2768,6 +3091,7 @@ class App(tk.Tk):
             background=palette["field"],
             fieldbackground=palette["field"],
             foreground=palette["fg"],
+            rowheight=self._midi_tree_row_height(),
             borderwidth=0,
             relief=tk.FLAT,
         )
@@ -2785,6 +3109,9 @@ class App(tk.Tk):
             selectbackground=palette["select"],
             selectforeground="#ffffff",
         )
+        self.basic_common_settings.configure(style="TFrame")
+        self.detail_header.configure(background=palette["bg"])
+        self._refresh_detail_tab_styles()
         self.channel_box.configure(
             background=palette["bg"],
             highlightbackground=palette["panel"],
@@ -2792,6 +3119,8 @@ class App(tk.Tk):
         )
         self.channel_canvas.configure(background=palette["bg"])
         self.channel_frame.configure(background=palette["track"])
+        self._style_channel_cell(self.channel_header_frame, palette)
+        self._style_channel_header_label(self.channel_header_label, palette)
         self.shortcut_settings.configure(
             background=palette["bg"],
             highlightbackground=palette["panel"],
@@ -2823,8 +3152,6 @@ class App(tk.Tk):
             self._style_checkbutton(check, palette)
         self._style_chord_optimization_control(palette)
         self._style_channel_grid_widgets(self.channel_frame, palette)
-        self.__dict__.pop("_midi_scrollbar_heading_bottom", None)
-        self.after_idle(self._align_midi_scrollbar)
 
     def _style_checkbutton(self, check: tk.Checkbutton, palette: dict[str, str] | None = None) -> None:
         if palette is None:
@@ -2847,25 +3174,9 @@ class App(tk.Tk):
         if palette is None:
             palette = self._theme_palette()
         self._style_checkbutton(self.chord_optimization_check, palette)
-        self.chord_optimization_control.configure(background=palette["panel"])
-        self.chord_optimization_label.configure(
+        self.chord_optimization_check.configure(
             background=palette["panel"],
-            foreground=palette["fg"],
-            activebackground=palette["field"],
-            activeforeground=palette["fg"],
-        )
-
-    def _style_channel_label(
-        self,
-        label: tk.Label,
-        palette: dict[str, str] | None = None,
-    ) -> None:
-        if palette is None:
-            palette = self._theme_palette()
-        label.configure(
-            background=palette["bg"],
-            foreground=palette["fg"],
-            highlightbackground=palette["track"],
+            activebackground=palette["panel"],
         )
 
     def _style_channel_header_label(
@@ -3034,21 +3345,15 @@ class App(tk.Tk):
                 "select": "#ea580c",
             },
         }
-        return palettes.get(self.color_theme, palettes["sky_blue"])
+        color_theme = self.__dict__.get("color_theme", "sky_blue")
+        return palettes.get(color_theme, palettes["sky_blue"])
 
     def _apply_always_on_top(self) -> None:
         self.attributes("-topmost", bool(self.always_on_top_var.get()))
 
     def _apply_window_opacity(self) -> None:
         opacity = self._read_int_var(self.window_opacity_var, minimum=30, maximum=100, default=100)
-        if "opacity_value_label" in self.__dict__:
-            self.opacity_value_label.configure(text=f"{opacity}%")
         self.attributes("-alpha", opacity / 100)
-
-    def _update_opacity_label(self) -> None:
-        opacity = self._read_int_var(self.window_opacity_var, minimum=30, maximum=100, default=100)
-        if "opacity_value_label" in self.__dict__:
-            self.opacity_value_label.configure(text=f"{opacity}%")
 
     def _enabled_channels(self) -> set[int]:
         snapshot = self.__dict__.get("enabled_channels_snapshot")

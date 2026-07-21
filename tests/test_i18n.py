@@ -14,15 +14,15 @@ class I18nTests(unittest.TestCase):
     def test_performance_optimization_group_exists_in_every_language(self) -> None:
         self.assertEqual(
             TEXT["ja"]["performance_optimization_settings"],
-            "\u6f14\u594f\u6700\u9069\u5316",
+            "\u6f14\u594f\u88dc\u6b63",
         )
         self.assertEqual(
             TEXT["en"]["performance_optimization_settings"],
-            "Performance Optimization",
+            "Performance Correction",
         )
         self.assertEqual(
             TEXT["zh"]["performance_optimization_settings"],
-            "\u6f14\u594f\u4f18\u5316",
+            "\u6f14\u594f\u6821\u6b63",
         )
 
     def test_file_menu_and_exit_labels_exist_for_all_languages(self) -> None:
@@ -37,6 +37,33 @@ class I18nTests(unittest.TestCase):
                 translations = TEXT[language]
                 self.assertEqual(translations["menu_midi"], labels[0])
                 self.assertEqual(translations["exit"], labels[1])
+
+    def test_view_scale_and_advanced_settings_labels_exist_for_all_languages(self) -> None:
+        expected = {
+            "en": ("Scale", "Advanced Settings"),
+            "ja": ("\u62e1\u5927\u7387", "\u8a73\u7d30\u8a2d\u5b9a"),
+            "zh": ("\u7f29\u653e\u6bd4\u4f8b", "\u9ad8\u7ea7\u8bbe\u7f6e"),
+        }
+
+        for language, labels in expected.items():
+            with self.subTest(language=language):
+                translations = TEXT[language]
+                self.assertEqual(translations["ui_scale"], labels[0])
+                self.assertEqual(translations["midi_sound_settings"], labels[1])
+
+    def test_common_settings_label_exists_for_all_languages(self) -> None:
+        expected = {
+            "en": "Common Settings",
+            "ja": "\u5171\u901a\u8a2d\u5b9a",
+            "zh": "\u901a\u7528\u8bbe\u7f6e",
+        }
+        for language, label in expected.items():
+            with self.subTest(language=language):
+                self.assertEqual(TEXT[language]["common_settings_label"], label)
+
+    def test_english_vertical_slider_labels_use_abbreviations(self) -> None:
+        self.assertEqual(TEXT["en"]["playback_speed"], "SPD")
+        self.assertEqual(TEXT["en"]["midi_sound_volume"], "VOL")
 
     def test_log_messages_are_english_for_all_languages(self) -> None:
         expected = {
@@ -67,28 +94,6 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(normalize_color_theme("sky_blue"), "sky_blue")
         self.assertEqual(normalize_color_theme("missing"), "sky_blue")
 
-    def test_track_channel_compact_labels_exist_for_all_languages(self) -> None:
-        expected = {
-            "en": ("Track (T) / Channel (C)", "T1 - C16"),
-            "ja": (
-                "\u30c8\u30e9\u30c3\u30af(T)\uff0f\u30c1\u30e3\u30f3\u30cd\u30eb(C)",
-                "T1 - C16",
-            ),
-            "zh": (
-                "\u97f3\u8f68(T)\uff0f\u901a\u9053(C)",
-                "T1 - C16",
-            ),
-        }
-
-        for language, labels in expected.items():
-            with self.subTest(language=language):
-                translations = TEXT[language]
-                self.assertEqual(translations["channels"], labels[0])
-                self.assertEqual(
-                    translations["track_channel"].format(track=1, channel=16),
-                    labels[1],
-                )
-
     def test_note_range_column_label_exists_for_all_languages(self) -> None:
         self.assertEqual(TEXT["en"]["note_range"], "Range")
         self.assertEqual(TEXT["ja"]["note_range"], "\u97f3\u57df")
@@ -100,16 +105,16 @@ class I18nTests(unittest.TestCase):
 
     def test_performance_option_labels_use_current_names(self) -> None:
         expected = {
-            "en": ("Chord voicing", "Natural timing", "In-chord onset spread"),
+            "en": ("Chord reconstruction", "Timing variation", "Chord spread"),
             "ja": (
-                "\u548c\u97f3\u914d\u7f6e",
-                "\u30bf\u30a4\u30df\u30f3\u30b0\u306e\u81ea\u7136\u5316",
-                "\u548c\u97f3\u5185\u306e\u767a\u97f3\u5dee",
+                "\u548c\u97f3\u306e\u518d\u69cb\u6210",
+                "\u30bf\u30a4\u30df\u30f3\u30b0\u306e\u5206\u6563",
+                "\u548c\u97f3\u306e\u5206\u6563",
             ),
             "zh": (
-                "\u548c\u5f26\u914d\u7f6e",
-                "\u65f6\u5e8f\u81ea\u7136\u5316",
-                "\u548c\u5f26\u5185\u53d1\u97f3\u5dee",
+                "\u548c\u5f26\u91cd\u6784",
+                "\u65f6\u5e8f\u5206\u6563",
+                "\u548c\u5f26\u5206\u6563",
             ),
         }
 

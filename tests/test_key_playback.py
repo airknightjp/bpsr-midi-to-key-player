@@ -173,27 +173,17 @@ class KeyPlaybackTests(unittest.TestCase):
         ):
             app.color_theme = theme
             palette = App._theme_palette(app)
-            app.chord_optimization_control = FakeLabel()
             app.chord_optimization_check = FakeLabel()
-            app.chord_optimization_label = FakeLabel()
 
             App._style_chord_optimization_control(app, palette)
 
             self.assertEqual(
                 app.chord_optimization_check.config["background"],
-                palette["bg"],
+                palette["panel"],
             )
             self.assertEqual(
                 app.chord_optimization_check.config["selectcolor"],
                 palette["field"],
-            )
-            self.assertEqual(
-                app.chord_optimization_label.config["background"],
-                palette["panel"],
-            )
-            self.assertEqual(
-                app.chord_optimization_label.config["foreground"],
-                palette["fg"],
             )
 
     def test_play_keys_passes_countdown_setting_to_player(self) -> None:
@@ -840,7 +830,7 @@ class KeyPlaybackTests(unittest.TestCase):
 
         self.assertEqual(key_player.playback_speed_percent, 150)
         self.assertEqual(sound_player.playback_speed_percent, 150)
-        self.assertEqual(app.playback_speed_label.config["text"], "150%")
+        self.assertEqual(app.playback_speed_label.config["text"], "150")
 
     def test_double_click_resets_playback_speed_to_100_percent(self) -> None:
         key_player = FakeRunningPlayer()
@@ -858,24 +848,7 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertEqual(app.playback_speed_var.get(), 100)
         self.assertEqual(key_player.playback_speed_percent, 100)
         self.assertEqual(sound_player.playback_speed_percent, 100)
-        self.assertEqual(app.playback_speed_label.config["text"], "100%")
-
-    def test_double_click_resets_window_opacity_to_100_percent(self) -> None:
-        app = object.__new__(App)
-        app.window_opacity_var = FakeVar(55)
-        app.applied_opacity = None
-        app._apply_window_opacity = lambda: setattr(
-            app,
-            "applied_opacity",
-            app.window_opacity_var.get(),
-        )
-        app._save_current_settings = lambda: None
-
-        result = App._reset_window_opacity(app)
-
-        self.assertEqual(result, "break")
-        self.assertEqual(app.window_opacity_var.get(), 100)
-        self.assertEqual(app.applied_opacity, 100)
+        self.assertEqual(app.playback_speed_label.config["text"], "100")
 
 
 if __name__ == "__main__":

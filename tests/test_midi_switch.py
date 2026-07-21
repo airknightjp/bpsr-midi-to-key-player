@@ -60,14 +60,6 @@ class FakeStringVar:
         self.values.append(value)
 
 
-class FakeTabs:
-    def __init__(self):
-        self.selected = None
-
-    def select(self, tab: object) -> None:
-        self.selected = tab
-
-
 class FakeSoundPlayer:
     is_playing = True
 
@@ -231,8 +223,8 @@ class MidiSwitchTests(unittest.TestCase):
     def test_reloading_folder_while_sound_is_playing_preserves_current_selection(self) -> None:
         app = self.make_app()
         app.midi_tree = FakeTree(selection="0")
-        app.detail_tabs = FakeTabs()
-        app.midi_list_tab = object()
+        selected_views: list[str] = []
+        app._select_detail_view = selected_views.append
         app._clear_log = lambda: None
         app._save_current_settings = lambda: None
         scanned_paths: list[Path] = []
@@ -269,7 +261,7 @@ class MidiSwitchTests(unittest.TestCase):
         self.assertTrue(app.updating_midi_selection)
         self.assertIs(app.after_idle_callback.__self__, app)
         self.assertIs(app.after_idle_callback.__func__, App._finish_midi_selection_update)
-        self.assertIs(app.detail_tabs.selected, app.midi_list_tab)
+        self.assertEqual(selected_views, ["midi"])
 
     def test_note_range_uses_standard_midi_note_names(self) -> None:
         self.assertEqual(App._format_note_range((48, 83)), "C3-B5")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ctypes
-from collections.abc import Callable
 from pathlib import Path
 from ctypes import wintypes
 

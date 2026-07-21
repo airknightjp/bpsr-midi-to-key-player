@@ -43,6 +43,8 @@ class AppSettings:
     always_on_top: bool = False
     tray_resident: bool = False
     window_opacity: int = 100
+    ui_scale_percent: int = 100
+    window_width: int = 900
     window_height: int = 560
     last_midi_folder: str = ""
     keyboard_play_shortcut: str = "F5"
@@ -50,10 +52,6 @@ class AppSettings:
     shortcut_locked: bool = True
     midi_input_device: str = ""
     key_bindings: dict[int, str] | None = None
-
-    def resolved_key_bindings(self) -> dict[int, str]:
-        return normalized_key_bindings(self.key_bindings)
-
 
 def load_settings() -> AppSettings:
     global _last_settings_error
@@ -135,7 +133,9 @@ def load_settings() -> AppSettings:
         always_on_top=_parse_bool(data.get("always_on_top"), default=False),
         tray_resident=_parse_bool(data.get("tray_resident"), default=False),
         window_opacity=_clamp_int(data.get("window_opacity"), minimum=30, maximum=100, default=100),
-        window_height=_clamp_int(data.get("window_height"), minimum=480, maximum=2000, default=560),
+        ui_scale_percent=_clamp_int(data.get("ui_scale_percent"), minimum=100, maximum=200, default=100),
+        window_width=_clamp_int(data.get("window_width"), minimum=1, maximum=10000, default=900),
+        window_height=_clamp_int(data.get("window_height"), minimum=1, maximum=2000, default=560),
         last_midi_folder=_parse_str(data.get("last_midi_folder")),
         keyboard_play_shortcut=_parse_shortcut(data.get("keyboard_play_shortcut"), default="F5"),
         keyboard_stop_shortcut=_parse_shortcut(data.get("keyboard_stop_shortcut"), default="F6"),
@@ -170,6 +170,8 @@ def save_settings(settings: AppSettings) -> None:
             "always_on_top": settings.always_on_top,
             "tray_resident": settings.tray_resident,
             "window_opacity": settings.window_opacity,
+            "ui_scale_percent": settings.ui_scale_percent,
+            "window_width": settings.window_width,
             "window_height": settings.window_height,
             "last_midi_folder": settings.last_midi_folder,
             "keyboard_play_shortcut": settings.keyboard_play_shortcut,

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from config import normalized_key_bindings
 from settings import AppSettings, consume_settings_error, load_settings, save_settings
 
 
@@ -35,6 +36,8 @@ class SettingsTests(unittest.TestCase):
                         always_on_top=True,
                         tray_resident=True,
                         window_opacity=75,
+                        ui_scale_percent=150,
+                        window_width=1280,
                         window_height=720,
                         last_midi_folder=str(Path(temp_dir) / "midis"),
                         keyboard_play_shortcut="Ctrl+P",
@@ -53,6 +56,8 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(loaded.always_on_top)
         self.assertTrue(loaded.tray_resident)
         self.assertEqual(loaded.window_opacity, 75)
+        self.assertEqual(loaded.ui_scale_percent, 150)
+        self.assertEqual(loaded.window_width, 1280)
         self.assertEqual(loaded.window_height, 720)
         self.assertTrue(loaded.countdown_sound)
         self.assertTrue(loaded.game_countdown_sound)
@@ -69,9 +74,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.keyboard_stop_shortcut, "Ctrl+S")
         self.assertFalse(loaded.shortcut_locked)
         self.assertEqual(loaded.midi_input_device, "USB MIDI")
-        self.assertEqual(loaded.resolved_key_bindings()[60], "q")
-        self.assertEqual(loaded.resolved_key_bindings()[61], "w")
-        self.assertEqual(loaded.resolved_key_bindings()[62], "s")
+        key_bindings = normalized_key_bindings(loaded.key_bindings)
+        self.assertEqual(key_bindings[60], "q")
+        self.assertEqual(key_bindings[61], "w")
+        self.assertEqual(key_bindings[62], "s")
 
     def test_note_shift_settings_are_clamped(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

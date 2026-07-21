@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.build_deps/
+.codex/
+.agents/
+.codex_tmp_appdata_*/
+.test_appdata_*/
+build/
+dist/
+tmp/
+github_upload_v*/
+release_v*/
+*.zip
+
