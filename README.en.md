@@ -133,7 +133,7 @@ Settings are saved atomically to reduce the chance of broken settings after an i
 
 ## Version
 
-v1.1.2
+v1.2.0
 
 ## Copyright
 

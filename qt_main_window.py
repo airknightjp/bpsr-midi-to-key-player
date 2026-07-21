@@ -51,7 +51,7 @@ from qt_components import (
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 
 
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.2.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 
 

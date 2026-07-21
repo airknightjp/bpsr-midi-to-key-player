@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -43,6 +44,21 @@ class QtUiTests(unittest.TestCase):
         self.assertNotIn("MidiSoundPlayer", source)
         self.assertNotIn("MidiInputKeyboardBridge", source)
         self.assertNotIn("save_settings", source)
+
+    def test_app_version_matches_documented_release_version(self) -> None:
+        expected = f"v{qt_main_window.APP_VERSION}"
+        project_root = Path(__file__).resolve().parents[1]
+        for relative_path in (
+            "README.md",
+            "README.ja.md",
+            "README.en.md",
+            "README.zh-CN.md",
+            "readme.txt",
+        ):
+            with self.subTest(path=relative_path):
+                text = (project_root / relative_path).read_text(encoding="utf-8")
+                self.assertIn(expected, text)
+                self.assertNotIn("v1.1.2", text)
 
     def test_all_languages_keep_countdown_and_shortcuts_on_one_row(self) -> None:
         self.window.show()
