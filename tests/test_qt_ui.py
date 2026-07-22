@@ -119,6 +119,12 @@ class QtUiTests(unittest.TestCase):
 
         self.assertTrue(self.window.realtime_button.isEnabled())
 
+    def test_midi_sound_list_stays_enabled_during_realtime_input(self) -> None:
+        self.controller.state.midi_input_running = True
+        self.controller._notify()
+
+        self.assertTrue(self.window.midi_table.isEnabled())
+
     def test_default_window_width_resolves_to_minimum_at_100_percent(self) -> None:
         self.controller.set_option("ui_scale_percent", 100)
         self.window.resize(900, 560)
@@ -430,6 +436,20 @@ class QtUiTests(unittest.TestCase):
             - 1,
             8,
         )
+
+    def test_transpose_and_octave_labels_reset_values_on_double_click(self) -> None:
+        self.controller.set_option("transpose_semitones", 5)
+        self.controller.set_option("octave_shift", -2)
+        self.window.show()
+        self.application.processEvents()
+
+        QTest.mouseDClick(self.window.transpose_label, Qt.MouseButton.LeftButton)
+        QTest.mouseDClick(self.window.octave_label, Qt.MouseButton.LeftButton)
+
+        self.assertEqual(self.controller.state.transpose_semitones, 0)
+        self.assertEqual(self.controller.state.octave_shift, 0)
+        self.assertEqual(self.window.transpose_spin.value(), 0)
+        self.assertEqual(self.window.octave_spin.value(), 0)
 
     def test_transform_spin_boxes_scale_with_their_step_buttons(self) -> None:
         self.controller.set_option("ui_scale_percent", 100)

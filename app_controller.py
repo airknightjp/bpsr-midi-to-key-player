@@ -226,7 +226,7 @@ class AppController:
         self._notify()
 
     def _load_midi_file(self, path: Path, *, stop_playback: bool) -> bool:
-        if stop_playback and self.state.current_mode is not None:
+        if stop_playback and self._playback_mode_is_active():
             self.stop_playback()
         try:
             events, summary = parse_midi(path)
@@ -280,7 +280,7 @@ class AppController:
     def toggle_sound_playback(self) -> None:
         if self.state.sound_playing:
             self.stop_playback()
-        elif self.state.current_mode is None:
+        elif self._midi_sound_can_start():
             self.play_sound()
 
     def play_keyboard(self, *, start_time: float | None = None, countdown: bool = True) -> None:
@@ -333,7 +333,7 @@ class AppController:
             self._message("warning", "already_playing_title", str(exc))
 
     def play_sound(self) -> None:
-        if self.state.current_mode is not None:
+        if not self._midi_sound_can_start():
             return
         if self.summary is None:
             self._message("info", "no_midi_title", self.text("load_midi_first"))
@@ -341,6 +341,7 @@ class AppController:
         if not self._has_enabled_events():
             self._message("info", "no_events_title", self.text("no_events_enabled"))
             return
+        self._suspend_realtime_sound_for_midi_playback()
         playback_id = self._next_playback_id()
         self.sound_player = MidiSoundPlayer(
             log=lambda message: self.worker_queue.put(("log", message)),
@@ -368,6 +369,7 @@ class AppController:
         except RuntimeError as exc:
             self.sound_player = None
             self.state.current_mode = None
+            self._restore_realtime_sound_after_midi_playback()
             self._notify()
             self._message("warning", "already_playing_title", str(exc))
 
@@ -391,6 +393,7 @@ class AppController:
         if stopped_mode == "sound":
             self.state.status = "sound stopped"
             self._log(self.text("sound_playback_stopped"))
+            self._restore_realtime_sound_after_midi_playback()
         elif stopped_mode in {"keys", "keys_paused"}:
             self.state.status = "stopped"
         self._notify()
@@ -651,6 +654,7 @@ class AppController:
                     if status == "sound ended":
                         self.state.position = self.state.duration
                     self.state.current_mode = None
+                    self._restore_realtime_sound_after_midi_playback()
                 changed = True
             elif kind == "midi_input_state":
                 status = str(message[1])
@@ -820,6 +824,12 @@ class AppController:
     def _sound_playback_is_active(self) -> bool:
         return bool(self.state.sound_playing and self.sound_player and self.sound_player.is_playing)
 
+    def _playback_mode_is_active(self) -> bool:
+        return self.state.current_mode in {"keys", "keys_paused", "sound"}
+
+    def _midi_sound_can_start(self) -> bool:
+        return self.state.current_mode in (None, "midi_input")
+
     def _selected_midi_input_device_id(self) -> int | None:
         for device_id, name in getattr(self, "midi_input_devices", []):
             if name == self.state.midi_input_device:
@@ -831,6 +841,14 @@ class AppController:
         self.realtime_sound_output = None
         if output:
             output.close()
+
+    def _suspend_realtime_sound_for_midi_playback(self) -> None:
+        if self.realtime_sound_output:
+            self.realtime_sound_output.set_enabled(False)
+
+    def _restore_realtime_sound_after_midi_playback(self) -> None:
+        if self.state.midi_input_running and self.realtime_sound_output:
+            self.realtime_sound_output.set_enabled(self.state.dry_run)
 
     def _countdown_tick_enabled(self) -> bool:
         return self.state.countdown_sound or self.state.game_countdown_sound

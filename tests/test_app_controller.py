@@ -46,6 +46,9 @@ class FakePlayer:
     def play_with_countdown_sound(self, events, **kwargs) -> None:  # type: ignore[no-untyped-def]
         self.play_args = (events, kwargs)
 
+    def play(self, events, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        self.play_args = (events, kwargs)
+
     def stop(self) -> None:
         self.stopped = True
         self.is_playing = False
@@ -64,6 +67,15 @@ class FakePlayer:
 
     def request_release_all(self) -> None:
         self.released = True
+
+
+class FakeRealtimeSoundOutput:
+    def __init__(self) -> None:
+        self.enabled_calls: list[bool] = []
+
+    def set_enabled(self, enabled: bool) -> bool:
+        self.enabled_calls.append(bool(enabled))
+        return True
 
 
 class AppControllerTests(unittest.TestCase):
@@ -195,6 +207,82 @@ class AppControllerTests(unittest.TestCase):
         self.assertTrue(player.kwargs["chord_optimization"])
         self.assertTrue(player.kwargs["repeat_prevention"])
         self.assertEqual(player.play_args[1]["countdown_seconds"], 4)
+
+    def test_realtime_input_does_not_block_midi_sound_playback(self) -> None:
+        controller = self.make_controller()
+        controller.state.midi_input_running = True
+        realtime_output = FakeRealtimeSoundOutput()
+        controller.realtime_sound_output = realtime_output
+        controller.events = [MidiEvent(0.0, "note_on", 0, 60, 80, track=0)]
+        controller.summary = MidiSummary(
+            path=Path("song.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=1,
+            tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+        )
+        controller._set_enabled_sources(((0, 0),))
+
+        with patch("app_controller.MidiSoundPlayer", FakePlayer):
+            controller.toggle_sound_playback()
+
+        self.assertEqual(controller.state.current_mode, "sound")
+        self.assertTrue(controller.state.midi_input_running)
+        self.assertIsNotNone(FakePlayer.instance)
+        self.assertEqual(FakePlayer.instance.play_args[0], controller.events)
+        self.assertEqual(realtime_output.enabled_calls, [False])
+
+        controller.stop_playback()
+
+        self.assertEqual(realtime_output.enabled_calls, [False, controller.state.dry_run])
+
+    def test_midi_input_mode_state_does_not_block_midi_sound_playback(self) -> None:
+        controller = self.make_controller()
+        controller.state.current_mode = "midi_input"
+        controller.state.midi_input_running = True
+        controller.events = [MidiEvent(0.0, "note_on", 0, 60, 80, track=0)]
+        controller.summary = MidiSummary(
+            path=Path("song.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=1,
+            tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+        )
+        controller._set_enabled_sources(((0, 0),))
+
+        with patch("app_controller.MidiSoundPlayer", FakePlayer):
+            controller.toggle_sound_playback()
+
+        self.assertEqual(controller.state.current_mode, "sound")
+        self.assertTrue(controller.state.midi_input_running)
+
+    def test_selecting_midi_during_realtime_input_does_not_stop_before_sound_playback(self) -> None:
+        controller = self.make_controller()
+        controller.state.current_mode = "midi_input"
+        controller.state.midi_input_running = True
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            midi_path = Path(temporary_directory) / "song.mid"
+            midi_path.write_bytes(b"midi")
+            controller.midi_files = [midi_path]
+            summary = MidiSummary(
+                path=midi_path,
+                duration=1.0,
+                channels=(0,),
+                event_count=1,
+                tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+            )
+            events = [MidiEvent(0.0, "note_on", 0, 60, 80, track=0)]
+
+            with (
+                patch("app_controller.parse_midi", return_value=(events, summary)),
+                patch.object(controller, "stop_playback") as stop_playback,
+            ):
+                controller.select_midi(0)
+
+        stop_playback.assert_not_called()
+        self.assertEqual(controller.state.current_mode, "midi_input")
+        self.assertTrue(controller.state.midi_input_running)
+        self.assertEqual(controller.events, events)
 
     def test_poll_ignores_stale_playback_messages(self) -> None:
         controller = self.make_controller()
