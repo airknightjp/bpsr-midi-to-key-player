@@ -865,6 +865,7 @@ class MidiMainWindow(QMainWindow):
             Qt.Orientation.Horizontal,
             self.midi_table,
         )
+        self.midi_header.setFrameShape(QFrame.Shape.NoFrame)
         self.midi_table.setHorizontalHeader(self.midi_header)
         self.midi_table.setAlternatingRowColors(True)
         self.midi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)

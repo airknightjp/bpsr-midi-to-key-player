@@ -371,6 +371,10 @@ def build_stylesheet(
         selection-background-color: {palette.accent};
         selection-color: {palette.accent_text};
     }}
+    QHeaderView {{
+        background: transparent;
+        border: none;
+    }}
     QHeaderView::section {{
         background: {palette.panel_alt};
         border: none;

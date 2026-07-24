@@ -1618,9 +1618,11 @@ class QtUiTests(unittest.TestCase):
         )
 
     def test_midi_header_separators_align_with_column_edges(self) -> None:
+        self.window.resize(1400, self.window.height())
         self.window.show()
         self.application.processEvents()
         header = self.window.midi_header
+        self.assertEqual(header.frameShape(), QFrame.Shape.NoFrame)
 
         for theme_name, palette in THEMES.items():
             with self.subTest(theme=theme_name):
@@ -1648,6 +1650,18 @@ class QtUiTests(unittest.TestCase):
                         image.pixelColor(x, y),
                         QColor(palette.border),
                     )
+                last_logical_index = header.logicalIndex(header.count() - 1)
+                sections_end = (
+                    body_origin.x()
+                    + header.sectionViewportPosition(last_logical_index)
+                    + header.sectionSize(last_logical_index)
+                )
+                unused_x = min(image.width() - 2, sections_end + 10)
+                self.assertGreater(unused_x, sections_end)
+                self.assertEqual(
+                    image.pixelColor(unused_x, y),
+                    QColor(palette.surface),
+                )
 
     def test_midi_column_widths_are_resizable_saved_and_scale_aware(self) -> None:
         self.window.show()
