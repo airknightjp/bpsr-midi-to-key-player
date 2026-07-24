@@ -200,6 +200,11 @@ class I18nTests(unittest.TestCase):
         self.assertEqual(TEXT["ja"]["note_range"], "\u97f3\u57df")
         self.assertEqual(TEXT["zh"]["note_range"], "\u97f3\u57df")
 
+    def test_folder_column_label_exists_for_all_languages(self) -> None:
+        self.assertEqual(TEXT["en"]["folder"], "Folder")
+        self.assertEqual(TEXT["ja"]["folder"], "\u30d5\u30a9\u30eb\u30c0")
+        self.assertEqual(TEXT["zh"]["folder"], "\u6587\u4ef6\u5939")
+
     def test_waiting_status_exists_for_all_languages(self) -> None:
         for translations in TEXT.values():
             self.assertEqual(translations["waiting"], "waiting..")

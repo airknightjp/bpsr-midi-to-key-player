@@ -858,7 +858,7 @@ class MidiMainWindow(QMainWindow):
         )
 
         self.player_stack = QStackedWidget()
-        self.midi_table = QTableWidget(0, 3)
+        self.midi_table = QTableWidget(0, 4)
         self.midi_table.setAlternatingRowColors(True)
         self.midi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.midi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -867,8 +867,10 @@ class MidiMainWindow(QMainWindow):
         self.midi_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.midi_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.midi_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.midi_table.setColumnWidth(1, 82)
-        self.midi_table.setColumnWidth(2, 92)
+        self.midi_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.midi_table.setColumnWidth(1, 182)
+        self.midi_table.setColumnWidth(2, 82)
+        self.midi_table.setColumnWidth(3, 92)
         self.midi_table.cellClicked.connect(
             lambda row, _column: self._select_midi_row(row)
         )
@@ -1231,7 +1233,14 @@ class MidiMainWindow(QMainWindow):
         self.tab_bar.addTab(text["midi_list"])
         self.tab_bar.addTab(text["playback_log"])
         self._update_midi_tab_icon(state.color_theme, state.ui_scale_percent)
-        self.midi_table.setHorizontalHeaderLabels([text["name"], text["duration"], text["note_range"]])
+        self.midi_table.setHorizontalHeaderLabels(
+            [
+                text["name"],
+                text["folder"],
+                text["duration"],
+                text["note_range"],
+            ]
+        )
         for column in range(self.midi_table.columnCount()):
             self.midi_table.horizontalHeaderItem(column).setTextAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -1376,8 +1385,9 @@ class MidiMainWindow(QMainWindow):
             0,
             0,
         )
-        self.midi_table.setColumnWidth(1, px(80))
-        self.midi_table.setColumnWidth(2, px(90))
+        self.midi_table.setColumnWidth(1, px(180))
+        self.midi_table.setColumnWidth(2, px(80))
+        self.midi_table.setColumnWidth(3, px(90))
         self.midi_table.horizontalHeader().setFixedHeight(px(24))
         for row in range(self.midi_table.rowCount()):
             self.midi_table.setRowHeight(row, px(22))
@@ -2002,13 +2012,18 @@ class MidiMainWindow(QMainWindow):
             if self.midi_table.rowCount() != len(state.midi_rows):
                 self.midi_table.setRowCount(len(state.midi_rows))
             for row_index, row in enumerate(state.midi_rows):
-                for column, value in enumerate((row.name, row.duration, row.note_range)):
+                for column, value in enumerate(
+                    (row.name, row.folder, row.duration, row.note_range)
+                ):
                     item = self.midi_table.item(row_index, column)
                     if item is None:
                         item = QTableWidgetItem()
                         self.midi_table.setItem(row_index, column, item)
                     if item.text() != value:
                         item.setText(value)
+                    tooltip = value if column == 1 else ""
+                    if item.toolTip() != tooltip:
+                        item.setToolTip(tooltip)
                     path_text = str(row.path)
                     if item.data(Qt.ItemDataRole.UserRole) != path_text:
                         item.setData(Qt.ItemDataRole.UserRole, path_text)

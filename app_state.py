@@ -19,6 +19,7 @@ from config import (
 class MidiListRow:
     path: Path
     name: str
+    folder: str = ""
     duration: str = "--:--"
     note_range: str = "--"
 

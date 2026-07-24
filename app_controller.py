@@ -281,10 +281,17 @@ class AppController:
             files = sorted(
                 (
                     path
-                    for path in folder.iterdir()
+                    for path in folder.rglob("*")
                     if path.is_file() and path.suffix.lower() in {".mid", ".midi"}
                 ),
-                key=lambda path: path.name.lower(),
+                key=lambda path: (
+                    tuple(
+                        part.casefold()
+                        for part in path.relative_to(folder).parent.parts
+                    ),
+                    path.name.casefold(),
+                    path.relative_to(folder).as_posix(),
+                ),
             )
         except OSError as exc:
             self._message("error", "load_failed_title", str(exc))
@@ -292,7 +299,14 @@ class AppController:
 
         preserve_sound = preserve_sound_playback and self._sound_playback_is_active()
         self.midi_files = files
-        self.state.midi_rows = [MidiListRow(path=path, name=path.name) for path in files]
+        self.state.midi_rows = [
+            MidiListRow(
+                path=path,
+                name=path.name,
+                folder=self._format_midi_folder(folder, path),
+            )
+            for path in files
+        ]
         self.view.clear_log()
         self._log(self.text("folder_loaded_log").format(folder=str(folder), count=len(files)))
         self._start_metadata_scan(files)
@@ -1565,9 +1579,15 @@ class AppController:
 
     def _find_midi_index(self, path: Path) -> int:
         for index, candidate in enumerate(self.midi_files):
-            if candidate == path or candidate.name == path.name:
+            if candidate == path:
                 return index
         return -1
+
+    @staticmethod
+    def _format_midi_folder(root: Path, path: Path) -> str:
+        root_name = root.name or root.anchor.rstrip("\\/") or str(root)
+        relative_parent = path.relative_to(root).parent
+        return " > ".join((root_name, *relative_parent.parts))
 
     def _bind_global_hotkeys(self) -> None:
         self._unbind_global_hotkeys()

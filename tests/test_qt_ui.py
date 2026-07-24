@@ -1581,6 +1581,41 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.midi_table.horizontalHeader().height(), 24)
         self.assertEqual(self.window.player_body_gap.height(), 0)
 
+    def test_midi_list_renders_folder_column_after_name(self) -> None:
+        path = Path("Library") / "Album" / "song.mid"
+        self.controller.midi_files = [path]
+        self.controller.state.midi_rows = [
+            MidiListRow(
+                path=path,
+                name="song.mid",
+                folder="Library > Album",
+                duration="01:23",
+                note_range="C3-B5",
+            )
+        ]
+        self.controller._notify()
+        self.application.processEvents()
+
+        self.assertEqual(self.window.midi_table.columnCount(), 4)
+        self.assertEqual(
+            [
+                self.window.midi_table.horizontalHeaderItem(column).text()
+                for column in range(4)
+            ],
+            ["Name", "Folder", "Duration", "Range"],
+        )
+        self.assertEqual(
+            [
+                self.window.midi_table.item(0, column).text()
+                for column in range(4)
+            ],
+            ["song.mid", "Library > Album", "01:23", "C3-B5"],
+        )
+        self.assertEqual(
+            self.window.midi_table.item(0, 1).toolTip(),
+            "Library > Album",
+        )
+
     def test_clicking_playback_position_seeks_to_clicked_value(self) -> None:
         self.controller.state.duration = 120.0
         self.controller._notify()

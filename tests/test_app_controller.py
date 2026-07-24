@@ -845,6 +845,53 @@ class AppControllerTests(unittest.TestCase):
         )
         self.assertEqual(controller.enabled_sources(), {(0, 0), (0, 1)})
 
+    def test_folder_load_recursively_lists_midi_with_folder_hierarchy(self) -> None:
+        controller = self.make_controller()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            album = root / "Folder 1"
+            disc = album / "Folder 2"
+            disc.mkdir(parents=True)
+            direct_midi = root / "root.mid"
+            nested_midi = album / "nested.MIDI"
+            deep_midi = disc / "deep.mid"
+            ignored = disc / "notes.txt"
+            for path in (direct_midi, nested_midi, deep_midi, ignored):
+                path.write_bytes(b"test")
+
+            with (
+                patch.object(controller, "_start_metadata_scan") as metadata_scan,
+                patch.object(controller, "select_midi") as select_midi,
+            ):
+                controller.load_midi_folder(root, save_folder=False)
+
+        self.assertEqual(
+            controller.midi_files,
+            [direct_midi, nested_midi, deep_midi],
+        )
+        self.assertEqual(
+            [(row.name, row.folder) for row in controller.state.midi_rows],
+            [
+                ("root.mid", root.name),
+                ("nested.MIDI", f"{root.name} > Folder 1"),
+                ("deep.mid", f"{root.name} > Folder 1 > Folder 2"),
+            ],
+        )
+        metadata_scan.assert_called_once_with(controller.midi_files)
+        select_midi.assert_called_once_with(0)
+
+    def test_removed_duplicate_filename_does_not_select_another_folder(self) -> None:
+        controller = self.make_controller()
+        controller.midi_files = [
+            Path("Folder 1") / "song.mid",
+            Path("Folder 2") / "song.mid",
+        ]
+
+        self.assertEqual(
+            controller._find_midi_index(Path("Removed") / "song.mid"),
+            -1,
+        )
+
     def test_keyboard_playback_receives_state_settings(self) -> None:
         controller = self.make_controller(
             countdown_seconds=4,
