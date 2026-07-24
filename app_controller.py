@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Protocol
 
-from audio_buffer import normalize_audio_buffer_frames, normalize_qt_audio_frames
+from audio_buffer import normalize_audio_buffer_frames
 from app_state import AppState, MidiListRow, TrackChannelItem
 from chord_optimization import ChordOptimizationPlan
 from config import (
@@ -981,7 +981,10 @@ class AppController:
                     self._log(str(message[1]))
                     continue
                 if kind == "audio_runtime":
-                    qt_frames = normalize_qt_audio_frames(message[1])
+                    try:
+                        qt_frames = max(1, int(message[1]))
+                    except (TypeError, ValueError):
+                        qt_frames = self.state.audio_qt_frames
                     buffer_frames = normalize_audio_buffer_frames(message[2])
                     if (
                         qt_frames != self.state.audio_qt_frames

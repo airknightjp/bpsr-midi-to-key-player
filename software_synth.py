@@ -9,16 +9,22 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 import numpy as np
-from PySide6.QtCore import QCoreApplication, QIODevice
+from PySide6.QtCore import (
+    QCoreApplication,
+    QMetaObject,
+    QObject,
+    QThread,
+    QTimer,
+    Qt,
+    Slot,
+)
 from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
 from audio_buffer import (
     AUDIO_BUFFER_FRAME_OPTIONS,
     DEFAULT_AUDIO_BUFFER_FRAMES,
     DEFAULT_QT_AUDIO_FRAMES,
-    QT_AUDIO_FRAME_OPTIONS,
     normalize_audio_buffer_frames,
-    normalize_qt_audio_frames,
 )
 from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
 
@@ -30,7 +36,10 @@ RETRIGGER_RELEASE_SECONDS = 0.008
 STOP_RELEASE_SECONDS = 0.015
 LIMITER_THRESHOLD = 0.92
 RENDER_CHUNK_FRAMES = 1_024
-LOW_LATENCY_AUDIO_FRAMES = DEFAULT_QT_AUDIO_FRAMES
+LOW_LATENCY_AUDIO_FRAMES = 256
+PUSH_WRITE_FRAMES = 128
+PUSH_TARGET_FRAMES = DEFAULT_QT_AUDIO_FRAMES
+PUSH_PUMP_INTERVAL_MS = 1
 COMMAND_DEEP_REFILL_GRACE_SECONDS = 0.020
 NATURAL_DECAY_SILENCE_ENVELOPE = 0.0001
 NATURAL_DECAY_REFERENCE_NOTE = 60
@@ -49,10 +58,6 @@ AUTO_BUFFER_STABILIZATION_SECONDS = 20.0
 AUTO_BUFFER_DOWNSHIFT_STABLE_SECONDS = 20.0
 AUTO_BUFFER_DOWNSHIFT_MAX_UTILIZATION = 0.25
 AUTO_BUFFER_DOWNSHIFT_BLOCK_SECONDS = 60.0
-AUTO_QT_STABILIZATION_SECONDS = 5.0
-AUTO_QT_DOWNSHIFT_STABLE_SECONDS = 20.0
-AUTO_QT_DOWNSHIFT_MAX_UTILIZATION = 0.25
-AUTO_QT_DOWNSHIFT_BLOCK_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -303,134 +308,8 @@ class AudioBufferAutoPolicy:
         )
 
 
-class QtAudioAutoPolicy:
-    """Selects the smallest stable Qt transfer width for the active backend."""
-
-    def __init__(self, now: float | None = None) -> None:
-        started_at = time.monotonic() if now is None else float(now)
-        self.enabled_at = started_at
-        self.last_change_at = float("-inf")
-        self.last_shortage_at = started_at
-        self.downshift_at: float | None = None
-        self.downshift_restore_frames: int | None = None
-        self.downshift_block_until = float("-inf")
-
-    def reset(self, now: float | None = None) -> None:
-        started_at = time.monotonic() if now is None else float(now)
-        self.enabled_at = started_at
-        self.last_change_at = float("-inf")
-        self.last_shortage_at = started_at
-        self.downshift_at = None
-        self.downshift_restore_frames = None
-        self.downshift_block_until = float("-inf")
-
-    def evaluate(
-        self,
-        now: float,
-        current_frames: int,
-        metrics: AudioSupplyMetrics,
-    ) -> AudioBufferDecision | None:
-        now = float(now)
-        current_frames = normalize_qt_audio_frames(current_frames)
-        recent_shortages = tuple(
-            timestamp
-            for timestamp in metrics.shortages
-            if timestamp >= self.enabled_at
-        )
-        if recent_shortages:
-            self.last_shortage_at = max(
-                self.last_shortage_at,
-                recent_shortages[-1],
-            )
-
-        if (
-            self.downshift_at is not None
-            and self.downshift_restore_frames is not None
-            and any(timestamp >= self.downshift_at for timestamp in recent_shortages)
-        ):
-            restore_frames = self.downshift_restore_frames
-            self.last_change_at = now
-            self.downshift_at = None
-            self.downshift_restore_frames = None
-            self.downshift_block_until = now + AUTO_QT_DOWNSHIFT_BLOCK_SECONDS
-            return AudioBufferDecision(
-                restore_frames,
-                (
-                    f"Qt audio transfer automatically restored: {current_frames} -> "
-                    f"{restore_frames} (shortage after reduction)"
-                ),
-            )
-
-        if (
-            self.downshift_at is not None
-            and now - self.downshift_at >= AUTO_QT_STABILIZATION_SECONDS
-        ):
-            self.downshift_at = None
-            self.downshift_restore_frames = None
-
-        shortage_cutoff = now - AUTO_BUFFER_SHORTAGE_WINDOW_SECONDS
-        shortage_count = sum(
-            timestamp >= shortage_cutoff
-            for timestamp in recent_shortages
-        )
-        current_index = QT_AUDIO_FRAME_OPTIONS.index(current_frames)
-        if (
-            shortage_count >= AUTO_BUFFER_SHORTAGE_THRESHOLD
-            and current_index < len(QT_AUDIO_FRAME_OPTIONS) - 1
-        ):
-            next_frames = QT_AUDIO_FRAME_OPTIONS[current_index + 1]
-            self.last_change_at = now
-            self.downshift_at = None
-            self.downshift_restore_frames = None
-            return AudioBufferDecision(
-                next_frames,
-                (
-                    f"Qt audio transfer automatically increased: {current_frames} -> "
-                    f"{next_frames} ({shortage_count} shortages in 5s)"
-                ),
-            )
-
-        stable_since = max(
-            self.enabled_at,
-            self.last_change_at,
-            self.last_shortage_at,
-        )
-        if (
-            current_index == 0
-            or now < self.downshift_block_until
-            or now - stable_since < AUTO_QT_DOWNSHIFT_STABLE_SECONDS
-        ):
-            return None
-        utilization_cutoff = now - AUTO_QT_DOWNSHIFT_STABLE_SECONDS
-        utilization = [
-            value
-            for timestamp, value in metrics.synthesis_utilization
-            if timestamp >= utilization_cutoff
-        ]
-        if not utilization:
-            return None
-        ordered = sorted(utilization)
-        percentile_index = max(0, math.ceil(len(ordered) * 0.95) - 1)
-        percentile_95 = ordered[percentile_index]
-        if percentile_95 >= AUTO_QT_DOWNSHIFT_MAX_UTILIZATION:
-            return None
-        next_frames = QT_AUDIO_FRAME_OPTIONS[current_index - 1]
-        self.last_change_at = now
-        self.downshift_at = now
-        self.downshift_restore_frames = current_frames
-        return AudioBufferDecision(
-            next_frames,
-            (
-                f"Qt audio transfer automatically reduced: {current_frames} -> "
-                f"{next_frames} ({AUTO_QT_DOWNSHIFT_STABLE_SECONDS:.0f}s "
-                f"stable, synthesis p95 "
-                f"{percentile_95 * 100:.1f}% of deadline)"
-            ),
-        )
-
-
-class SoftwareSynthStream(QIODevice):
-    """Pull-based PCM generator shared by MIDI playback and realtime preview."""
+class SoftwareSynthStream:
+    """PCM producer shared by MIDI playback and realtime preview."""
 
     def __init__(
         self,
@@ -439,7 +318,6 @@ class SoftwareSynthStream(QIODevice):
         buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES,
         time_source: Callable[[], float] = time.perf_counter,
     ) -> None:
-        super().__init__()
         self.sample_rate = max(8_000, int(sample_rate))
         self.channels = max(1, int(channels))
         self.buffer_frames = normalize_audio_buffer_frames(buffer_frames)
@@ -495,10 +373,6 @@ class SoftwareSynthStream(QIODevice):
         self._pcm_int16_scratch = np.empty(initial_samples, dtype=np.int16)
         self._pcm_int32_scratch = np.empty(initial_samples, dtype=np.int32)
         self._ring_condition = threading.Condition()
-        # The Qt sink keeps its physical pull size for its lifetime. The
-        # configurable value controls the reserve depth; rendering stays in
-        # low-latency chunks so a larger reserve does not increase command cost.
-        self._pull_buffer_frames = self.buffer_frames
         self._pcm_ring: deque[bytes] = deque()
         self._pcm_ring_states: deque[SynthRenderState] = deque()
         self._pcm_ring_offset = 0
@@ -522,20 +396,11 @@ class SoftwareSynthStream(QIODevice):
         channels: int,
         sample_format: QAudioFormat.SampleFormat,
         buffer_frames: int,
-        pull_buffer_frames: int | None = None,
     ) -> None:
         self.sample_rate = max(8_000, int(sample_rate))
         self.channels = max(1, int(channels))
         self.sample_format = sample_format
         self.buffer_frames = normalize_audio_buffer_frames(buffer_frames)
-        self._pull_buffer_frames = max(
-            AUDIO_BUFFER_FRAME_OPTIONS[0],
-            int(
-                self.buffer_frames
-                if pull_buffer_frames is None
-                else pull_buffer_frames
-            ),
-        )
         initial_frames = max(RENDER_CHUNK_FRAMES, self.buffer_frames)
         self._ensure_output_capacity(initial_frames)
         self._ensure_pcm_capacity(initial_frames * self.channels)
@@ -544,12 +409,6 @@ class SoftwareSynthStream(QIODevice):
         """Change synthesis chunking without touching the running Qt sink."""
         with self._ring_condition:
             self.buffer_frames = normalize_audio_buffer_frames(buffer_frames)
-            self._ring_condition.notify_all()
-
-    def set_qt_frames_live(self, qt_frames: int) -> None:
-        """Change the maximum frames returned to Qt without restarting audio."""
-        with self._ring_condition:
-            self._pull_buffer_frames = normalize_qt_audio_frames(qt_frames)
             self._ring_condition.notify_all()
 
     def start_worker(self, timeout: float = 1.0) -> bool:
@@ -601,30 +460,20 @@ class SoftwareSynthStream(QIODevice):
 
     def close(self) -> None:
         self.stop_worker()
-        super().close()
 
-    def isSequential(self) -> bool:  # noqa: N802 - Qt virtual method name
-        return True
-
-    def bytesAvailable(self) -> int:  # noqa: N802 - Qt virtual method name
-        return (
-            max(self.buffer_frames, self._pull_buffer_frames)
-            * self.channels
-            * self._bytes_per_sample()
-            + super().bytesAvailable()
-        )
-
-    def readData(self, maxlen: int) -> bytes:  # noqa: N802 - Qt virtual method name
+    def take_pcm_frames(
+        self,
+        frame_count: int,
+        *,
+        pad_silence: bool = True,
+    ) -> bytes:
+        frame_count = max(0, int(frame_count))
         frame_size = self._frame_size()
-        requested_frames = max(0, maxlen // frame_size)
-        # Qt may offer a much larger maxlen than the configured sink buffer.
-        # Returning all of it lets Qt queue tens of milliseconds of stale PCM,
-        # so later MIDI commands cannot replace that audio. Keep each pull at
-        # the sink width while the ring buffer retains the configured reserve.
-        with self._ring_condition:
-            frame_count = min(requested_frames, self._pull_buffer_frames)
         if self._worker_active:
-            return self._read_pcm_ring(frame_count * frame_size)
+            return self._read_pcm_ring(
+                frame_count * frame_size,
+                pad_silence=pad_silence,
+            )
         return self._render_pcm_bytes(frame_count)
 
     def _render_pcm_bytes(
@@ -699,13 +548,7 @@ class SoftwareSynthStream(QIODevice):
                             )
                             // frame_size,
                         ),
-                        max(
-                            AUDIO_BUFFER_FRAME_OPTIONS[0],
-                            min(
-                                self._pull_buffer_frames,
-                                QT_AUDIO_FRAME_OPTIONS[-1],
-                            ),
-                        ),
+                        LOW_LATENCY_AUDIO_FRAMES,
                     )
                     self._apply_worker_commands_through(command_revision)
                     render_state = self._capture_render_state()
@@ -740,7 +583,7 @@ class SoftwareSynthStream(QIODevice):
                     frame_count = 0
                 else:
                     frame_size = self._frame_size()
-                    pull_bytes = self._pull_buffer_frames * frame_size
+                    immediate_bytes = PUSH_TARGET_FRAMES * frame_size
                     deep_refill_delay = (
                         self._last_command_monotonic
                         + COMMAND_DEEP_REFILL_GRACE_SECONDS
@@ -748,7 +591,7 @@ class SoftwareSynthStream(QIODevice):
                     )
                     if (
                         not refresh_pending_audio
-                        and self._pcm_ring_bytes >= pull_bytes
+                        and self._pcm_ring_bytes >= immediate_bytes
                         and self._pcm_ring_bytes < target_bytes
                         and deep_refill_delay > 0.0
                     ):
@@ -763,13 +606,7 @@ class SoftwareSynthStream(QIODevice):
                     ) // frame_size
                     frame_count = min(
                         missing_frames,
-                        max(
-                            AUDIO_BUFFER_FRAME_OPTIONS[0],
-                            min(
-                                self._pull_buffer_frames,
-                                LOW_LATENCY_AUDIO_FRAMES,
-                            ),
-                        ),
+                        LOW_LATENCY_AUDIO_FRAMES,
                     )
             if refreshed_pcm:
                 self._record_synthesis_utilization(
@@ -815,7 +652,12 @@ class SoftwareSynthStream(QIODevice):
         with self._ring_condition:
             self._ring_condition.notify_all()
 
-    def _read_pcm_ring(self, byte_count: int) -> bytes:
+    def _read_pcm_ring(
+        self,
+        byte_count: int,
+        *,
+        pad_silence: bool = True,
+    ) -> bytes:
         byte_count = max(0, int(byte_count))
         if byte_count == 0:
             return b""
@@ -854,7 +696,7 @@ class SoftwareSynthStream(QIODevice):
                     self._pcm_ring_offset = end
             primed = self._worker_primed
             self._ring_condition.notify_all()
-        if remaining:
+        if remaining and pad_silence:
             chunks.append(bytes(remaining))
             if primed:
                 self._record_supply_shortage()
@@ -863,10 +705,7 @@ class SoftwareSynthStream(QIODevice):
         return b"".join(chunks)
 
     def _target_ring_bytes(self) -> int:
-        return (
-            max(self.buffer_frames, self._pull_buffer_frames)
-            * self._frame_size()
-        )
+        return self.buffer_frames * self._frame_size()
 
     def _frame_size(self) -> int:
         return self.channels * self._bytes_per_sample()
@@ -880,16 +719,7 @@ class SoftwareSynthStream(QIODevice):
         return 2
 
     def minimum_effective_buffer_frames(self) -> int:
-        with self._ring_condition:
-            pull_frames = self._pull_buffer_frames
-        return min(
-            (
-                frames
-                for frames in AUDIO_BUFFER_FRAME_OPTIONS
-                if frames >= pull_frames
-            ),
-            default=AUDIO_BUFFER_FRAME_OPTIONS[-1],
-        )
+        return DEFAULT_AUDIO_BUFFER_FRAMES
 
     def _record_supply_shortage(self) -> None:
         now = time.monotonic()
@@ -966,9 +796,6 @@ class SoftwareSynthStream(QIODevice):
             and self._supply_delay_timestamps[0] < cutoff
         ):
             self._supply_delay_timestamps.popleft()
-
-    def writeData(self, _data: bytes) -> int:  # noqa: N802 - Qt virtual method name
-        return -1
 
     def note_on(self, client_id: int, channel: int, note: int, velocity: int, source: str) -> None:
         source = normalize_sound_source(source)
@@ -1616,10 +1443,183 @@ class SoftwareSynthStream(QIODevice):
         return math.copysign(limited, sample)
 
 
+def _audio_start_failed(sink) -> bool:  # type: ignore[no-untyped-def]
+    return (
+        sink.state() == QAudio.State.StoppedState
+        and sink.error()
+        in {
+            QAudio.Error.OpenError,
+            QAudio.Error.IOError,
+            QAudio.Error.FatalError,
+        }
+    )
+
+
+class _PushAudioOutput(QObject):
+    """Feeds short PCM blocks into QAudioSink from a dedicated Qt thread."""
+
+    def __init__(
+        self,
+        stream: SoftwareSynthStream,
+        device,
+        audio_format: QAudioFormat,
+        requested_sink_frames: int,
+    ) -> None:
+        super().__init__()
+        self.stream = stream
+        self.device = device
+        self.audio_format = audio_format
+        self.requested_sink_frames = max(1, int(requested_sink_frames))
+        self.ready = threading.Event()
+        self.stopped = threading.Event()
+        self.started_ok = False
+        self.error = ""
+        self.actual_sink_frames = self.requested_sink_frames
+        self._sink: QAudioSink | None = None
+        self._output_device = None
+        self._timer: QTimer | None = None
+        self._pending_pcm = b""
+        self._pumping = False
+
+    @Slot()
+    def start_output(self) -> None:
+        try:
+            sink = QAudioSink(self.device, self.audio_format)
+            sink.setBufferFrameCount(self.requested_sink_frames)
+            output_device = sink.start()
+            if output_device is None or _audio_start_failed(sink):
+                error_name = sink.error().name
+                sink.reset()
+                self.error = f"Audio output initialization failed ({error_name})"
+                return
+            self._sink = sink
+            self._output_device = output_device
+            actual_frames = int(sink.bufferFrameCount())
+            if actual_frames > 0:
+                self.actual_sink_frames = actual_frames
+            timer = QTimer(self)
+            timer.setTimerType(Qt.TimerType.PreciseTimer)
+            timer.setInterval(PUSH_PUMP_INTERVAL_MS)
+            timer.timeout.connect(self.pump)
+            self._timer = timer
+            try:
+                output_device.bytesWritten.connect(self._on_bytes_written)
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+            self.started_ok = True
+            self.pump()
+            timer.start()
+        except Exception as exc:
+            self.error = str(exc)
+            if self._sink is not None:
+                self._sink.reset()
+                self._sink = None
+            self._output_device = None
+        finally:
+            self.ready.set()
+
+    @Slot(int)
+    def _on_bytes_written(self, _byte_count: int) -> None:
+        self.pump()
+
+    @Slot()
+    def pump(self) -> None:
+        if self._pumping or not self.started_ok:
+            return
+        sink = self._sink
+        output_device = self._output_device
+        if sink is None or output_device is None:
+            return
+        if _audio_start_failed(sink):
+            self.error = f"Audio output failed ({sink.error().name})"
+            if self._timer is not None:
+                self._timer.stop()
+            return
+
+        self._pumping = True
+        try:
+            if self._pending_pcm:
+                written = int(output_device.write(self._pending_pcm))
+                if written < 0:
+                    self.error = "Audio output rejected PCM data"
+                    self.stream._record_supply_shortage()
+                    return
+                if written == 0:
+                    return
+                self._pending_pcm = self._pending_pcm[written:]
+                if self._pending_pcm:
+                    return
+
+            actual_frames = max(1, int(sink.bufferFrameCount()))
+            target_frames = min(PUSH_TARGET_FRAMES, actual_frames)
+            write_frames = min(PUSH_WRITE_FRAMES, target_frames)
+            refill_threshold = max(0, target_frames - write_frames)
+            max_writes = max(
+                1,
+                (target_frames + write_frames - 1) // write_frames,
+            )
+            for _ in range(max_writes):
+                free_frames = max(0, int(sink.framesFree()))
+                queued_frames = max(0, actual_frames - free_frames)
+                if queued_frames > refill_threshold:
+                    return
+                frame_count = min(
+                    write_frames,
+                    free_frames,
+                    max(0, target_frames - queued_frames),
+                )
+                if frame_count <= 0:
+                    return
+
+                pcm = self.stream.take_pcm_frames(
+                    frame_count,
+                    pad_silence=False,
+                )
+                if not pcm:
+                    if queued_frames <= 0:
+                        self.stream._record_supply_shortage()
+                    return
+                written = int(output_device.write(pcm))
+                if written < 0:
+                    self.error = "Audio output rejected PCM data"
+                    self.stream._record_supply_shortage()
+                    return
+                if written < len(pcm):
+                    self._pending_pcm = pcm[max(0, written):]
+                    return
+        except Exception as exc:
+            self.error = str(exc)
+            self.stream._record_supply_shortage()
+        finally:
+            self._pumping = False
+
+    @Slot()
+    def stop_output(self) -> None:
+        try:
+            if self._timer is not None:
+                self._timer.stop()
+                self._timer = None
+            output_device = self._output_device
+            if output_device is not None:
+                try:
+                    output_device.bytesWritten.disconnect(self._on_bytes_written)
+                except (AttributeError, RuntimeError, TypeError):
+                    pass
+            self._output_device = None
+            self._pending_pcm = b""
+            if self._sink is not None:
+                self._sink.reset()
+                self._sink = None
+            self.started_ok = False
+        finally:
+            self.stopped.set()
+
+
 class SoftwareSynthEngine:
     def __init__(self) -> None:
         self.stream = SoftwareSynthStream()
-        self._sink: QAudioSink | None = None
+        self._output_thread: QThread | None = None
+        self._output_worker: _PushAudioOutput | None = None
         self._lock = threading.RLock()
         self._next_client_id = 0
         self.buffer_frames = DEFAULT_AUDIO_BUFFER_FRAMES
@@ -1631,7 +1631,6 @@ class SoftwareSynthEngine:
         ] = {}
         self._active_clients: set[int] = set()
         self._buffer_policy = AudioBufferAutoPolicy()
-        self._qt_policy = QtAudioAutoPolicy()
         self._monitor_stop = threading.Event()
         self._monitor_thread = threading.Thread(
             target=self._monitor_audio_supply,
@@ -1642,7 +1641,7 @@ class SoftwareSynthEngine:
 
     def start(self) -> bool:
         with self._lock:
-            if self._sink is not None:
+            if self._output_worker is not None:
                 return True
             return self._start_sink_locked()
 
@@ -1681,10 +1680,26 @@ class SoftwareSynthEngine:
         if monitor is not threading.current_thread():
             monitor.join(timeout=1.0)
         with self._lock:
-            if self._sink is not None:
-                self._sink.stop()
-                self._sink = None
+            self._stop_output_locked()
             self.stream.close()
+
+    def _stop_output_locked(self) -> None:
+        worker = self._output_worker
+        thread = self._output_thread
+        self._output_worker = None
+        self._output_thread = None
+        if worker is not None and thread is not None and thread.isRunning():
+            try:
+                QMetaObject.invokeMethod(
+                    worker,
+                    "stop_output",
+                    Qt.ConnectionType.QueuedConnection,
+                )
+                worker.stopped.wait(1.0)
+            except RuntimeError:
+                pass
+            thread.quit()
+            thread.wait(1_000)
 
     def _apply_buffer_frames_live_locked(self, buffer_frames: int) -> bool:
         """Update the PCM reserve depth without replacing the audio sink."""
@@ -1714,27 +1729,44 @@ class SoftwareSynthEngine:
             audio_format.channelCount(),
             audio_format.sampleFormat(),
             self.buffer_frames,
-            self.qt_frames,
         )
-        if not self.stream.isOpen():
-            self.stream.open(QIODevice.OpenModeFlag.ReadOnly)
         if not self.stream.start_worker():
             self.last_error = "Software synthesizer worker could not be primed"
             self.stream.stop_worker()
             return False
-        sink = QAudioSink(device, audio_format)
-        sink.setBufferSize(
-            audio_format.bytesForFrames(self.qt_frames)
+        thread = QThread()
+        worker = _PushAudioOutput(
+            self.stream,
+            device,
+            audio_format,
+            self.qt_frames,
         )
-        sink.start(self.stream)
-        if self._audio_start_failed(sink):
-            self.last_error = f"Audio output initialization failed ({sink.error().name})"
-            sink.stop()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.start_output)
+        thread.start()
+        if not worker.ready.wait(2.0) or not worker.started_ok:
+            self.last_error = (
+                worker.error
+                or "Software synthesizer push output could not be started"
+            )
+            if thread.isRunning():
+                try:
+                    QMetaObject.invokeMethod(
+                        worker,
+                        "stop_output",
+                        Qt.ConnectionType.QueuedConnection,
+                    )
+                    worker.stopped.wait(1.0)
+                except RuntimeError:
+                    pass
+                thread.quit()
+                thread.wait(1_000)
             self.stream.stop_worker()
             return False
-        self._sink = sink
+        self._output_thread = thread
+        self._output_worker = worker
+        self.qt_frames = worker.actual_sink_frames
         self._buffer_policy.reset()
-        self._qt_policy.reset()
         self.stream.clear_metrics()
         self.last_error = ""
         return True
@@ -1743,30 +1775,21 @@ class SoftwareSynthEngine:
         while not self._monitor_stop.wait(0.25):
             metrics = self.stream.metrics_snapshot()
             with self._lock:
-                if self._sink is None or not self._active_clients:
+                if self._output_worker is None or not self._active_clients:
                     continue
                 now = time.monotonic()
-                decision = self._qt_policy.evaluate(
+                decision = self._buffer_policy.evaluate(
                     now,
-                    self.qt_frames,
+                    self.buffer_frames,
                     metrics,
+                    self.stream.minimum_effective_buffer_frames(),
                 )
-                if decision is not None and decision.frames != self.qt_frames:
-                    self.stream.set_qt_frames_live(decision.frames)
-                    self.qt_frames = decision.frames
-                else:
-                    decision = self._buffer_policy.evaluate(
-                        now,
-                        self.buffer_frames,
-                        metrics,
-                        self.stream.minimum_effective_buffer_frames(),
-                    )
-                    if (
-                        decision is not None
-                        and decision.frames != self.buffer_frames
-                        and not self._apply_buffer_frames_live_locked(decision.frames)
-                    ):
-                        decision = None
+                if (
+                    decision is not None
+                    and decision.frames != self.buffer_frames
+                    and not self._apply_buffer_frames_live_locked(decision.frames)
+                ):
+                    decision = None
                 if decision is None:
                     continue
                 self.stream.clear_metrics()
@@ -1815,15 +1838,7 @@ class SoftwareSynthEngine:
 
     @staticmethod
     def _audio_start_failed(sink) -> bool:  # type: ignore[no-untyped-def]
-        return (
-            sink.state() == QAudio.State.StoppedState
-            and sink.error()
-            in {
-                QAudio.Error.OpenError,
-                QAudio.Error.IOError,
-                QAudio.Error.FatalError,
-            }
-        )
+        return _audio_start_failed(sink)
 
 
 _engine_lock = threading.Lock()
@@ -1905,7 +1920,7 @@ class SoftwareSynthClient:
         buffer_frames: int,
         reason: str,
     ) -> None:
-        self.qt_frames = normalize_qt_audio_frames(qt_frames)
+        self.qt_frames = max(1, int(qt_frames))
         self.buffer_frames = normalize_audio_buffer_frames(buffer_frames)
         if self.on_runtime_changed is not None:
             self.on_runtime_changed(

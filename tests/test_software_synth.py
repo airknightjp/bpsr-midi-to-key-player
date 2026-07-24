@@ -8,12 +8,11 @@ from unittest.mock import Mock
 import numpy as np
 import software_synth
 import sound_player
-from audio_buffer import AUDIO_BUFFER_FRAME_OPTIONS, QT_AUDIO_FRAME_OPTIONS
+from audio_buffer import AUDIO_BUFFER_FRAME_OPTIONS
 from PySide6.QtMultimedia import QAudio
 from software_synth import (
     AudioBufferAutoPolicy,
     AudioSupplyMetrics,
-    QtAudioAutoPolicy,
     SoftwareSynthStream,
 )
 
@@ -63,8 +62,8 @@ class SoftwareSynthTests(unittest.TestCase):
         )
 
         stream.note_on(1, 0, 60, 100, "organ")
-        stream.readData(256 * 2 * 2)
-        stream.readData(256 * 2 * 2)
+        stream.take_pcm_frames(256)
+        stream.take_pcm_frames(256)
 
         self.assertEqual(software_synth.WAVETABLE_FLAT.dtype, np.float32)
         for workspace in (
@@ -164,38 +163,38 @@ class SoftwareSynthTests(unittest.TestCase):
         self.assertAlmostEqual(voice.envelope, 0.090702947846, places=6)
         self.assertEqual(voice.stage, "attack")
 
-    def test_read_data_vectorizes_stereo_int16_output(self) -> None:
+    def test_pcm_frames_vectorize_stereo_int16_output(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=2)
         stream.note_on(1, 0, 69, 100, "piano")
 
-        pcm = np.frombuffer(stream.readData(256 * 2 * 2), dtype=np.int16).reshape(-1, 2)
+        pcm = np.frombuffer(stream.take_pcm_frames(256), dtype=np.int16).reshape(-1, 2)
 
         self.assertEqual(pcm.shape, (256, 2))
         np.testing.assert_array_equal(pcm[:, 0], pcm[:, 1])
         self.assertGreater(int(np.max(np.abs(pcm[:, 0]))), 0)
 
-    def test_read_data_vectorizes_float_output(self) -> None:
+    def test_pcm_frames_vectorize_float_output(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
         stream.sample_format = software_synth.QAudioFormat.SampleFormat.Float
         stream.note_on(1, 0, 69, 100, "piano")
 
-        pcm = np.frombuffer(stream.readData(256 * 4), dtype=np.float32)
+        pcm = np.frombuffer(stream.take_pcm_frames(256), dtype=np.float32)
 
         self.assertEqual(pcm.shape, (256,))
         self.assertGreater(float(np.max(np.abs(pcm))), 0.01)
 
-    def test_read_data_vectorizes_int32_output(self) -> None:
+    def test_pcm_frames_vectorize_int32_output(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=2)
         stream.sample_format = software_synth.QAudioFormat.SampleFormat.Int32
         stream.note_on(1, 0, 69, 100, "piano")
 
-        pcm = np.frombuffer(stream.readData(256 * 2 * 4), dtype=np.int32).reshape(-1, 2)
+        pcm = np.frombuffer(stream.take_pcm_frames(256), dtype=np.int32).reshape(-1, 2)
 
         self.assertEqual(pcm.shape, (256, 2))
         np.testing.assert_array_equal(pcm[:, 0], pcm[:, 1])
         self.assertGreater(int(np.max(np.abs(pcm[:, 0]))), 0)
 
-    def test_read_data_caps_large_qt_request_to_audio_sink_width(self) -> None:
+    def test_pcm_frames_use_the_explicit_push_block_size(self) -> None:
         stream = SoftwareSynthStream(
             sample_rate=44_100,
             channels=2,
@@ -206,16 +205,14 @@ class SoftwareSynthTests(unittest.TestCase):
             2,
             software_synth.QAudioFormat.SampleFormat.Int16,
             2_048,
-            512,
         )
         stream.note_on(1, 0, 69, 100, "piano")
 
-        pcm = stream.readData(4_096 * 2 * 2)
+        pcm = stream.take_pcm_frames(512)
 
         self.assertEqual(len(pcm), 512 * 2 * 2)
-        self.assertEqual(stream._pull_buffer_frames, 512)
 
-    def test_audio_worker_prefills_pcm_ring_before_audio_pull(self) -> None:
+    def test_audio_worker_prefills_pcm_ring_before_audio_push(self) -> None:
         stream = SoftwareSynthStream(
             sample_rate=44_100,
             channels=1,
@@ -224,7 +221,7 @@ class SoftwareSynthTests(unittest.TestCase):
         stream.note_on(1, 0, 69, 100, "piano")
         try:
             self.assertTrue(stream.start_worker())
-            pcm = np.frombuffer(stream.readData(128 * 2), dtype=np.int16)
+            pcm = np.frombuffer(stream.take_pcm_frames(128), dtype=np.int16)
             metrics = stream.metrics_snapshot()
         finally:
             stream.stop_worker()
@@ -254,7 +251,7 @@ class SoftwareSynthTests(unittest.TestCase):
                     stream._ring_condition.wait(
                         max(0.0, deadline - time.monotonic())
                     )
-            pcm = np.frombuffer(stream.readData(128 * 2), dtype=np.int16)
+            pcm = np.frombuffer(stream.take_pcm_frames(128), dtype=np.int16)
         finally:
             stream.stop_worker()
 
@@ -272,9 +269,9 @@ class SoftwareSynthTests(unittest.TestCase):
         )
         expected.note_on(1, 0, 60, 100, "organ")
         expected.note_on(1, 0, 64, 100, "organ")
-        first_expected = expected.readData(128 * 2)
+        first_expected = expected.take_pcm_frames(128)
         expected.note_on(1, 0, 67, 100, "organ")
-        second_expected = expected.readData(128 * 2)
+        second_expected = expected.take_pcm_frames(128)
 
         stream = SoftwareSynthStream(
             sample_rate=44_100,
@@ -285,7 +282,7 @@ class SoftwareSynthTests(unittest.TestCase):
         stream.note_on(1, 0, 64, 100, "organ")
         try:
             self.assertTrue(stream.start_worker())
-            first_actual = stream.readData(128 * 2)
+            first_actual = stream.take_pcm_frames(128)
             deadline = time.monotonic() + 1.0
             with stream._ring_condition:
                 while (
@@ -306,7 +303,7 @@ class SoftwareSynthTests(unittest.TestCase):
                     stream._ring_condition.wait(
                         max(0.0, deadline - time.monotonic())
                     )
-            second_actual = stream.readData(128 * 2)
+            second_actual = stream.take_pcm_frames(128)
         finally:
             stream.stop_worker()
 
@@ -342,10 +339,10 @@ class SoftwareSynthTests(unittest.TestCase):
         self.assertTrue(chunk_sizes)
         self.assertLessEqual(
             max(chunk_sizes),
-            QT_AUDIO_FRAME_OPTIONS[-1] * 2 * 2,
+            software_synth.LOW_LATENCY_AUDIO_FRAMES * 2 * 2,
         )
 
-    def test_command_refresh_rebuilds_one_complete_qt_pull_before_publish(self) -> None:
+    def test_command_refresh_rebuilds_one_low_latency_push_block(self) -> None:
         stream = SoftwareSynthStream(
             sample_rate=48_000,
             channels=2,
@@ -356,7 +353,6 @@ class SoftwareSynthTests(unittest.TestCase):
             2,
             software_synth.QAudioFormat.SampleFormat.Float,
             8_192,
-            2_048,
         )
         try:
             self.assertTrue(stream.start_worker())
@@ -379,9 +375,12 @@ class SoftwareSynthTests(unittest.TestCase):
         finally:
             stream.stop_worker()
 
-        self.assertGreaterEqual(first_chunk_frames, 2_048)
+        self.assertEqual(
+            first_chunk_frames,
+            software_synth.LOW_LATENCY_AUDIO_FRAMES,
+        )
 
-    def test_large_reserve_keeps_a_low_latency_effective_pull_floor(self) -> None:
+    def test_large_reserve_keeps_a_low_latency_push_floor(self) -> None:
         stream = SoftwareSynthStream(
             sample_rate=44_100,
             channels=2,
@@ -393,12 +392,11 @@ class SoftwareSynthTests(unittest.TestCase):
             2,
             software_synth.QAudioFormat.SampleFormat.Int16,
             8_192,
-            software_synth.LOW_LATENCY_AUDIO_FRAMES,
         )
 
         self.assertEqual(
             stream.minimum_effective_buffer_frames(),
-            software_synth.LOW_LATENCY_AUDIO_FRAMES,
+            software_synth.DEFAULT_AUDIO_BUFFER_FRAMES,
         )
         self.assertEqual(
             stream._target_ring_bytes(),
@@ -430,22 +428,19 @@ class SoftwareSynthTests(unittest.TestCase):
                 with self.subTest(frames=frames):
                     stream.set_buffer_frames_live(frames)
                     self.assertIs(stream._worker_thread, worker)
-                    required_bytes = 2_048 * 2
                     deadline = time.monotonic() + 1.0
                     with stream._ring_condition:
                         while (
-                            stream._pcm_ring_bytes < required_bytes
+                            stream._pcm_ring_bytes
+                            < min(frames, software_synth.PUSH_WRITE_FRAMES) * 2
                             and time.monotonic() < deadline
                         ):
                             stream._ring_condition.wait(
                                 max(0.0, deadline - time.monotonic())
                             )
-                    pcm = np.frombuffer(
-                        stream.readData(required_bytes),
-                        dtype=np.int16,
-                    )
+                    pcm = np.frombuffer(stream.take_pcm_frames(128), dtype=np.int16)
                     self.assertEqual(stream.buffer_frames, frames)
-                    self.assertEqual(len(pcm), 2_048)
+                    self.assertEqual(len(pcm), 128)
                     self.assertGreater(int(np.max(np.abs(pcm))), 0)
         finally:
             stream.stop_worker()
@@ -453,22 +448,165 @@ class SoftwareSynthTests(unittest.TestCase):
         self.assertIs(stream._worker_thread, None)
         self.assertIsNotNone(worker)
 
-    def test_live_buffer_change_does_not_reconfigure_the_running_qt_sink(self) -> None:
+    def test_live_buffer_change_keeps_push_output_untouched(self) -> None:
         engine = software_synth.SoftwareSynthEngine()
-        sink = Mock()
-        engine._sink = sink
+        output_worker = Mock()
+        engine._output_worker = output_worker
         try:
             for frames in AUDIO_BUFFER_FRAME_OPTIONS:
                 self.assertTrue(engine._apply_buffer_frames_live_locked(frames))
         finally:
+            engine._output_worker = None
             engine.shutdown()
 
-        sink.setBufferSize.assert_not_called()
+        self.assertIs(engine._output_worker, None)
+        self.assertEqual(output_worker.method_calls, [])
         self.assertEqual(engine.buffer_frames, AUDIO_BUFFER_FRAME_OPTIONS[-1])
         self.assertEqual(
             engine.stream.buffer_frames,
             AUDIO_BUFFER_FRAME_OPTIONS[-1],
         )
+
+    def test_push_output_writes_only_the_low_latency_target(self) -> None:
+        class FakeStream:
+            def __init__(self) -> None:
+                self.requests = []
+                self.shortages = 0
+
+            def take_pcm_frames(
+                self,
+                frame_count: int,
+                *,
+                pad_silence: bool = True,
+            ) -> bytes:
+                self.requests.append(frame_count)
+                return bytes(frame_count * 4)
+
+            def _record_supply_shortage(self) -> None:
+                self.shortages += 1
+
+        class FakeSink:
+            def __init__(self) -> None:
+                self.queued_frames = 0
+
+            def state(self):  # type: ignore[no-untyped-def]
+                return QAudio.State.ActiveState
+
+            def error(self):  # type: ignore[no-untyped-def]
+                return QAudio.Error.NoError
+
+            def bufferFrameCount(self) -> int:
+                return 2_048
+
+            def framesFree(self) -> int:
+                return 2_048 - self.queued_frames
+
+        class FakeOutput:
+            def __init__(self, sink: FakeSink) -> None:
+                self.sink = sink
+                self.writes = []
+
+            def write(self, pcm: bytes) -> int:
+                self.writes.append(pcm)
+                self.sink.queued_frames += len(pcm) // 4
+                return len(pcm)
+
+        stream = FakeStream()
+        sink = FakeSink()
+        output = FakeOutput(sink)
+        worker = software_synth._PushAudioOutput(
+            stream,  # type: ignore[arg-type]
+            Mock(),
+            software_synth.QAudioFormat(),
+            512,
+        )
+        worker._sink = sink  # type: ignore[assignment]
+        worker._output_device = output
+        worker.started_ok = True
+
+        worker.pump()
+
+        write_count = (
+            software_synth.PUSH_TARGET_FRAMES
+            + software_synth.PUSH_WRITE_FRAMES
+            - 1
+        ) // software_synth.PUSH_WRITE_FRAMES
+        self.assertEqual(
+            stream.requests,
+            [software_synth.PUSH_WRITE_FRAMES] * write_count,
+        )
+        self.assertEqual(sink.queued_frames, software_synth.PUSH_TARGET_FRAMES)
+        self.assertEqual(len(output.writes), write_count)
+        self.assertEqual(stream.shortages, 0)
+
+    def test_push_target_keeps_one_backend_period_of_guard_audio(self) -> None:
+        self.assertGreaterEqual(
+            software_synth.PUSH_TARGET_FRAMES - 512,
+            512,
+        )
+
+    def test_push_output_waits_for_pcm_while_qt_still_has_audio(self) -> None:
+        stream = Mock()
+        stream.take_pcm_frames.return_value = b""
+        sink = Mock()
+        sink.state.return_value = QAudio.State.ActiveState
+        sink.error.return_value = QAudio.Error.NoError
+        sink.bufferFrameCount.return_value = 512
+        sink.framesFree.return_value = 384
+        output = Mock()
+
+        worker = software_synth._PushAudioOutput(
+            stream,
+            Mock(),
+            software_synth.QAudioFormat(),
+            512,
+        )
+        worker._sink = sink
+        worker._output_device = output
+        worker.started_ok = True
+
+        worker.pump()
+
+        stream.take_pcm_frames.assert_called_once_with(
+            software_synth.PUSH_WRITE_FRAMES,
+            pad_silence=False,
+        )
+        stream._record_supply_shortage.assert_not_called()
+        output.write.assert_not_called()
+
+    def test_push_output_records_shortage_only_after_qt_queue_empties(self) -> None:
+        stream = Mock()
+        stream.take_pcm_frames.return_value = b""
+        sink = Mock()
+        sink.state.return_value = QAudio.State.ActiveState
+        sink.error.return_value = QAudio.Error.NoError
+        sink.bufferFrameCount.return_value = 512
+        sink.framesFree.return_value = 512
+        output = Mock()
+
+        worker = software_synth._PushAudioOutput(
+            stream,
+            Mock(),
+            software_synth.QAudioFormat(),
+            512,
+        )
+        worker._sink = sink
+        worker._output_device = output
+        worker.started_ok = True
+
+        worker.pump()
+
+        stream._record_supply_shortage.assert_called_once_with()
+        output.write.assert_not_called()
+
+    def test_software_synth_stream_has_no_qt_pull_interface(self) -> None:
+        stream = SoftwareSynthStream()
+
+        self.assertFalse(hasattr(stream, "readData"))
+        self.assertFalse(hasattr(stream, "bytesAvailable"))
+        source = inspect.getsource(software_synth._PushAudioOutput.start_output)
+        self.assertIn("output_device = sink.start()", source)
+        self.assertNotIn("sink.start(self.stream)", source)
 
     def test_auto_buffer_increases_after_three_recent_shortages(self) -> None:
         policy = AudioBufferAutoPolicy(now=0.0)
@@ -483,40 +621,6 @@ class SoftwareSynthTests(unittest.TestCase):
         assert decision is not None
         self.assertEqual(decision.frames, 1_024)
         self.assertIn("increased", decision.reason)
-
-    def test_qt_transfer_increases_after_three_recent_shortages(self) -> None:
-        policy = QtAudioAutoPolicy(now=0.0)
-        metrics = AudioSupplyMetrics(
-            shortages=(1.0, 2.0, 3.0),
-            synthesis_utilization=(),
-        )
-
-        decision = policy.evaluate(3.0, 512, metrics)
-
-        self.assertIsNotNone(decision)
-        assert decision is not None
-        self.assertEqual(decision.frames, 1_024)
-        self.assertIn("increased", decision.reason)
-
-    def test_qt_transfer_reduces_after_stable_low_cost_period(self) -> None:
-        policy = QtAudioAutoPolicy(now=0.0)
-        metrics = AudioSupplyMetrics(
-            shortages=(),
-            synthesis_utilization=tuple(
-                (float(second), 0.10)
-                for second in range(1, 22)
-            ),
-        )
-
-        decision = policy.evaluate(21.0, 512, metrics)
-
-        self.assertIsNotNone(decision)
-        assert decision is not None
-        self.assertEqual(decision.frames, 256)
-        self.assertIn("reduced", decision.reason)
-
-    def test_qt_transfer_options_cover_low_latency_and_stable_sizes(self) -> None:
-        self.assertEqual(QT_AUDIO_FRAME_OPTIONS, (128, 256, 512, 1_024, 2_048))
 
     def test_auto_buffer_increases_after_synthesis_supply_delays(self) -> None:
         policy = AudioBufferAutoPolicy(now=0.0)
@@ -664,7 +768,7 @@ class SoftwareSynthTests(unittest.TestCase):
         self.assertEqual(len(stream._voices), software_synth.MAX_VOICES)
         self.assertEqual(len(stream._fading_voices), 1)
 
-    def test_all_selectable_buffer_sizes_control_the_pull_chunk(self) -> None:
+    def test_all_selectable_buffer_sizes_control_the_pcm_reserve(self) -> None:
         for frames in AUDIO_BUFFER_FRAME_OPTIONS:
             with self.subTest(frames=frames):
                 stream = SoftwareSynthStream(
@@ -672,7 +776,10 @@ class SoftwareSynthTests(unittest.TestCase):
                     channels=2,
                     buffer_frames=frames,
                 )
-                self.assertEqual(stream.bytesAvailable(), frames * 2 * 2)
+                self.assertEqual(
+                    stream._target_ring_bytes(),
+                    frames * 2 * 2,
+                )
 
     def test_synth_supports_64_sustained_voices(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)

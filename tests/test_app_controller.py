@@ -161,7 +161,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.language, "ja")
         self.assertEqual(controller.state.midi_sound_volume, 64)
         self.assertEqual(controller.state.sound_source, "organ")
-        self.assertEqual(controller.state.audio_qt_frames, 512)
+        self.assertEqual(controller.state.audio_qt_frames, 1_024)
         self.assertEqual(controller.state.audio_buffer_frames, 512)
         self.assertEqual(controller.state.playback_speed_percent, 137)
         self.assertEqual(controller.state.transpose_semitones, 4)
@@ -509,14 +509,14 @@ class AppControllerTests(unittest.TestCase):
         controller._queue_worker_message(
             (
                 "audio_runtime",
-                256,
+                480,
                 1_024,
                 "Audio runtime automatically adjusted",
             )
         )
         controller.process_pending_events()
 
-        self.assertEqual(controller.state.audio_qt_frames, 256)
+        self.assertEqual(controller.state.audio_qt_frames, 480)
         self.assertEqual(controller.state.audio_buffer_frames, 1_024)
         self.assertFalse(hasattr(controller.current_settings(), "audio_buffer_frames"))
         self.assertIn(
