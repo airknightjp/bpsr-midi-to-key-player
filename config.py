@@ -34,6 +34,9 @@ DEFAULT_PANEL_ORDER = (
     "keyboard",
     "player",
 )
+DEFAULT_SECTION_VISIBILITY = {
+    panel: True for panel in DEFAULT_PANEL_ORDER
+}
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,17 @@ def normalize_panel_order(value: object) -> tuple[str, ...]:
         panel for panel in DEFAULT_PANEL_ORDER if panel not in normalized
     )
     return tuple(normalized)
+
+
+def normalize_section_visibility(value: object) -> dict[str, bool]:
+    normalized = dict(DEFAULT_SECTION_VISIBILITY)
+    if not isinstance(value, dict):
+        return normalized
+    for panel in DEFAULT_PANEL_ORDER:
+        visible = value.get(panel)
+        if isinstance(visible, bool):
+            normalized[panel] = visible
+    return normalized
 
 
 def normalized_key_bindings(bindings: object) -> dict[int, str]:

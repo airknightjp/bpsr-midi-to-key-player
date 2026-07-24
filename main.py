@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from app_controller import AppController
@@ -30,6 +31,7 @@ def main() -> int:
     window.show()
     controller.start()
     single_instance.start_activation_listener(window.activation_requested.emit)
+    QTimer.singleShot(0, window.show_startup_release_notes)
 
     try:
         return application.exec()

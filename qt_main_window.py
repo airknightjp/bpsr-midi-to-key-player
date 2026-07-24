@@ -126,9 +126,6 @@ class MidiMainWindow(QMainWindow):
             self._restore_from_tray,
             Qt.ConnectionType.QueuedConnection,
         )
-        self._settings_save_timer = QTimer(self)
-        self._settings_save_timer.setSingleShot(True)
-        self._settings_save_timer.timeout.connect(self.controller.flush_settings)
         self._output_note_release_timer = QTimer(self)
         self._output_note_release_timer.setSingleShot(True)
         self._output_note_release_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -630,9 +627,9 @@ class MidiMainWindow(QMainWindow):
 
     def _build_player_section(self) -> None:
         self.player_header = QWidget()
-        self.player_header_layout = QVBoxLayout(self.player_header)
+        self.player_header_layout = QGridLayout(self.player_header)
         self.player_header_layout.setContentsMargins(0, 0, 0, 0)
-        self.player_header_layout.setSpacing(2)
+        self.player_header_layout.setSpacing(0)
 
         position_row = QHBoxLayout()
         position_row.setContentsMargins(0, 0, 0, 0)
@@ -645,7 +642,7 @@ class MidiMainWindow(QMainWindow):
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         position_row.addWidget(self.position_slider, 1)
         position_row.addWidget(self.time_label)
-        self.player_header_layout.addLayout(position_row)
+        self.player_header_layout.addLayout(position_row, 0, 0)
 
         self.slider_pane = QWidget()
         slider_layout = QHBoxLayout(self.slider_pane)
@@ -663,7 +660,6 @@ class MidiMainWindow(QMainWindow):
         )
         self.volume_control.valueChanged.connect(lambda value: self._set_option("midi_sound_volume", value))
         self.volume_control.resetRequested.connect(lambda: self._set_option("midi_sound_volume", 100))
-        slider_layout.addWidget(self.volume_control)
         self.speed_control = KnobValueControl(
             10,
             200,
@@ -674,6 +670,15 @@ class MidiMainWindow(QMainWindow):
         )
         self.speed_control.valueChanged.connect(lambda value: self._set_option("playback_speed_percent", value))
         self.speed_control.resetRequested.connect(lambda: self._set_option("playback_speed_percent", 100))
+        self.audio_runtime_label = QLabel()
+        self.audio_runtime_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.audio_runtime_label.setProperty("caption", True)
+        self.menuBar().setCornerWidget(
+            self.audio_runtime_label,
+            Qt.Corner.TopRightCorner,
+        )
         slider_layout.addWidget(self.speed_control)
 
         self.transpose_control = KnobValueControl(
@@ -715,7 +720,7 @@ class MidiMainWindow(QMainWindow):
 
         transport = QHBoxLayout()
         transport.setContentsMargins(0, 0, 0, 0)
-        transport.setSpacing(4)
+        transport.setSpacing(1)
         self.transport_layout = transport
         self.previous_track_button = self._make_player_transport_button(
             self.controller.select_previous_midi
@@ -735,9 +740,10 @@ class MidiMainWindow(QMainWindow):
         transport_left_layout.setSpacing(0)
         transport_left_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.transport_left_layout = transport_left_layout
-        transport_left_layout.addWidget(self.slider_pane)
+        transport_left_layout.addWidget(self.volume_control)
         transport_left_layout.addStretch(1)
-        transport_left_layout.addSpacing(8)
+        transport_left_layout.addWidget(self.slider_pane)
+        transport_left_layout.addSpacing(1)
         transport_left_layout.addWidget(self.previous_track_button)
 
         self.transport_right = QWidget()
@@ -747,21 +753,21 @@ class MidiMainWindow(QMainWindow):
         transport_right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.transport_right_layout = transport_right_layout
         transport_right_layout.addWidget(self.next_track_button)
-        transport_right_layout.addSpacing(4)
+        transport_right_layout.addSpacing(1)
         transport_right_layout.addWidget(self.sound_playback_mode_button)
-        transport_right_layout.addSpacing(8)
-        transport_right_layout.addStretch(1)
+        transport_right_layout.addSpacing(1)
         transport_right_layout.addWidget(self.transform_controls)
+        transport_right_layout.addStretch(1)
 
         transport.addStretch(1)
         transport.addWidget(self.transport_left)
         transport.addWidget(self.sound_play_pause_button)
         transport.addWidget(self.transport_right)
         transport.addStretch(1)
-        self.player_header_layout.addLayout(transport)
+        self.player_header_layout.addLayout(transport, 1, 0)
 
         self.player_layout.addWidget(self.player_header)
-        self.player_body_gap = self._make_gap(4)
+        self.player_body_gap = self._make_gap(0)
         self.player_layout.addWidget(self.player_body_gap)
 
         body = QHBoxLayout()
@@ -795,7 +801,7 @@ class MidiMainWindow(QMainWindow):
         self.tab_bar.tabBarDoubleClicked.connect(self._player_tab_double_clicked)
         self.tab_bar_container = QWidget()
         tab_bar_container_layout = QVBoxLayout(self.tab_bar_container)
-        tab_bar_container_layout.setContentsMargins(0, 1, 0, 0)
+        tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
         tab_bar_container_layout.setSpacing(0)
         tab_bar_container_layout.addWidget(self.tab_bar)
         self.tab_bar_container_layout = tab_bar_container_layout
@@ -810,13 +816,6 @@ class MidiMainWindow(QMainWindow):
         sound_source_layout.setContentsMargins(0, 0, 0, 2)
         sound_source_layout.setSpacing(4)
         self.sound_source_layout = sound_source_layout
-        self.audio_runtime_label = QLabel()
-        self.audio_runtime_label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.audio_runtime_label.setProperty("caption", True)
-        sound_source_layout.addWidget(self.audio_runtime_label)
-        sound_source_layout.addSpacing(8)
         self.sound_source_label = QLabel()
         self.sound_source_label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -830,7 +829,14 @@ class MidiMainWindow(QMainWindow):
             0,
             Qt.AlignmentFlag.AlignBottom,
         )
-        content_layout.addLayout(tab_row)
+        self.player_header_layout.addLayout(
+            tab_row,
+            1,
+            0,
+            2,
+            1,
+            Qt.AlignmentFlag.AlignBottom,
+        )
 
         self.player_stack = QStackedWidget()
         self.midi_table = QTableWidget(0, 3)
@@ -939,8 +945,7 @@ class MidiMainWindow(QMainWindow):
                 state.input_conversion_mode,
                 state.midi_input_running,
                 state.current_mode,
-                state.section_visibility["midi_input"],
-                state.section_visibility["key_playback"],
+                state.section_visibility["input_conversion"],
             )
             if self._signature_changed("conversion", conversion_signature):
                 self._render_conversion_controls(state)
@@ -992,100 +997,121 @@ class MidiMainWindow(QMainWindow):
                 state.chord_strum,
                 state.chord_optimization,
                 state.auto_sustain,
-                keyboard_display_notes,
-                keyboard_retrigger_events,
             )
             if self._signature_changed("settings", settings_signature):
                 self._render_settings(state)
 
-            optimization_plan = self.controller.current_chord_optimization_plan()
-            piano_roll_sequence_signature = (
-                id(self.controller.events),
-                len(self.controller.events),
-                tuple(
-                    (item.track, item.channel, item.enabled)
-                    for item in state.track_channels
-                ),
-                state.auto_fit_note_range,
-                state.transpose_semitones,
-                state.octave_shift,
-                state.humanize_timing,
-                state.chord_optimization,
-                state.chord_strum,
-                state.repeat_prevention,
-                state.playback_speed_percent,
-                id(optimization_plan),
-            )
-            if self._signature_changed(
-                "piano_roll_sequence",
-                piano_roll_sequence_signature,
-            ):
-                self.piano_roll.set_sequence_notes(
-                    build_piano_roll_notes(
-                        self.controller.events,
-                        enabled_sources=self.controller.enabled_sources(),
-                        enabled_channels=self.controller.enabled_channels(),
-                        auto_fit_note_range=state.auto_fit_note_range,
-                        transpose_semitones=state.transpose_semitones,
-                        octave_shift=state.octave_shift,
-                        chord_optimization_plan=(
-                            optimization_plan if state.chord_optimization else None
-                        ),
-                        humanize_timing=state.humanize_timing,
-                        chord_strum=state.chord_strum,
-                        repeat_prevention=state.repeat_prevention,
-                        playback_speed_percent=state.playback_speed_percent,
-                    )
+            if state.section_visibility["keyboard"]:
+                keyboard_visual_signature = (
+                    keyboard_display_notes,
+                    keyboard_retrigger_events,
                 )
+                if self._signature_changed(
+                    "keyboard_visualization",
+                    keyboard_visual_signature,
+                ):
+                    self._render_output_keyboard(
+                        keyboard_display_notes,
+                        keyboard_retrigger_events,
+                    )
             piano_roll_running = self.controller.piano_roll_playback_running()
             self.position_slider.set_playback_running(piano_roll_running)
-            piano_roll_playback_signature = (
-                state.position,
-                state.playback_speed_percent,
-                piano_roll_running,
-            )
-            if self._signature_changed(
-                "piano_roll_playback",
-                piano_roll_playback_signature,
-            ):
-                self.piano_roll.set_playback_state(
+            if state.section_visibility["piano_roll"]:
+                optimization_plan = (
+                    self.controller.current_chord_optimization_plan()
+                )
+                piano_roll_sequence_signature = (
+                    id(self.controller.events),
+                    len(self.controller.events),
+                    tuple(
+                        (item.track, item.channel, item.enabled)
+                        for item in state.track_channels
+                    ),
+                    state.auto_fit_note_range,
+                    state.transpose_semitones,
+                    state.octave_shift,
+                    state.humanize_timing,
+                    state.chord_optimization,
+                    state.chord_strum,
+                    state.repeat_prevention,
+                    state.playback_speed_percent,
+                    id(optimization_plan),
+                )
+                if self._signature_changed(
+                    "piano_roll_sequence",
+                    piano_roll_sequence_signature,
+                ):
+                    self.piano_roll.set_sequence_notes(
+                        build_piano_roll_notes(
+                            self.controller.events,
+                            enabled_sources=self.controller.enabled_sources(),
+                            enabled_channels=self.controller.enabled_channels(),
+                            auto_fit_note_range=state.auto_fit_note_range,
+                            transpose_semitones=state.transpose_semitones,
+                            octave_shift=state.octave_shift,
+                            chord_optimization_plan=(
+                                optimization_plan
+                                if state.chord_optimization
+                                else None
+                            ),
+                            humanize_timing=state.humanize_timing,
+                            chord_strum=state.chord_strum,
+                            repeat_prevention=state.repeat_prevention,
+                            playback_speed_percent=(
+                                state.playback_speed_percent
+                            ),
+                        )
+                    )
+                piano_roll_playback_signature = (
                     state.position,
                     state.playback_speed_percent,
                     piano_roll_running,
                 )
-            piano_roll_live_signature = (
-                state.active_output_notes,
-                state.realtime_output_notes,
-            )
-            if self._signature_changed(
-                "piano_roll_live",
-                piano_roll_live_signature,
-            ):
-                self.piano_roll.set_live_state(
-                    state.active_output_notes | state.realtime_output_notes,
-                    (),
+                if self._signature_changed(
+                    "piano_roll_playback",
+                    piano_roll_playback_signature,
+                ):
+                    self.piano_roll.set_playback_state(
+                        state.position,
+                        state.playback_speed_percent,
+                        piano_roll_running,
+                    )
+                piano_roll_live_signature = (
+                    state.active_output_notes,
+                    state.realtime_output_notes,
                 )
-            piano_roll_score_signature = (
-                state.rhythm_score,
-                state.rhythm_combo,
-                state.rhythm_judgment,
-                state.rhythm_multiplier_tenths,
-            )
-            if self._signature_changed(
-                "piano_roll_score",
-                piano_roll_score_signature,
-            ):
-                self.piano_roll.set_score(
+                if self._signature_changed(
+                    "piano_roll_live",
+                    piano_roll_live_signature,
+                ):
+                    self.piano_roll.set_live_state(
+                        state.active_output_notes
+                        | state.realtime_output_notes,
+                        (),
+                    )
+                piano_roll_score_signature = (
                     state.rhythm_score,
                     state.rhythm_combo,
                     state.rhythm_judgment,
                     state.rhythm_multiplier_tenths,
                 )
-            if self._signature_changed(
-                "piano_roll_hits",
-                state.rhythm_hit_events,
-            ):
-                self.piano_roll.set_hit_events(state.rhythm_hit_events)
+                if self._signature_changed(
+                    "piano_roll_score",
+                    piano_roll_score_signature,
+                ):
+                    self.piano_roll.set_score(
+                        state.rhythm_score,
+                        state.rhythm_combo,
+                        state.rhythm_judgment,
+                        state.rhythm_multiplier_tenths,
+                    )
+                if self._signature_changed(
+                    "piano_roll_hits",
+                    state.rhythm_hit_events,
+                ):
+                    self.piano_roll.set_hit_events(
+                        state.rhythm_hit_events
+                    )
 
             player_controls_signature = (
                 state.language,
@@ -1267,9 +1293,10 @@ class MidiMainWindow(QMainWindow):
         self.settings_grid.setVerticalSpacing(px(6))
         self.output_keyboard.apply_scale(scale)
         self.piano_roll.apply_scale(scale)
-        self.player_header_layout.setSpacing(px(2))
+        self.player_header_layout.setSpacing(0)
+        self.player_header_layout.setRowMinimumHeight(2, px(10))
         self.position_row_layout.setSpacing(px(6))
-        self.transport_layout.setSpacing(px(4))
+        self.transport_layout.setSpacing(px(1))
         self.position_slider.setFixedHeight(px(24))
         self.time_label.setFixedWidth(px(80))
         transport_button_size = px(28)
@@ -1282,12 +1309,11 @@ class MidiMainWindow(QMainWindow):
             button.setFixedSize(transport_button_size, transport_button_size)
         self.volume_control.apply_scale(scale)
         self.speed_control.apply_scale(scale)
+        self.audio_runtime_label.setFixedWidth(px(158))
+        self.audio_runtime_label.setFixedHeight(px(24))
+        self.audio_runtime_label.setContentsMargins(0, 0, px(8), 0)
         self.slider_layout.setSpacing(px(2))
-        self.slider_pane.setFixedWidth(
-            self.volume_control.width()
-            + self.speed_control.width()
-            + self.slider_layout.spacing()
-        )
+        self.slider_pane.setFixedWidth(self.speed_control.width())
         self.transpose_control.apply_scale(scale)
         self.octave_control.apply_scale(scale)
         self.transform_layout.setContentsMargins(0, 0, 0, 0)
@@ -1303,42 +1329,32 @@ class MidiMainWindow(QMainWindow):
         list_control_height = px(28)
         self.track_channel_layout.setContentsMargins(
             0,
-            px(1) + list_control_height,
+            0,
             0,
             0,
         )
         self.tab_bar.setFixedHeight(list_control_height)
-        self.tab_bar_container.setFixedHeight(list_control_height + 1)
-        self.tab_bar_container_layout.setContentsMargins(0, 1, 0, 0)
+        self.tab_bar_container.setFixedHeight(list_control_height)
+        self.tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
         self.slider_pane.setFixedHeight(player_control_height)
         self.transform_controls.setFixedHeight(player_control_height)
         self.transport_left.setFixedHeight(player_control_height)
         self.transport_right.setFixedHeight(player_control_height)
-        self._set_spacer_width(self.transport_left_layout, 2, px(8))
-        self._set_spacer_width(self.transport_right_layout, 1, px(4))
-        self._set_spacer_width(self.transport_right_layout, 3, px(8))
-        left_content_width = (
-            self.slider_pane.width()
-            + px(8)
-            + self.previous_track_button.width()
-        )
-        right_content_width = (
-            self.next_track_button.width()
-            + px(4)
-            + self.sound_playback_mode_button.width()
-            + px(8)
-            + self.transform_controls.width()
-        )
-        transport_side_width = max(left_content_width, right_content_width)
-        self.transport_left.setFixedWidth(transport_side_width)
-        self.transport_right.setFixedWidth(transport_side_width)
+        self._set_spacer_width(self.transport_left_layout, 3, px(1))
+        self._set_spacer_width(self.transport_right_layout, 1, px(1))
+        self._set_spacer_width(self.transport_right_layout, 3, px(1))
+        self._update_transport_side_widths(scale)
         self.sound_source_controls.setFixedHeight(list_control_height)
         self.sound_source_combo.setFixedWidth(px(138))
-        self.audio_runtime_label.setFixedWidth(px(158))
         self.sound_source_layout.setContentsMargins(0, 0, 0, px(2))
         self.sound_source_layout.setSpacing(px(4))
-        self._set_spacer_width(self.sound_source_layout, 1, px(8))
         self.player_detail_gap.setFixedWidth(px(2))
+        self.tab_row.setContentsMargins(
+            self.track_channels.width() + self.player_detail_gap.width(),
+            0,
+            0,
+            0,
+        )
         self.midi_table.setColumnWidth(1, px(80))
         self.midi_table.setColumnWidth(2, px(90))
         self.midi_table.horizontalHeader().setFixedHeight(px(24))
@@ -1359,7 +1375,7 @@ class MidiMainWindow(QMainWindow):
         self._set_spacer_width(self.shortcut_group_layout, 11, px(6))
         self._set_spacer_width(self.tab_row, 1, px(8))
         self._set_spacer_width(self.tab_row, 3, px(8))
-        self.player_body_gap.setFixedHeight(px(4))
+        self.player_body_gap.setFixedHeight(0)
         self._update_section_gaps(
             self.state,
             self._effective_section_visibility(self.state),
@@ -1481,13 +1497,95 @@ class MidiMainWindow(QMainWindow):
             spacer.changeSize(width, 0)
             layout.invalidate()
 
+    def _update_transport_side_widths(self, scale: float) -> None:
+        gap = max(1, round(scale))
+        self._set_spacer_width(self.transport_left_layout, 3, gap)
+        left_content_width = (
+            self.volume_control.width()
+            + self.slider_pane.width()
+            + gap
+            + self.previous_track_button.sizeHint().width()
+        )
+        right_content_width = (
+            self.next_track_button.sizeHint().width()
+            + gap
+            + self.sound_playback_mode_button.sizeHint().width()
+            + gap
+            + self.transform_controls.width()
+        )
+        volume_knob_offset = (
+            self.volume_control.width()
+            - self.volume_control.knob.width()
+            + self.volume_control.knob.rect().center().x()
+        )
+        octave_knob_offset = (
+            right_content_width
+            - self.octave_control.knob.width()
+            + self.octave_control.knob.rect().center().x()
+        )
+        mirrored_side_width = volume_knob_offset + octave_knob_offset + gap
+        transport_side_width = max(
+            left_content_width,
+            right_content_width,
+            mirrored_side_width,
+        )
+        self.transport_left.setFixedWidth(transport_side_width)
+        self.transport_right.setFixedWidth(transport_side_width)
+        self.volume_control.layout().activate()
+        self.octave_control.layout().activate()
+        self.transform_layout.activate()
+        self.transport_left_layout.activate()
+        self.transport_right_layout.activate()
+        volume_center = self.volume_control.knob.mapTo(
+            self.transport_left,
+            self.volume_control.knob.rect().center(),
+        ).x()
+        octave_center = self.octave_control.knob.mapTo(
+            self.transport_right,
+            self.octave_control.knob.rect().center(),
+        ).x()
+        measured_side_width = volume_center + octave_center + gap
+        if measured_side_width > transport_side_width:
+            self.transport_left.setFixedWidth(measured_side_width)
+            self.transport_right.setFixedWidth(measured_side_width)
+            self.transport_left_layout.activate()
+            self.transport_right_layout.activate()
+        volume_center = self.volume_control.knob.mapTo(
+            self.transport_left,
+            self.volume_control.knob.rect().center(),
+        ).x()
+        octave_center = self.octave_control.knob.mapTo(
+            self.transport_right,
+            self.octave_control.knob.rect().center(),
+        ).x()
+        speed_center = self.speed_control.knob.mapTo(
+            self.transport_left,
+            self.speed_control.knob.rect().center(),
+        ).x()
+        transpose_center = self.transpose_control.knob.mapTo(
+            self.transport_right,
+            self.transpose_control.knob.rect().center(),
+        ).x()
+        speed_gap = max(
+            gap,
+            gap
+            + speed_center
+            + transpose_center
+            - volume_center
+            - octave_center,
+        )
+        self._set_spacer_width(
+            self.transport_left_layout,
+            3,
+            speed_gap,
+        )
+        self.transport_left_layout.activate()
+
     @staticmethod
     def _effective_section_visibility(state: AppState) -> tuple[bool, ...]:
-        return (
-            state.section_visibility["midi_input"],
-            state.section_visibility["key_playback"],
-            state.section_visibility["common_settings"],
-            state.section_visibility["player"],
+        return tuple(
+            state.section_visibility[panel_id]
+            for panel_id in DEFAULT_PANEL_ORDER
         )
 
     def _update_section_gaps(
@@ -1512,14 +1610,7 @@ class MidiMainWindow(QMainWindow):
 
     @staticmethod
     def _panel_visibility(visibility: tuple[bool, ...]) -> dict[str, bool]:
-        input_visible = visibility[0] or visibility[1]
-        return {
-            "input_conversion": input_visible,
-            "common_settings": visibility[2],
-            "piano_roll": visibility[2],
-            "keyboard": visibility[2],
-            "player": visibility[3],
-        }
+        return dict(zip(DEFAULT_PANEL_ORDER, visibility, strict=True))
 
     def _apply_section_visibility(self, state: AppState) -> None:
         visibility = self._effective_section_visibility(state)
@@ -1540,20 +1631,52 @@ class MidiMainWindow(QMainWindow):
                     self.height() + self._hidden_section_height(previous, state.ui_scale_percent)
                 )
 
-        input_visible = visibility[0] or visibility[1]
-        self.conversion_control_panel.setVisible(input_visible)
+        self.conversion_control_panel.setVisible(visibility[0])
         self.realtime_mode_radio.setVisible(visibility[0])
-        self.midi_file_mode_radio.setVisible(visibility[1])
-        selected_input_visible = (
-            visibility[0]
-            if state.input_conversion_mode == INPUT_CONVERSION_REALTIME
-            else visibility[1]
-        )
-        self.conversion_settings_stack.setVisible(selected_input_visible)
-        self.settings_panel.setVisible(visibility[2])
+        self.midi_file_mode_radio.setVisible(visibility[0])
+        self.conversion_settings_stack.setVisible(visibility[0])
+        self.settings_panel.setVisible(visibility[1])
         self.piano_roll_panel.setVisible(visibility[2])
-        self.settings_lower_panel.setVisible(visibility[2])
-        self.player_panel.setVisible(visibility[3])
+        self.settings_lower_panel.setVisible(visibility[3])
+        self.player_panel.setVisible(visibility[4])
+        piano_roll_visibility_changed = (
+            previous is None or previous[2] != visibility[2]
+        )
+        keyboard_visibility_changed = (
+            previous is None or previous[3] != visibility[3]
+        )
+        if piano_roll_visibility_changed:
+            self.piano_roll.set_rendering_enabled(
+                visibility[2],
+                latest_hit_events=state.rhythm_hit_events,
+            )
+            if visibility[2]:
+                for signature in (
+                    "piano_roll_sequence",
+                    "piano_roll_playback",
+                    "piano_roll_live",
+                    "piano_roll_score",
+                    "piano_roll_hits",
+                ):
+                    self._render_signatures.pop(signature, None)
+        if keyboard_visibility_changed:
+            simultaneous_sound_and_realtime = (
+                state.midi_input_running and state.sound_playing
+            )
+            current_retrigger_events = (
+                state.realtime_output_retrigger_events
+                if simultaneous_sound_and_realtime
+                else state.output_note_retrigger_events
+            )
+            self.output_keyboard.set_rendering_enabled(
+                visibility[3],
+                current_retrigger_events=current_retrigger_events,
+            )
+            if visibility[3]:
+                self._render_signatures.pop(
+                    "keyboard_visualization",
+                    None,
+                )
         for panel_id, panel in self._panel_widgets.items():
             self._section_heights.setdefault(
                 panel_id,
@@ -1649,13 +1772,8 @@ class MidiMainWindow(QMainWindow):
             else self.key_panel
         )
         self.conversion_settings_stack.setCurrentWidget(selected_panel)
-        selected_section = (
-            "midi_input"
-            if state.input_conversion_mode == INPUT_CONVERSION_REALTIME
-            else "key_playback"
-        )
         self.conversion_settings_stack.setVisible(
-            state.section_visibility[selected_section]
+            state.section_visibility["input_conversion"]
         )
         self.realtime_mode_radio.setEnabled(not conversion_active)
         self.midi_file_mode_radio.setEnabled(not conversion_active)
@@ -1683,7 +1801,7 @@ class MidiMainWindow(QMainWindow):
                 and not state.midi_input_running
             )
         self.conversion_start_button.setEnabled(
-            enabled and state.section_visibility[selected_section]
+            enabled and state.section_visibility["input_conversion"]
         )
         palette = THEMES.get(state.color_theme, THEMES["sky_blue"])
         if state.color_theme == "dark":
@@ -1739,19 +1857,14 @@ class MidiMainWindow(QMainWindow):
                 check.setProperty("unsupported", unsupported_in_realtime)
                 check.style().unpolish(check)
                 check.style().polish(check)
-        simultaneous_sound_and_realtime = (
-            state.midi_input_running and state.sound_playing
-        )
-        self.output_keyboard.set_active_notes(
-            state.realtime_visible_output_notes
-            if simultaneous_sound_and_realtime
-            else state.active_output_notes
-        )
-        self.output_keyboard.set_retrigger_events(
-            state.realtime_output_retrigger_events
-            if simultaneous_sound_and_realtime
-            else state.output_note_retrigger_events
-        )
+
+    def _render_output_keyboard(
+        self,
+        active_notes: object,
+        retrigger_events: object,
+    ) -> None:
+        self.output_keyboard.set_active_notes(active_notes)
+        self.output_keyboard.set_retrigger_events(retrigger_events)
 
     def _render_player_controls(self, state: AppState) -> None:
         self.volume_control.set_value(state.midi_sound_volume)
@@ -1839,6 +1952,9 @@ class MidiMainWindow(QMainWindow):
         for button, action, color in button_icons:
             button.setIcon(make_transport_icon(action, color, icon_size))
             button.set_base_icon_size(QSize(icon_size, icon_size))
+        self._update_transport_side_widths(
+            state.ui_scale_percent / 100
+        )
 
     def _render_player_position(self, state: AppState) -> None:
         duration = max(0.0, state.duration)
@@ -1898,6 +2014,11 @@ class MidiMainWindow(QMainWindow):
         load_action = file_menu.addAction(text["load_midi"])
         load_action.triggered.connect(self._choose_midi_folder)
         file_menu.addSeparator()
+        file_menu.addAction(
+            text["save_settings"],
+            self.controller.save_settings_now,
+        )
+        file_menu.addSeparator()
         file_menu.addAction(text["exit"], self.exit_application)
 
         view_menu = self.menuBar().addMenu(text["menu_view"])
@@ -1926,10 +2047,11 @@ class MidiMainWindow(QMainWindow):
         always_action.toggled.connect(lambda value: self._set_option("always_on_top", value))
         view_menu.addSeparator()
         for section, key in (
-            ("midi_input", "midi_input_settings"),
-            ("key_playback", "key_playback_settings"),
-            ("common_settings", "midi_sound_settings"),
-            ("player", "player_section"),
+            ("input_conversion", "basic_screen_panel"),
+            ("common_settings", "advanced_settings_panel"),
+            ("piano_roll", "rhythm_game_panel"),
+            ("keyboard", "keyboard_panel"),
+            ("player", "player_panel"),
         ):
             action = view_menu.addAction(text[key])
             action.setCheckable(True)
@@ -1967,6 +2089,8 @@ class MidiMainWindow(QMainWindow):
         tray_action.toggled.connect(lambda value: self._set_option("tray_resident", value))
 
         other_menu = self.menuBar().addMenu(text["menu_other"])
+        other_menu.addAction(text["release_notes"], self._open_release_notes)
+        other_menu.addSeparator()
         other_menu.addAction(text["about_app"], self._open_about)
 
     def _set_option(self, name: str, value: object) -> None:
@@ -2052,6 +2176,53 @@ class MidiMainWindow(QMainWindow):
         box = QMessageBox(icon, title, message, QMessageBox.StandardButton.Ok, self)
         box.exec()
 
+    def show_startup_release_notes(self) -> None:
+        if not self.state.hide_release_notes_on_startup:
+            self._open_release_notes()
+
+    def _open_release_notes(self) -> None:
+        text = TEXT[self.state.language]
+        scale = self.state.ui_scale_percent / 100.0
+        dialog = QDialog(self)
+        dialog.setObjectName("ReleaseNotesDialog")
+        dialog.setWindowTitle(text["release_notes"])
+        dialog.resize(round(520 * scale), round(300 * scale))
+        layout = QVBoxLayout(dialog)
+
+        content = QLabel(text["release_notes_content"])
+        content.setObjectName("ReleaseNotesContent")
+        content.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        content.setWordWrap(True)
+        content.setMinimumHeight(round(190 * scale))
+        layout.addWidget(content, 1)
+
+        dont_show = QCheckBox(text["dont_show_again"])
+        dont_show.setObjectName("ReleaseNotesDontShowAgain")
+        dont_show.setChecked(self.state.hide_release_notes_on_startup)
+        dont_show.toggled.connect(self._set_release_notes_hidden)
+        layout.addWidget(dont_show)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        close = QPushButton(text["close"])
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _set_release_notes_hidden(self, hidden: bool) -> None:
+        hidden = bool(hidden)
+        if hidden == self.state.hide_release_notes_on_startup:
+            return
+        self.controller.set_option(
+            "hide_release_notes_on_startup",
+            hidden,
+        )
+        if hidden:
+            self.controller.save_settings_now()
+
     def _open_about(self) -> None:
         text = TEXT[self.state.language]
         dialog = QDialog(self)
@@ -2089,9 +2260,6 @@ class MidiMainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def schedule_settings_save(self, delay_ms: int) -> None:
-        self._settings_save_timer.start(max(0, int(delay_ms)))
-
     def schedule_output_note_release(self, delay_ms: int) -> None:
         self._output_note_release_timer.start(max(1, int(delay_ms)))
 
@@ -2109,7 +2277,6 @@ class MidiMainWindow(QMainWindow):
             return
         self._closing_for_exit = True
         self.controller.set_event_notifier(None)
-        self._settings_save_timer.stop()
         self._output_note_release_timer.stop()
         if self._focus_filter_installed:
             application = QApplication.instance()
@@ -2126,6 +2293,9 @@ class MidiMainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().showEvent(event)
+        self._update_transport_side_widths(
+            self.state.ui_scale_percent / 100
+        )
         if not self.isMaximized():
             self._sync_full_visibility_height()
             self.controller.set_window_geometry(self.width(), self.height())

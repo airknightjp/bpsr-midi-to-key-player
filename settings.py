@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import (
@@ -14,6 +14,7 @@ from config import (
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
     DEFAULT_PANEL_ORDER,
+    DEFAULT_SECTION_VISIBILITY,
     DEFAULT_SOUND_PLAYBACK_MODE,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
@@ -23,11 +24,18 @@ from config import (
     normalize_special_binding,
     normalize_input_conversion_mode,
     normalize_panel_order,
+    normalize_section_visibility,
     normalize_sound_playback_mode,
 )
 from i18n import normalize_color_theme, normalize_language
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
+from audio_buffer import (
+    DEFAULT_AUDIO_BUFFER_FRAMES,
+    QT_AUDIO_FRAME_OPTIONS,
+    normalize_audio_buffer_frames,
+    normalize_qt_audio_frames,
+)
 
 
 SETTINGS_FILE_NAME = "settings.json"
@@ -56,6 +64,7 @@ class AppSettings:
     color_theme: str = "sky_blue"
     always_on_top: bool = False
     tray_resident: bool = False
+    hide_release_notes_on_startup: bool = False
     window_opacity: int = 100
     ui_scale_percent: int = 100
     window_width: int = 900
@@ -72,6 +81,12 @@ class AppSettings:
     octave_down_key: str = "<"
     octave_up_key: str = ">"
     panel_order: tuple[str, ...] = DEFAULT_PANEL_ORDER
+    section_visibility: dict[str, bool] = field(
+        default_factory=lambda: dict(DEFAULT_SECTION_VISIBILITY)
+    )
+    automatic_audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
+    minimum_stable_qt_frames: int | None = None
+    qt_audio_environment: str = ""
 
 def load_settings() -> AppSettings:
     global _last_settings_error
@@ -178,6 +193,10 @@ def load_settings() -> AppSettings:
         color_theme=normalize_color_theme(data.get("color_theme")),
         always_on_top=_parse_bool(data.get("always_on_top"), default=False),
         tray_resident=_parse_bool(data.get("tray_resident"), default=False),
+        hide_release_notes_on_startup=_parse_bool(
+            data.get("hide_release_notes_on_startup"),
+            default=False,
+        ),
         window_opacity=_clamp_int(data.get("window_opacity"), minimum=30, maximum=100, default=100),
         ui_scale_percent=_clamp_int(data.get("ui_scale_percent"), minimum=100, maximum=200, default=100),
         window_width=_clamp_int(data.get("window_width"), minimum=1, maximum=10000, default=900),
@@ -196,6 +215,16 @@ def load_settings() -> AppSettings:
         octave_down_key=normalize_special_binding(data.get("octave_down_key"), "<"),
         octave_up_key=normalize_special_binding(data.get("octave_up_key"), ">"),
         panel_order=normalize_panel_order(data.get("panel_order")),
+        section_visibility=normalize_section_visibility(
+            data.get("section_visibility")
+        ),
+        automatic_audio_buffer_frames=normalize_audio_buffer_frames(
+            data.get("automatic_audio_buffer_frames")
+        ),
+        minimum_stable_qt_frames=_parse_optional_qt_frames(
+            data.get("minimum_stable_qt_frames")
+        ),
+        qt_audio_environment=_parse_str(data.get("qt_audio_environment")),
     )
     return settings
 
@@ -228,6 +257,9 @@ def save_settings(settings: AppSettings) -> None:
             "color_theme": settings.color_theme,
             "always_on_top": settings.always_on_top,
             "tray_resident": settings.tray_resident,
+            "hide_release_notes_on_startup": (
+                settings.hide_release_notes_on_startup
+            ),
             "window_opacity": settings.window_opacity,
             "ui_scale_percent": settings.ui_scale_percent,
             "window_width": settings.window_width,
@@ -250,6 +282,18 @@ def save_settings(settings: AppSettings) -> None:
             "octave_down_key": settings.octave_down_key,
             "octave_up_key": settings.octave_up_key,
             "panel_order": list(normalize_panel_order(settings.panel_order)),
+            "section_visibility": normalize_section_visibility(
+                settings.section_visibility
+            ),
+            "automatic_audio_buffer_frames": normalize_audio_buffer_frames(
+                settings.automatic_audio_buffer_frames
+            ),
+            "minimum_stable_qt_frames": (
+                normalize_qt_audio_frames(settings.minimum_stable_qt_frames)
+                if settings.minimum_stable_qt_frames is not None
+                else None
+            ),
+            "qt_audio_environment": settings.qt_audio_environment,
         },
         indent=2,
         ensure_ascii=False,
@@ -273,6 +317,18 @@ def consume_settings_error() -> str:
     error = _last_settings_error
     _last_settings_error = ""
     return error
+
+
+def _parse_optional_qt_frames(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        frames = int(value)
+    except (TypeError, ValueError):
+        return None
+    if frames not in QT_AUDIO_FRAME_OPTIONS:
+        return None
+    return frames
 
 
 def _settings_path() -> Path:

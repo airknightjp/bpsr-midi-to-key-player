@@ -28,10 +28,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.keyboard_play_shortcut, "F9")
         self.assertEqual(settings.keyboard_pause_shortcut, "F10")
         self.assertEqual(settings.keyboard_stop_shortcut, "F11")
-        self.assertFalse(hasattr(settings, "audio_buffer_frames"))
+        self.assertEqual(settings.automatic_audio_buffer_frames, 512)
         self.assertFalse(hasattr(settings, "auto_audio_buffer"))
+        self.assertIsNone(settings.minimum_stable_qt_frames)
+        self.assertEqual(settings.qt_audio_environment, "")
+        self.assertFalse(hasattr(settings, "qt_frames_retest_after"))
         self.assertEqual(settings.input_conversion_mode, "midi_file")
         self.assertEqual(settings.sound_playback_mode, "off")
+        self.assertFalse(settings.hide_release_notes_on_startup)
         self.assertEqual(
             settings.panel_order,
             (
@@ -41,6 +45,16 @@ class SettingsTests(unittest.TestCase):
                 "keyboard",
                 "player",
             ),
+        )
+        self.assertEqual(
+            settings.section_visibility,
+            {
+                "input_conversion": True,
+                "common_settings": True,
+                "piano_roll": True,
+                "keyboard": True,
+                "player": True,
+            },
         )
 
     def test_default_theme_is_sky_blue(self) -> None:
@@ -70,6 +84,7 @@ class SettingsTests(unittest.TestCase):
                     color_theme="orange",
                     always_on_top=True,
                     tray_resident=True,
+                    hide_release_notes_on_startup=True,
                     window_opacity=75,
                     ui_scale_percent=150,
                     window_width=1280,
@@ -85,6 +100,9 @@ class SettingsTests(unittest.TestCase):
                     sustain_key="space",
                     octave_down_key="[",
                     octave_up_key="]",
+                    automatic_audio_buffer_frames=2_048,
+                    minimum_stable_qt_frames=512,
+                    qt_audio_environment="device|48000|2|Float",
                     panel_order=(
                         "player",
                         "keyboard",
@@ -92,6 +110,13 @@ class SettingsTests(unittest.TestCase):
                         "common_settings",
                         "input_conversion",
                     ),
+                    section_visibility={
+                        "input_conversion": True,
+                        "common_settings": False,
+                        "piano_roll": False,
+                        "keyboard": True,
+                        "player": False,
+                    },
                 )
             )
 
@@ -102,6 +127,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.sound_source, "synth")
         self.assertTrue(loaded.always_on_top)
         self.assertTrue(loaded.tray_resident)
+        self.assertTrue(loaded.hide_release_notes_on_startup)
         self.assertEqual(loaded.window_opacity, 75)
         self.assertEqual(loaded.ui_scale_percent, 150)
         self.assertEqual(loaded.window_width, 1280)
@@ -126,6 +152,16 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.midi_input_device, "USB MIDI")
         self.assertEqual(loaded.input_conversion_mode, "realtime")
         self.assertEqual(loaded.panel_order[0], "player")
+        self.assertEqual(
+            loaded.section_visibility,
+            {
+                "input_conversion": True,
+                "common_settings": False,
+                "piano_roll": False,
+                "keyboard": True,
+                "player": False,
+            },
+        )
         key_bindings = normalized_key_bindings(loaded.key_bindings)
         self.assertEqual(key_bindings[60], "q")
         self.assertEqual(key_bindings[61], "w")
@@ -133,6 +169,39 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.sustain_key, "space")
         self.assertEqual(loaded.octave_down_key, "[")
         self.assertEqual(loaded.octave_up_key, "]")
+        self.assertEqual(loaded.automatic_audio_buffer_frames, 2_048)
+        self.assertEqual(loaded.minimum_stable_qt_frames, 512)
+        self.assertEqual(
+            loaded.qt_audio_environment,
+            "device|48000|2|Float",
+        )
+
+    def test_invalid_qt_value_and_legacy_retest_date_are_discarded(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            settings_path = settings_dir / "settings.json"
+            settings_path.write_text(
+                '{"minimum_stable_qt_frames":333,'
+                '"qt_frames_retest_after":1800000000}',
+                encoding="utf-8",
+            )
+
+            loaded = load_settings()
+            save_settings(loaded)
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+
+        self.assertIsNone(loaded.minimum_stable_qt_frames)
+        self.assertNotIn("qt_frames_retest_after", saved)
+
+    def test_invalid_audio_buffer_value_uses_default(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            (settings_dir / "settings.json").write_text(
+                '{"automatic_audio_buffer_frames":333}',
+                encoding="utf-8",
+            )
+
+            loaded = load_settings()
+
+        self.assertEqual(loaded.automatic_audio_buffer_frames, 512)
 
     def test_invalid_panel_order_is_repaired_without_duplicates(self) -> None:
         with isolated_settings_directory() as settings_dir:
@@ -146,6 +215,31 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.panel_order[:2], ("player", "keyboard"))
         self.assertEqual(len(loaded.panel_order), 5)
         self.assertEqual(len(set(loaded.panel_order)), 5)
+
+    def test_invalid_section_visibility_values_use_visible_defaults(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            (settings_dir / "settings.json").write_text(
+                '{"section_visibility": {'
+                '"input_conversion": false,'
+                '"common_settings": "false",'
+                '"piano_roll": true,'
+                '"unknown": false'
+                "}}",
+                encoding="utf-8",
+            )
+
+            loaded = load_settings()
+
+        self.assertEqual(
+            loaded.section_visibility,
+            {
+                "input_conversion": False,
+                "common_settings": True,
+                "piano_roll": True,
+                "keyboard": True,
+                "player": True,
+            },
+        )
 
     def test_note_shift_settings_are_clamped(self) -> None:
         with isolated_settings_directory() as settings_dir:

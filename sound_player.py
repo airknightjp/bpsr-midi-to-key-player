@@ -6,6 +6,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 
+from audio_buffer import DEFAULT_AUDIO_BUFFER_FRAMES
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, RealtimeAutoSustain, plan_auto_sustain
 from chord_optimization import ChordOptimizationPlan
 from chord_optimization_planner import ChordOptimizationPlanner, ChordOptimizationRequest
@@ -30,6 +31,7 @@ PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
 OutputNoteCallback = Callable[[int, bool], None]
 AudioRuntimeChangedCallback = Callable[[int, int, str], None]
+QtLearningChangedCallback = Callable[[int | None, str], None]
 ChannelProvider = Callable[[], set[int]]
 SourceProvider = Callable[[], set[tuple[int, int]]]
 POSITION_REPORT_INTERVAL_SECONDS = 1.0 / 30.0
@@ -58,6 +60,10 @@ class MidiSoundPlayer:
         playback_speed_percent: int = 100,
         sound_source: str = DEFAULT_SOUND_SOURCE,
         on_audio_runtime_changed: AudioRuntimeChangedCallback | None = None,
+        audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES,
+        minimum_stable_qt_frames: int | None = None,
+        qt_audio_environment: str = "",
+        on_qt_learning_changed: QtLearningChangedCallback | None = None,
     ):
         self.log = log or (lambda _message: None)
         self.on_state = on_state or (lambda _state: None)
@@ -87,6 +93,10 @@ class MidiSoundPlayer:
         self._synth = SoftwareSynthClient(
             self.sound_source,
             on_runtime_changed=on_audio_runtime_changed,
+            buffer_frames=audio_buffer_frames,
+            minimum_stable_qt_frames=minimum_stable_qt_frames,
+            qt_audio_environment=qt_audio_environment,
+            on_qt_learning_changed=on_qt_learning_changed,
         )
         self._random = random.Random()
         self._clock: PlaybackClock | None = None
@@ -863,6 +873,10 @@ class RealtimeMidiSoundOutput:
         repeat_prevention: bool = False,
         sound_source: str = DEFAULT_SOUND_SOURCE,
         on_audio_runtime_changed: AudioRuntimeChangedCallback | None = None,
+        audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES,
+        minimum_stable_qt_frames: int | None = None,
+        qt_audio_environment: str = "",
+        on_qt_learning_changed: QtLearningChangedCallback | None = None,
     ):
         self.log = log or (lambda _message: None)
         self._volume = self._clamp_volume(volume)
@@ -880,6 +894,10 @@ class RealtimeMidiSoundOutput:
         self._synth = SoftwareSynthClient(
             self.sound_source,
             on_runtime_changed=on_audio_runtime_changed,
+            buffer_frames=audio_buffer_frames,
+            minimum_stable_qt_frames=minimum_stable_qt_frames,
+            qt_audio_environment=qt_audio_environment,
+            on_qt_learning_changed=on_qt_learning_changed,
         )
         self._enabled = False
         self._active_notes: set[tuple[int, int]] = set()

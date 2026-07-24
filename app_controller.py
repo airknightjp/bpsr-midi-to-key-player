@@ -8,7 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Protocol
 
-from audio_buffer import normalize_audio_buffer_frames
+from audio_buffer import (
+    normalize_audio_buffer_frames,
+    normalize_qt_audio_frames,
+)
 from app_state import AppState, MidiListRow, TrackChannelItem
 from chord_optimization import ChordOptimizationPlan
 from config import (
@@ -35,6 +38,7 @@ from config import (
     normalize_special_binding,
     normalize_input_conversion_mode,
     normalize_panel_order,
+    normalize_section_visibility,
     normalize_sound_playback_mode,
 )
 from global_hotkeys import GlobalHotkeyManager, shortcut_to_hotkey_spec
@@ -65,8 +69,6 @@ class ControllerView(Protocol):
 
     def show_message(self, level: str, title: str, message: str) -> None: ...
 
-    def schedule_settings_save(self, delay_ms: int) -> None: ...
-
     def schedule_output_note_release(self, delay_ms: int) -> None: ...
 
     def schedule_rhythm_score_update(self, delay_ms: int | None) -> None: ...
@@ -83,9 +85,6 @@ class NullView:
         pass
 
     def show_message(self, _level: str, _title: str, _message: str) -> None:
-        pass
-
-    def schedule_settings_save(self, _delay_ms: int) -> None:
         pass
 
     def schedule_output_note_release(self, _delay_ms: int) -> None:
@@ -132,6 +131,9 @@ class AppController:
             shortcut_locked=self.settings.shortcut_locked,
             always_on_top=self.settings.always_on_top,
             tray_resident=self.settings.tray_resident,
+            hide_release_notes_on_startup=(
+                self.settings.hide_release_notes_on_startup
+            ),
             window_opacity=self.settings.window_opacity,
             ui_scale_percent=self._normalize_ui_scale(self.settings.ui_scale_percent),
             window_width=max(1, self.settings.window_width),
@@ -140,13 +142,23 @@ class AppController:
             input_conversion_mode=normalize_input_conversion_mode(
                 self.settings.input_conversion_mode
             ),
+            section_visibility=normalize_section_visibility(
+                self.settings.section_visibility
+            ),
             panel_order=normalize_panel_order(self.settings.panel_order),
+            audio_buffer_frames=normalize_audio_buffer_frames(
+                self.settings.automatic_audio_buffer_frames
+            ),
         )
         self.view: ControllerView = NullView()
         self.events: list[MidiEvent] = []
         self.summary: MidiSummary | None = None
         self.midi_files: list[Path] = []
         self.last_midi_folder = self.settings.last_midi_folder
+        self.minimum_stable_qt_frames = (
+            self.settings.minimum_stable_qt_frames
+        )
+        self.qt_audio_environment = self.settings.qt_audio_environment
         self.key_bindings = normalized_key_bindings(self.settings.key_bindings)
         self.enabled_sources_snapshot: frozenset[tuple[int, int]] = frozenset()
         self.enabled_channels_snapshot: frozenset[int] = frozenset()
@@ -176,6 +188,7 @@ class AppController:
         self.global_hotkeys: GlobalHotkeyManager | None = None
         self.hotkey_failure_signature: tuple[str, ...] = ()
         self.settings_save_error = ""
+        self._settings_dirty = False
         self.exiting = False
 
     def attach_view(self, view: ControllerView) -> None:
@@ -591,6 +604,12 @@ class AppController:
             on_audio_runtime_changed=lambda qt_frames, buffer_frames, reason: self._queue_worker_message(
                 ("audio_runtime", qt_frames, buffer_frames, reason)
             ),
+            audio_buffer_frames=self.state.audio_buffer_frames,
+            minimum_stable_qt_frames=self.minimum_stable_qt_frames,
+            qt_audio_environment=self.qt_audio_environment,
+            on_qt_learning_changed=lambda frames, environment: self._queue_worker_message(
+                ("qt_learning", frames, environment)
+            ),
             auto_fit_note_range=self.state.auto_fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
@@ -669,6 +688,12 @@ class AppController:
             sound_source=self.state.sound_source,
             on_audio_runtime_changed=lambda qt_frames, buffer_frames, reason: self._queue_worker_message(
                 ("audio_runtime", qt_frames, buffer_frames, reason)
+            ),
+            audio_buffer_frames=self.state.audio_buffer_frames,
+            minimum_stable_qt_frames=self.minimum_stable_qt_frames,
+            qt_audio_environment=self.qt_audio_environment,
+            on_qt_learning_changed=lambda frames, environment: self._queue_worker_message(
+                ("qt_learning", frames, environment)
             ),
             log=lambda message: self._queue_worker_message(("log", message)),
             transpose_semitones=self.state.transpose_semitones,
@@ -754,6 +779,7 @@ class AppController:
             "shortcut_locked",
             "always_on_top",
             "tray_resident",
+            "hide_release_notes_on_startup",
         }:
             setattr(self.state, name, bool(value))
         elif name == "countdown_seconds":
@@ -812,7 +838,11 @@ class AppController:
     def set_section_visible(self, section: str, visible: bool) -> None:
         if section not in self.state.section_visibility:
             raise ValueError(f"Unknown section: {section}")
-        self.state.section_visibility[section] = bool(visible)
+        next_visible = bool(visible)
+        self.state.section_visibility[section] = next_visible
+        if section == "piano_roll" and not next_visible:
+            self._cancel_rhythm_scoring_pending()
+        self.request_save()
         self._notify()
 
     def set_panel_order(self, panel_order: object) -> None:
@@ -986,9 +1016,12 @@ class AppController:
                     except (TypeError, ValueError):
                         qt_frames = self.state.audio_qt_frames
                     buffer_frames = normalize_audio_buffer_frames(message[2])
+                    buffer_changed = (
+                        buffer_frames != self.state.audio_buffer_frames
+                    )
                     if (
                         qt_frames != self.state.audio_qt_frames
-                        or buffer_frames != self.state.audio_buffer_frames
+                        or buffer_changed
                     ):
                         self.state.audio_qt_frames = qt_frames
                         self.state.audio_buffer_frames = buffer_frames
@@ -996,6 +1029,26 @@ class AppController:
                         if reason:
                             self._log(reason)
                         changed = True
+                        if buffer_changed:
+                            self.request_save()
+                    continue
+                if kind == "qt_learning":
+                    minimum_stable_qt_frames = (
+                        normalize_qt_audio_frames(message[1])
+                        if message[1] is not None
+                        else None
+                    )
+                    audio_environment = str(message[2])
+                    if (
+                        minimum_stable_qt_frames
+                        != self.minimum_stable_qt_frames
+                        or audio_environment != self.qt_audio_environment
+                    ):
+                        self.minimum_stable_qt_frames = (
+                            minimum_stable_qt_frames
+                        )
+                        self.qt_audio_environment = audio_environment
+                        self.request_save()
                     continue
                 if kind == "hotkey":
                     if message[1] == "play":
@@ -1084,41 +1137,43 @@ class AppController:
                     )
                     rhythm_hit: RhythmHit | None = None
                     released = not pressed
-                    if kind == "key_output_note" and self.state.keyboard_playing:
-                        rhythm_hit = (
-                            self._rhythm_scorer.record_automatic_perfect(
+                    if self._rhythm_scoring_is_enabled():
+                        if (
+                            kind == "key_output_note"
+                            and self.state.keyboard_playing
+                        ):
+                            rhythm_hit = self._rhythm_scorer.record_automatic_perfect(
                                 note,
                                 released=released,
                                 timestamp=event_at,
                             )
-                        )
-                    elif (
-                        kind == "sound_output_note"
-                        and self.state.sound_playing
-                    ):
-                        if self.state.midi_input_running:
-                            rhythm_hit = self._rhythm_scorer.record_expected(
+                        elif (
+                            kind == "sound_output_note"
+                            and self.state.sound_playing
+                        ):
+                            if self.state.midi_input_running:
+                                rhythm_hit = self._rhythm_scorer.record_expected(
+                                    note,
+                                    event_at,
+                                    released=released,
+                                )
+                            else:
+                                rhythm_hit = (
+                                    self._rhythm_scorer.record_automatic_perfect(
+                                        note,
+                                        released=released,
+                                        timestamp=event_at,
+                                    )
+                                )
+                        elif (
+                            source_kind == "midi"
+                            and self._rhythm_scoring_is_active()
+                        ):
+                            rhythm_hit = self._rhythm_scorer.record_input(
                                 note,
                                 event_at,
                                 released=released,
                             )
-                        elif self.state.sound_playing:
-                            rhythm_hit = (
-                                self._rhythm_scorer.record_automatic_perfect(
-                                    note,
-                                    released=released,
-                                    timestamp=event_at,
-                                )
-                            )
-                    elif (
-                        source_kind == "midi"
-                        and self._rhythm_scoring_is_active()
-                    ):
-                        rhythm_hit = self._rhythm_scorer.record_input(
-                            note,
-                            event_at,
-                            released=released,
-                        )
                     if rhythm_hit is not None:
                         changed = (
                             self._record_rhythm_hit_event(rhythm_hit)
@@ -1150,7 +1205,8 @@ class AppController:
             if self._rhythm_scoring_is_active():
                 self._rhythm_scorer.expire(time.monotonic())
                 changed = self._sync_rhythm_score_state() or changed
-            changed = self._record_pending_rhythm_miss_events() or changed
+            if self._rhythm_scoring_is_enabled():
+                changed = self._record_pending_rhythm_miss_events() or changed
             self._schedule_rhythm_score_update()
             changed = self._expire_output_note_releases() or changed
             if changed:
@@ -1184,9 +1240,9 @@ class AppController:
         return self.state.sound_playing
 
     def request_save(self) -> None:
-        self.view.schedule_settings_save(300)
+        self._settings_dirty = True
 
-    def flush_settings(self) -> None:
+    def save_settings_now(self) -> bool:
         try:
             save_settings(self.current_settings())
         except Exception as exc:
@@ -1194,10 +1250,15 @@ class AppController:
             if message != self.settings_save_error:
                 self._log(message)
             self.settings_save_error = message
-            if not self.exiting:
-                self.view.schedule_settings_save(2000)
+            return False
         else:
             self.settings_save_error = ""
+            self._settings_dirty = False
+            return True
+
+    def _save_settings_on_shutdown(self) -> None:
+        if self._settings_dirty:
+            self.save_settings_now()
 
     def current_settings(self) -> AppSettings:
         return AppSettings(
@@ -1221,6 +1282,9 @@ class AppController:
             color_theme=self.state.color_theme,
             always_on_top=self.state.always_on_top,
             tray_resident=self.state.tray_resident,
+            hide_release_notes_on_startup=(
+                self.state.hide_release_notes_on_startup
+            ),
             window_opacity=self.state.window_opacity,
             ui_scale_percent=self.state.ui_scale_percent,
             window_width=self.state.window_width,
@@ -1237,6 +1301,12 @@ class AppController:
             octave_down_key=self.state.octave_down_key,
             octave_up_key=self.state.octave_up_key,
             panel_order=normalize_panel_order(self.state.panel_order),
+            section_visibility=normalize_section_visibility(
+                self.state.section_visibility
+            ),
+            automatic_audio_buffer_frames=self.state.audio_buffer_frames,
+            minimum_stable_qt_frames=self.minimum_stable_qt_frames,
+            qt_audio_environment=self.qt_audio_environment,
         )
 
     def shutdown(self) -> None:
@@ -1248,7 +1318,7 @@ class AppController:
         self._unbind_global_hotkeys()
         self.stop_midi_input()
         self.stop_playback()
-        self.flush_settings()
+        self._save_settings_on_shutdown()
 
     def _apply_live_option(self, name: str) -> None:
         if name == "dry_run":
@@ -1559,8 +1629,15 @@ class AppController:
         self.midi_input_id += 1
         return self.midi_input_id
 
+    def _rhythm_scoring_is_enabled(self) -> bool:
+        return bool(self.state.section_visibility.get("piano_roll", True))
+
     def _rhythm_scoring_is_active(self) -> bool:
-        return self.state.sound_playing and self.state.midi_input_running
+        return (
+            self._rhythm_scoring_is_enabled()
+            and self.state.sound_playing
+            and self.state.midi_input_running
+        )
 
     def _reset_rhythm_score(self) -> bool:
         changed = self._rhythm_scorer.reset()
@@ -1803,6 +1880,9 @@ class AppController:
             self._notify()
 
     def process_rhythm_score_update(self) -> None:
+        if not self._rhythm_scoring_is_enabled():
+            self.view.schedule_rhythm_score_update(None)
+            return
         changed = self._rhythm_scorer.expire(time.monotonic())
         changed = self._sync_rhythm_score_state() or changed
         changed = self._record_pending_rhythm_miss_events() or changed
@@ -1811,6 +1891,9 @@ class AppController:
             self._notify()
 
     def _schedule_rhythm_score_update(self) -> None:
+        if not self._rhythm_scoring_is_enabled():
+            self.view.schedule_rhythm_score_update(None)
+            return
         delay_ms = self._rhythm_scorer.next_update_delay_ms(time.monotonic())
         self.view.schedule_rhythm_score_update(delay_ms)
 

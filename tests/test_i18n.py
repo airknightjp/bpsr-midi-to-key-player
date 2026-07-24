@@ -24,16 +24,44 @@ class I18nTests(unittest.TestCase):
 
     def test_file_menu_and_exit_labels_exist_for_all_languages(self) -> None:
         expected = {
-            "en": ("File", "Exit"),
-            "ja": ("\u30d5\u30a1\u30a4\u30eb", "\u7d42\u4e86"),
-            "zh": ("\u6587\u4ef6", "\u9000\u51fa"),
+            "en": ("File", "Save Settings", "Exit"),
+            "ja": (
+                "\u30d5\u30a1\u30a4\u30eb",
+                "\u8a2d\u5b9a\u3092\u4fdd\u5b58",
+                "\u7d42\u4e86",
+            ),
+            "zh": (
+                "\u6587\u4ef6",
+                "\u4fdd\u5b58\u8bbe\u7f6e",
+                "\u9000\u51fa",
+            ),
         }
 
         for language, labels in expected.items():
             with self.subTest(language=language):
                 translations = TEXT[language]
                 self.assertEqual(translations["menu_midi"], labels[0])
-                self.assertEqual(translations["exit"], labels[1])
+                self.assertEqual(translations["save_settings"], labels[1])
+                self.assertEqual(translations["exit"], labels[2])
+
+    def test_release_notes_labels_exist_for_all_languages(self) -> None:
+        expected = {
+            "en": ("Release Notes", "Don't show again"),
+            "ja": (
+                "\u30ea\u30ea\u30fc\u30b9\u30ce\u30fc\u30c8",
+                "\u4eca\u5f8c\u8868\u793a\u3057\u306a\u3044",
+            ),
+            "zh": (
+                "\u53d1\u884c\u8bf4\u660e",
+                "\u4ee5\u540e\u4e0d\u518d\u663e\u793a",
+            ),
+        }
+        for language, labels in expected.items():
+            with self.subTest(language=language):
+                translations = TEXT[language]
+                self.assertEqual(translations["release_notes"], labels[0])
+                self.assertEqual(translations["dont_show_again"], labels[1])
+                self.assertEqual(translations["release_notes_content"], "")
 
     def test_view_scale_and_advanced_settings_labels_exist_for_all_languages(self) -> None:
         expected = {
@@ -47,6 +75,45 @@ class I18nTests(unittest.TestCase):
                 translations = TEXT[language]
                 self.assertEqual(translations["ui_scale"], labels[0])
                 self.assertEqual(translations["midi_sound_settings"], labels[1])
+
+    def test_panel_visibility_labels_exist_for_all_languages(self) -> None:
+        expected = {
+            "en": (
+                "Basic Screen",
+                "Advanced Settings",
+                "Rhythm Game",
+                "Keyboard",
+                "Player",
+            ),
+            "ja": (
+                "\u57fa\u672c\u753b\u9762",
+                "\u8a73\u7d30\u8a2d\u5b9a",
+                "\u97f3\u30b2\u30fc",
+                "\u9375\u76e4",
+                "\u30d7\u30ec\u30a4\u30e4\u30fc",
+            ),
+            "zh": (
+                "\u57fa\u672c\u754c\u9762",
+                "\u8be6\u7ec6\u8bbe\u7f6e",
+                "\u97f3\u4e50\u6e38\u620f",
+                "\u952e\u76d8",
+                "\u64ad\u653e\u5668",
+            ),
+        }
+        keys = (
+            "basic_screen_panel",
+            "advanced_settings_panel",
+            "rhythm_game_panel",
+            "keyboard_panel",
+            "player_panel",
+        )
+        for language, labels in expected.items():
+            with self.subTest(language=language):
+                translations = TEXT[language]
+                self.assertEqual(
+                    tuple(translations[key] for key in keys),
+                    labels,
+                )
 
     def test_conversion_stop_labels_use_end_in_every_language(self) -> None:
         expected = {
@@ -62,8 +129,8 @@ class I18nTests(unittest.TestCase):
     def test_audio_runtime_label_exists_for_all_languages(self) -> None:
         expected = {
             "en": "Qt 512 | Buffer 512",
-            "ja": "Qt 512 | \u30d0\u30c3\u30d5\u30a1 512",
-            "zh": "Qt 512 | \u7f13\u51b2\u533a 512",
+            "ja": "Qt 512 | Buffer 512",
+            "zh": "Qt 512 | Buffer 512",
         }
         for language, label in expected.items():
             with self.subTest(language=language):

@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import inspect
+import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import software_synth
 import sound_player
-from audio_buffer import AUDIO_BUFFER_FRAME_OPTIONS
+from audio_buffer import (
+    AUDIO_BUFFER_FRAME_OPTIONS,
+    QT_AUDIO_FRAME_OPTIONS,
+    qt_audio_frame_ceiling,
+)
 from PySide6.QtMultimedia import QAudio
 from software_synth import (
+    AudioBufferDecision,
     AudioBufferAutoPolicy,
     AudioSupplyMetrics,
+    QtAudioAutoPolicy,
     SoftwareSynthStream,
 )
 
@@ -396,7 +403,7 @@ class SoftwareSynthTests(unittest.TestCase):
 
         self.assertEqual(
             stream.minimum_effective_buffer_frames(),
-            software_synth.DEFAULT_AUDIO_BUFFER_FRAMES,
+            AUDIO_BUFFER_FRAME_OPTIONS[0],
         )
         self.assertEqual(
             stream._target_ring_bytes(),
@@ -413,6 +420,24 @@ class SoftwareSynthTests(unittest.TestCase):
         self.assertEqual(len(metrics.supply_delays), 1)
         self.assertEqual(len(metrics.shortages), 1)
         self.assertEqual(metrics.synthesis_durations[-1][1], 0.01)
+
+    def test_output_underrun_is_marked_when_pcm_producer_was_empty(self) -> None:
+        stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
+        now = time.monotonic()
+
+        with patch(
+            "software_synth.time.monotonic",
+            side_effect=(now, now + 0.01),
+        ):
+            stream._record_output_underrun()
+            stream._record_output_underrun(producer_starved=True)
+
+        metrics = stream.metrics_snapshot()
+        self.assertEqual(metrics.output_underruns, (now,))
+        self.assertEqual(
+            metrics.producer_starved_output_underruns,
+            (now,),
+        )
 
     def test_live_buffer_change_keeps_the_audio_worker_and_pcm_flowing(self) -> None:
         stream = SoftwareSynthStream(
@@ -467,7 +492,7 @@ class SoftwareSynthTests(unittest.TestCase):
             AUDIO_BUFFER_FRAME_OPTIONS[-1],
         )
 
-    def test_push_output_writes_only_the_low_latency_target(self) -> None:
+    def test_push_output_fills_the_active_qt_queue_target(self) -> None:
         class FakeStream:
             def __init__(self) -> None:
                 self.requests = []
@@ -527,7 +552,7 @@ class SoftwareSynthTests(unittest.TestCase):
         worker.pump()
 
         write_count = (
-            software_synth.PUSH_TARGET_FRAMES
+            sink.bufferFrameCount()
             + software_synth.PUSH_WRITE_FRAMES
             - 1
         ) // software_synth.PUSH_WRITE_FRAMES
@@ -535,15 +560,18 @@ class SoftwareSynthTests(unittest.TestCase):
             stream.requests,
             [software_synth.PUSH_WRITE_FRAMES] * write_count,
         )
-        self.assertEqual(sink.queued_frames, software_synth.PUSH_TARGET_FRAMES)
+        self.assertEqual(sink.queued_frames, sink.bufferFrameCount())
         self.assertEqual(len(output.writes), write_count)
         self.assertEqual(stream.shortages, 0)
 
-    def test_push_target_keeps_one_backend_period_of_guard_audio(self) -> None:
-        self.assertGreaterEqual(
-            software_synth.PUSH_TARGET_FRAMES - 512,
-            512,
+    def test_qt_queue_candidates_include_low_latency_and_safe_sizes(self) -> None:
+        self.assertEqual(
+            QT_AUDIO_FRAME_OPTIONS,
+            (128, 256, 512, 1_024, 2_048, 4_096),
         )
+        self.assertEqual(qt_audio_frame_ceiling(100), 128)
+        self.assertEqual(qt_audio_frame_ceiling(480), 512)
+        self.assertEqual(qt_audio_frame_ceiling(512), 512)
 
     def test_push_output_waits_for_pcm_while_qt_still_has_audio(self) -> None:
         stream = Mock()
@@ -598,6 +626,30 @@ class SoftwareSynthTests(unittest.TestCase):
 
         stream._record_supply_shortage.assert_called_once_with()
         output.write.assert_not_called()
+
+    def test_push_output_records_qt_underrun_after_primed_queue_empties(self) -> None:
+        stream = Mock()
+        stream.take_pcm_frames.return_value = b""
+        sink = Mock()
+        sink.state.return_value = QAudio.State.ActiveState
+        sink.error.return_value = QAudio.Error.NoError
+        sink.bufferFrameCount.return_value = 512
+        sink.framesFree.return_value = 512
+
+        worker = software_synth._PushAudioOutput(
+            stream,
+            Mock(),
+            software_synth.QAudioFormat(),
+            512,
+        )
+        worker._sink = sink
+        worker._output_device = Mock()
+        worker.started_ok = True
+        worker._primed = True
+
+        worker.pump()
+
+        stream._record_output_underrun.assert_called()
 
     def test_software_synth_stream_has_no_qt_pull_interface(self) -> None:
         stream = SoftwareSynthStream()
@@ -693,12 +745,409 @@ class SoftwareSynthTests(unittest.TestCase):
 
         decision = policy.evaluate(
             21.0,
-            512,
+            128,
             metrics,
-            minimum_frames=512,
+            minimum_frames=128,
         )
 
         self.assertIsNone(decision)
+
+    def test_auto_buffer_can_reduce_from_default_to_128_frames(self) -> None:
+        policy = AudioBufferAutoPolicy(now=0.0)
+
+        reduced_to_256 = policy.evaluate(
+            21.0,
+            512,
+            AudioSupplyMetrics(
+                shortages=(),
+                synthesis_utilization=tuple(
+                    (float(second), 0.10)
+                    for second in range(1, 22)
+                ),
+            ),
+            minimum_frames=128,
+        )
+        self.assertIsNotNone(reduced_to_256)
+        assert reduced_to_256 is not None
+        self.assertEqual(reduced_to_256.frames, 256)
+
+        reduced_to_128 = policy.evaluate(
+            42.0,
+            256,
+            AudioSupplyMetrics(
+                shortages=(),
+                synthesis_utilization=tuple(
+                    (float(second), 0.10)
+                    for second in range(22, 43)
+                ),
+            ),
+            minimum_frames=128,
+        )
+        self.assertIsNotNone(reduced_to_128)
+        assert reduced_to_128 is not None
+        self.assertEqual(reduced_to_128.frames, 128)
+
+    def test_auto_buffer_waits_after_qt_output_underrun_before_reducing(
+        self,
+    ) -> None:
+        policy = AudioBufferAutoPolicy(now=0.0)
+        metrics = AudioSupplyMetrics(
+            shortages=(),
+            synthesis_utilization=tuple(
+                (float(second), 0.10)
+                for second in range(1, 22)
+            ),
+            output_underruns=(20.0,),
+        )
+
+        decision = policy.evaluate(21.0, 2_048, metrics)
+
+        self.assertIsNone(decision)
+
+    @staticmethod
+    def _active_metrics(
+        start: int,
+        end: int,
+        *,
+        underruns: tuple[float, ...] = (),
+        currently_active: bool = False,
+    ) -> AudioSupplyMetrics:
+        return AudioSupplyMetrics(
+            shortages=(),
+            synthesis_utilization=(),
+            output_underruns=underruns,
+            audio_activity=tuple(
+                float(second)
+                for second in range(start, end + 1)
+            ),
+            currently_active_audio=currently_active,
+        )
+
+    def test_qt_policy_probes_down_to_128_before_learning_minimum(self) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+
+        first = policy.evaluate(
+            61.0,
+            1_024,
+            self._active_metrics(1, 61),
+        )
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertEqual(first.frames, 512)
+        self.assertIsNone(first.learned_minimum_frames)
+
+        learned_512 = policy.evaluate(
+            122.0,
+            512,
+            self._active_metrics(62, 122),
+        )
+        self.assertIsNotNone(learned_512)
+        assert learned_512 is not None
+        self.assertEqual(learned_512.frames, 512)
+        self.assertEqual(learned_512.learned_minimum_frames, 512)
+
+        second = policy.evaluate(
+            183.0,
+            512,
+            self._active_metrics(123, 183),
+        )
+        self.assertIsNotNone(second)
+        assert second is not None
+        self.assertEqual(second.frames, 256)
+        self.assertIsNone(second.learned_minimum_frames)
+
+        learned_256 = policy.evaluate(
+            244.0,
+            256,
+            self._active_metrics(184, 244),
+        )
+        self.assertIsNotNone(learned_256)
+        assert learned_256 is not None
+        self.assertEqual(learned_256.frames, 256)
+        self.assertEqual(learned_256.learned_minimum_frames, 256)
+
+        third = policy.evaluate(
+            305.0,
+            256,
+            self._active_metrics(245, 305),
+        )
+        self.assertIsNotNone(third)
+        assert third is not None
+        self.assertEqual(third.frames, 128)
+        self.assertIsNone(third.learned_minimum_frames)
+
+        learned = policy.evaluate(
+            366.0,
+            128,
+            self._active_metrics(306, 366),
+        )
+        self.assertIsNotNone(learned)
+        assert learned is not None
+        self.assertEqual(learned.frames, 128)
+        self.assertEqual(learned.learned_minimum_frames, 128)
+
+    def test_qt_policy_restores_failed_probe_after_one_underrun(self) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+        reduced = policy.evaluate(
+            61.0,
+            1_024,
+            self._active_metrics(1, 61),
+        )
+        self.assertIsNotNone(reduced)
+
+        restored = policy.evaluate(
+            62.0,
+            512,
+            self._active_metrics(62, 62, underruns=(62.0,)),
+        )
+
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored.frames, 1_024)
+        self.assertIsNone(restored.learned_minimum_frames)
+        self.assertIn(512, policy.failed_candidates)
+
+    def test_qt_policy_does_not_repeat_failed_probe_in_same_session(
+        self,
+    ) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+        policy.evaluate(
+            61.0,
+            1_024,
+            self._active_metrics(1, 61),
+        )
+        policy.evaluate(
+            62.0,
+            512,
+            self._active_metrics(62, 62, underruns=(62.0,)),
+        )
+        repeated = policy.evaluate(
+            123.0,
+            1_024,
+            self._active_metrics(63, 123),
+        )
+
+        self.assertIsNone(repeated)
+
+    def test_qt_policy_retries_failed_value_in_new_session(self) -> None:
+        policy = QtAudioAutoPolicy(
+            minimum_stable_frames=1_024,
+            now=0.0,
+        )
+        decision = policy.evaluate(
+            61.0,
+            1_024,
+            self._active_metrics(1, 61),
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.frames, 512)
+
+    def test_qt_policy_increases_after_repeated_output_underruns(self) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+        decision = policy.evaluate(
+            3.0,
+            1_024,
+            AudioSupplyMetrics(
+                shortages=(),
+                synthesis_utilization=(),
+                output_underruns=(1.0, 2.0, 3.0),
+            ),
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.frames, 2_048)
+        self.assertEqual(decision.learned_minimum_frames, 2_048)
+
+    def test_qt_policy_ignores_producer_starved_output_underruns(self) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+        decision = policy.evaluate(
+            3.0,
+            1_024,
+            AudioSupplyMetrics(
+                shortages=(1.0, 2.0, 3.0),
+                synthesis_utilization=(),
+                output_underruns=(1.0, 2.0, 3.0),
+                producer_starved_output_underruns=(1.0, 2.0, 3.0),
+            ),
+        )
+
+        self.assertIsNone(decision)
+
+    def test_qt_policy_returns_no_decision_at_maximum_queue(self) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+        decision = policy.evaluate(
+            3.0,
+            QT_AUDIO_FRAME_OPTIONS[-1],
+            AudioSupplyMetrics(
+                shortages=(),
+                synthesis_utilization=(),
+                output_underruns=(1.0, 2.0, 3.0),
+            ),
+        )
+
+        self.assertIsNone(decision)
+
+    def test_qt_policy_waits_after_producer_pressure_before_reducing(
+        self,
+    ) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+        metrics = self._active_metrics(1, 61)
+        metrics = AudioSupplyMetrics(
+            shortages=(60.0,),
+            synthesis_utilization=metrics.synthesis_utilization,
+            audio_activity=metrics.audio_activity,
+        )
+
+        decision = policy.evaluate(61.0, 1_024, metrics)
+
+        self.assertIsNone(decision)
+
+    def test_monitor_prioritizes_pcm_buffer_when_both_layers_report_low(
+        self,
+    ) -> None:
+        engine = object.__new__(software_synth.SoftwareSynthEngine)
+        metrics = AudioSupplyMetrics(
+            shortages=(1.0, 2.0, 3.0),
+            synthesis_utilization=(),
+            output_underruns=(1.0, 2.0, 3.0),
+            producer_starved_output_underruns=(1.0, 2.0, 3.0),
+        )
+        engine.stream = Mock()
+        engine.stream.metrics_snapshot.return_value = metrics
+        engine.stream.minimum_effective_buffer_frames.return_value = 128
+        engine._monitor_stop = Mock()
+        engine._monitor_stop.wait.side_effect = (False, True)
+        engine._lock = threading.RLock()
+        engine._output_worker = Mock()
+        engine._active_clients = {1}
+        engine._runtime_callbacks = {}
+        engine._qt_learning_callbacks = {}
+        engine._buffer_policy = Mock()
+        engine._buffer_policy.evaluate.return_value = AudioBufferDecision(
+            1_024,
+            "producer reserve increased",
+        )
+        engine._qt_policy = Mock()
+        engine.buffer_frames = 512
+        engine.qt_frames = 1_024
+        engine._requested_qt_frames = 1_024
+        engine.minimum_stable_qt_frames = None
+        engine.qt_audio_environment = "device|48000|2|Float"
+
+        def apply_buffer(frames: int) -> bool:
+            engine.buffer_frames = frames
+            return True
+
+        engine._apply_buffer_frames_live_locked = Mock(
+            side_effect=apply_buffer
+        )
+
+        engine._monitor_audio_supply()
+
+        self.assertEqual(engine.buffer_frames, 1_024)
+        engine._qt_policy.evaluate.assert_not_called()
+        engine.stream.clear_metrics.assert_called_once()
+
+    def test_qt_policy_waits_for_silence_before_probing_lower(self) -> None:
+        policy = QtAudioAutoPolicy(now=0.0)
+
+        while_playing = policy.evaluate(
+            61.0,
+            1_024,
+            self._active_metrics(1, 61, currently_active=True),
+        )
+        after_release = policy.evaluate(
+            61.1,
+            1_024,
+            self._active_metrics(1, 61, currently_active=False),
+        )
+
+        self.assertIsNone(while_playing)
+        self.assertIsNotNone(after_release)
+        assert after_release is not None
+        self.assertEqual(after_release.frames, 512)
+
+    def test_changed_audio_environment_resets_qt_learning(self) -> None:
+        engine = software_synth.SoftwareSynthEngine()
+        try:
+            engine.configure_qt_learning(
+                512,
+                "device-a|48000|2|Float",
+            )
+
+            with engine._lock:
+                unchanged = engine._apply_audio_environment_locked(
+                    "device-a|48000|2|Float"
+                )
+                changed = engine._apply_audio_environment_locked(
+                    "device-b|44100|2|Int16"
+                )
+
+            self.assertFalse(unchanged)
+            self.assertTrue(changed)
+            self.assertIsNone(engine.minimum_stable_qt_frames)
+            self.assertEqual(
+                engine._requested_qt_frames,
+                software_synth.DEFAULT_QT_AUDIO_FRAMES,
+            )
+            self.assertEqual(
+                engine.qt_audio_environment,
+                "device-b|44100|2|Int16",
+            )
+        finally:
+            engine.shutdown()
+
+    def test_qt_reduction_is_rejected_when_backend_queue_does_not_shrink(self) -> None:
+        engine = software_synth.SoftwareSynthEngine()
+        previous_worker = Mock()
+        previous_thread = Mock()
+        engine._output_worker = previous_worker
+        engine._output_thread = previous_thread
+        engine._requested_qt_frames = 1_024
+        engine.qt_frames = 1_024
+
+        def start_output(
+            frames: int,
+            *,
+            start_muted: bool,
+            standby_silence: bool = False,
+        ) -> bool:
+            engine._output_worker = Mock()
+            engine._output_thread = Mock()
+            engine._requested_qt_frames = frames
+            engine.qt_frames = 1_024
+            return True
+
+        try:
+            with (
+                patch.object(
+                    engine,
+                    "_start_output_locked",
+                    side_effect=start_output,
+                ) as start_output_mock,
+                patch.object(engine, "_stop_output_worker") as stop_output,
+            ):
+                changed = engine._recreate_output_locked(512)
+                previous_output_was_restored = (
+                    engine._output_worker is previous_worker
+                    and engine._output_thread is previous_thread
+                )
+        finally:
+            engine._output_worker = None
+            engine._output_thread = None
+            engine.shutdown()
+
+        self.assertFalse(changed)
+        self.assertEqual(engine._requested_qt_frames, 1_024)
+        self.assertTrue(previous_output_was_restored)
+        stop_output.assert_called_once()
+        self.assertEqual(
+            [call.args[0] for call in start_output_mock.call_args_list],
+            [512],
+        )
 
     def test_commands_collected_together_keep_their_relative_timing(self) -> None:
         now = [10.0]

@@ -10,6 +10,7 @@ from config import (
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
     DEFAULT_PANEL_ORDER,
+    DEFAULT_SECTION_VISIBILITY,
     DEFAULT_SOUND_PLAYBACK_MODE,
 )
 
@@ -85,17 +86,13 @@ class AppState:
     shortcut_locked: bool = True
     always_on_top: bool = False
     tray_resident: bool = False
+    hide_release_notes_on_startup: bool = False
     window_opacity: int = 100
     ui_scale_percent: int = 100
     window_width: int = 900
     window_height: int = 560
     section_visibility: dict[str, bool] = field(
-        default_factory=lambda: {
-            "midi_input": True,
-            "key_playback": True,
-            "common_settings": True,
-            "player": True,
-        }
+        default_factory=lambda: dict(DEFAULT_SECTION_VISIBILITY)
     )
     panel_order: tuple[str, ...] = DEFAULT_PANEL_ORDER
 

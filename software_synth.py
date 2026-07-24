@@ -24,7 +24,10 @@ from audio_buffer import (
     AUDIO_BUFFER_FRAME_OPTIONS,
     DEFAULT_AUDIO_BUFFER_FRAMES,
     DEFAULT_QT_AUDIO_FRAMES,
+    QT_AUDIO_FRAME_OPTIONS,
     normalize_audio_buffer_frames,
+    normalize_qt_audio_frames,
+    qt_audio_frame_ceiling,
 )
 from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
 
@@ -38,8 +41,10 @@ LIMITER_THRESHOLD = 0.92
 RENDER_CHUNK_FRAMES = 1_024
 LOW_LATENCY_AUDIO_FRAMES = 256
 PUSH_WRITE_FRAMES = 128
-PUSH_TARGET_FRAMES = DEFAULT_QT_AUDIO_FRAMES
+PUSH_PRIME_FRAMES = DEFAULT_QT_AUDIO_FRAMES
 PUSH_PUMP_INTERVAL_MS = 1
+OUTPUT_FADE_INTERVAL_MS = 1
+OUTPUT_FADE_STEPS = 3
 COMMAND_DEEP_REFILL_GRACE_SECONDS = 0.020
 NATURAL_DECAY_SILENCE_ENVELOPE = 0.0001
 NATURAL_DECAY_REFERENCE_NOTE = 60
@@ -52,12 +57,18 @@ COMMAND_SUSTAIN = 3
 COMMAND_RELEASE_ALL = 4
 AUDIO_METRICS_RETENTION_SECONDS = 130.0
 AUDIO_SHORTAGE_DEBOUNCE_SECONDS = 0.05
+AUDIO_ACTIVITY_SAMPLE_SECONDS = 0.20
 AUTO_BUFFER_SHORTAGE_WINDOW_SECONDS = 5.0
 AUTO_BUFFER_SHORTAGE_THRESHOLD = 3
 AUTO_BUFFER_STABILIZATION_SECONDS = 20.0
 AUTO_BUFFER_DOWNSHIFT_STABLE_SECONDS = 20.0
 AUTO_BUFFER_DOWNSHIFT_MAX_UTILIZATION = 0.25
 AUTO_BUFFER_DOWNSHIFT_BLOCK_SECONDS = 60.0
+AUTO_QT_UNDERRUN_WINDOW_SECONDS = 5.0
+AUTO_QT_UNDERRUN_THRESHOLD = 3
+AUTO_QT_STABILIZATION_SECONDS = 60.0
+AUTO_QT_ACTIVITY_SPAN_SECONDS = 15.0
+AUTO_QT_MIN_ACTIVITY_SAMPLES = 20
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,10 @@ class AudioSupplyMetrics:
     synthesis_utilization: tuple[tuple[float, float], ...]
     synthesis_durations: tuple[tuple[float, float], ...] = ()
     supply_delays: tuple[float, ...] = ()
+    output_underruns: tuple[float, ...] = ()
+    producer_starved_output_underruns: tuple[float, ...] = ()
+    audio_activity: tuple[float, ...] = ()
+    currently_active_audio: bool = False
     ring_buffer_bytes: int = 0
     ring_target_bytes: int = 0
 
@@ -151,6 +166,13 @@ class AudioSupplyMetrics:
 class AudioBufferDecision:
     frames: int
     reason: str
+
+
+@dataclass(frozen=True)
+class QtAudioDecision:
+    frames: int
+    reason: str
+    learned_minimum_frames: int | None = None
 
 
 class AudioBufferAutoPolicy:
@@ -203,6 +225,11 @@ class AudioBufferAutoPolicy:
         )
         recent_pressure = tuple(
             sorted(recent_shortages + recent_supply_delays)
+        )
+        recent_output_underruns = tuple(
+            timestamp
+            for timestamp in metrics.output_underruns
+            if timestamp >= self.enabled_at
         )
         if recent_pressure:
             self.last_shortage_at = max(
@@ -270,6 +297,11 @@ class AudioBufferAutoPolicy:
             self.enabled_at,
             self.last_change_at,
             self.last_shortage_at,
+            (
+                recent_output_underruns[-1]
+                if recent_output_underruns
+                else float("-inf")
+            ),
         )
         if (
             current_frames <= minimum_frames
@@ -304,6 +336,222 @@ class AudioBufferAutoPolicy:
                 f"{next_frames} ({AUTO_BUFFER_DOWNSHIFT_STABLE_SECONDS:.0f}s "
                 f"stable, synthesis p95 "
                 f"{percentile_95 * 100:.1f}% of deadline)"
+            ),
+        )
+
+
+class QtAudioAutoPolicy:
+    """Learns the smallest Qt queue that remains stable on this system."""
+
+    def __init__(
+        self,
+        minimum_stable_frames: int | None = None,
+        *,
+        now: float | None = None,
+    ) -> None:
+        self.minimum_stable_frames: int | None = None
+        self.enabled_at = 0.0
+        self.last_change_at = float("-inf")
+        self.last_underrun_at = float("-inf")
+        self.trial_started_at: float | None = None
+        self.trial_frames: int | None = None
+        self.trial_restore_frames: int | None = None
+        self.failed_candidates: set[int] = set()
+        self.configure(
+            minimum_stable_frames,
+            now=now,
+        )
+
+    def configure(
+        self,
+        minimum_stable_frames: int | None,
+        *,
+        now: float | None = None,
+    ) -> None:
+        monotonic_now = time.monotonic() if now is None else float(now)
+        self.minimum_stable_frames = (
+            normalize_qt_audio_frames(minimum_stable_frames)
+            if minimum_stable_frames is not None
+            else None
+        )
+        self.enabled_at = monotonic_now
+        self.last_change_at = float("-inf")
+        self.last_underrun_at = monotonic_now
+        self.trial_started_at = None
+        self.trial_frames = None
+        self.trial_restore_frames = None
+        self.failed_candidates.clear()
+
+    def reject_candidate(
+        self,
+        current_frames: int,
+        *,
+        now: float,
+    ) -> QtAudioDecision:
+        current_frames = normalize_qt_audio_frames(current_frames)
+        if self.trial_frames is not None:
+            self.failed_candidates.add(self.trial_frames)
+        self.last_change_at = float(now)
+        self.trial_started_at = None
+        self.trial_frames = None
+        self.trial_restore_frames = None
+        return QtAudioDecision(
+            current_frames,
+            (
+                "Qt audio queue candidate was rejected; "
+                f"{current_frames} frames retained"
+            ),
+        )
+
+    def learn_backend_minimum(
+        self,
+        frames: int,
+    ) -> int:
+        learned = normalize_qt_audio_frames(frames)
+        self.minimum_stable_frames = learned
+        return learned
+
+    def evaluate(
+        self,
+        now: float,
+        current_frames: int,
+        metrics: AudioSupplyMetrics,
+    ) -> QtAudioDecision | None:
+        now = float(now)
+        current_frames = normalize_qt_audio_frames(current_frames)
+        producer_starved_underruns = frozenset(
+            timestamp
+            for timestamp in metrics.producer_starved_output_underruns
+            if timestamp >= self.enabled_at
+        )
+        underruns = tuple(
+            timestamp
+            for timestamp in metrics.output_underruns
+            if (
+                timestamp >= self.enabled_at
+                and timestamp not in producer_starved_underruns
+            )
+        )
+        producer_pressure = tuple(
+            sorted(
+                timestamp
+                for timestamp in (
+                    metrics.shortages + metrics.supply_delays
+                )
+                if timestamp >= self.enabled_at
+            )
+        )
+        if underruns:
+            self.last_underrun_at = max(self.last_underrun_at, underruns[-1])
+
+        if (
+            self.trial_started_at is not None
+            and self.trial_frames is not None
+            and self.trial_restore_frames is not None
+            and any(
+                timestamp >= self.trial_started_at
+                for timestamp in underruns
+            )
+        ):
+            restore_frames = self.trial_restore_frames
+            self.failed_candidates.add(self.trial_frames)
+            self.last_change_at = now
+            self.trial_started_at = None
+            self.trial_frames = None
+            self.trial_restore_frames = None
+            return QtAudioDecision(
+                restore_frames,
+                (
+                    "Qt audio queue automatically restored: "
+                    f"{current_frames} -> {restore_frames} "
+                    "(output queue became empty after reduction)"
+                ),
+            )
+
+        underrun_cutoff = now - AUTO_QT_UNDERRUN_WINDOW_SECONDS
+        underrun_count = sum(
+            timestamp >= underrun_cutoff
+            for timestamp in underruns
+        )
+        current_index = QT_AUDIO_FRAME_OPTIONS.index(current_frames)
+        if underrun_count >= AUTO_QT_UNDERRUN_THRESHOLD:
+            if current_index >= len(QT_AUDIO_FRAME_OPTIONS) - 1:
+                return None
+            next_frames = QT_AUDIO_FRAME_OPTIONS[current_index + 1]
+            self.failed_candidates.add(current_frames)
+            self.minimum_stable_frames = next_frames
+            self.last_change_at = now
+            self.trial_started_at = None
+            self.trial_frames = None
+            self.trial_restore_frames = None
+            return QtAudioDecision(
+                next_frames,
+                (
+                    "Qt audio queue automatically increased: "
+                    f"{current_frames} -> {next_frames} "
+                    f"({underrun_count} output underruns in "
+                    f"{AUTO_QT_UNDERRUN_WINDOW_SECONDS:.0f}s)"
+                ),
+                next_frames,
+            )
+
+        stable_since = max(
+            self.enabled_at,
+            self.last_change_at,
+            self.last_underrun_at,
+            self.trial_started_at or float("-inf"),
+            (
+                producer_pressure[-1]
+                if producer_pressure
+                else float("-inf")
+            ),
+        )
+        if now - stable_since < AUTO_QT_STABILIZATION_SECONDS:
+            return None
+        activity = tuple(
+            timestamp
+            for timestamp in metrics.audio_activity
+            if timestamp >= stable_since
+        )
+        if (
+            len(activity) < AUTO_QT_MIN_ACTIVITY_SAMPLES
+            or activity[-1] < now - 1.0
+            or activity[-1] - activity[0] < AUTO_QT_ACTIVITY_SPAN_SECONDS
+        ):
+            return None
+
+        if self.trial_started_at is not None:
+            self.minimum_stable_frames = current_frames
+            self.last_change_at = now
+            self.trial_started_at = None
+            self.trial_frames = None
+            self.trial_restore_frames = None
+            return QtAudioDecision(
+                current_frames,
+                (
+                    "Stable Qt audio queue learned: "
+                    f"{current_frames} frames"
+                ),
+                current_frames,
+            )
+
+        if current_index <= 0:
+            return None
+
+        if metrics.currently_active_audio:
+            return None
+        next_frames = QT_AUDIO_FRAME_OPTIONS[current_index - 1]
+        if next_frames in self.failed_candidates:
+            return None
+        self.last_change_at = now
+        self.trial_started_at = now
+        self.trial_frames = next_frames
+        self.trial_restore_frames = current_frames
+        return QtAudioDecision(
+            next_frames,
+            (
+                "Qt audio queue stability probe started: "
+                f"{current_frames} -> {next_frames}"
             ),
         )
 
@@ -387,8 +635,17 @@ class SoftwareSynthStream:
         self._synthesis_utilization: deque[tuple[float, float]] = deque()
         self._synthesis_durations: deque[tuple[float, float]] = deque()
         self._supply_delay_timestamps: deque[float] = deque()
+        self._output_underrun_timestamps: deque[float] = deque()
+        self._producer_starved_output_underrun_timestamps: deque[float] = (
+            deque()
+        )
+        self._audio_activity_timestamps: deque[float] = deque()
         self._last_shortage_at = float("-inf")
         self._last_supply_delay_at = float("-inf")
+        self._last_output_underrun_at = float("-inf")
+        self._last_producer_starved_output_underrun_at = float("-inf")
+        self._last_audio_activity_at = float("-inf")
+        self._currently_active_audio = False
 
     def configure(
         self,
@@ -583,7 +840,7 @@ class SoftwareSynthStream:
                     frame_count = 0
                 else:
                     frame_size = self._frame_size()
-                    immediate_bytes = PUSH_TARGET_FRAMES * frame_size
+                    immediate_bytes = PUSH_PRIME_FRAMES * frame_size
                     deep_refill_delay = (
                         self._last_command_monotonic
                         + COMMAND_DEEP_REFILL_GRACE_SECONDS
@@ -616,6 +873,9 @@ class SoftwareSynthStream:
                         else 0.0
                     ),
                     elapsed,
+                    active_audio=bool(
+                        render_state.voices or render_state.fading_voices
+                    ),
                 )
                 continue
             self._apply_worker_commands_through(command_revision)
@@ -635,6 +895,9 @@ class SoftwareSynthStream:
             self._record_synthesis_utilization(
                 elapsed / deadline if deadline > 0.0 else 0.0,
                 elapsed,
+                active_audio=bool(
+                    render_state.voices or render_state.fading_voices
+                ),
             )
             with self._ring_condition:
                 if not self._worker_active or self._worker_stop.is_set():
@@ -719,7 +982,7 @@ class SoftwareSynthStream:
         return 2
 
     def minimum_effective_buffer_frames(self) -> int:
-        return DEFAULT_AUDIO_BUFFER_FRAMES
+        return AUDIO_BUFFER_FRAME_OPTIONS[0]
 
     def _record_supply_shortage(self) -> None:
         now = time.monotonic()
@@ -734,6 +997,8 @@ class SoftwareSynthStream:
         self,
         utilization: float,
         duration_seconds: float | None = None,
+        *,
+        active_audio: bool = False,
     ) -> None:
         now = time.monotonic()
         with self._metrics_lock:
@@ -750,6 +1015,45 @@ class SoftwareSynthStream:
             ):
                 self._last_supply_delay_at = now
                 self._supply_delay_timestamps.append(now)
+            if (
+                active_audio
+                and now - self._last_audio_activity_at
+                >= AUDIO_ACTIVITY_SAMPLE_SECONDS
+            ):
+                self._last_audio_activity_at = now
+                self._audio_activity_timestamps.append(now)
+            self._currently_active_audio = bool(active_audio)
+            self._prune_metrics_locked(now)
+
+    def _record_output_underrun(
+        self,
+        *,
+        producer_starved: bool = False,
+    ) -> None:
+        now = time.monotonic()
+        with self._metrics_lock:
+            if (
+                now - self._last_output_underrun_at
+                < AUDIO_SHORTAGE_DEBOUNCE_SECONDS
+            ):
+                if (
+                    producer_starved
+                    and self._last_output_underrun_at
+                    > self._last_producer_starved_output_underrun_at
+                ):
+                    self._last_producer_starved_output_underrun_at = (
+                        self._last_output_underrun_at
+                    )
+                    self._producer_starved_output_underrun_timestamps.append(
+                        self._last_output_underrun_at
+                    )
+                    self._prune_metrics_locked(now)
+                return
+            self._last_output_underrun_at = now
+            self._output_underrun_timestamps.append(now)
+            if producer_starved:
+                self._last_producer_starved_output_underrun_at = now
+                self._producer_starved_output_underrun_timestamps.append(now)
             self._prune_metrics_locked(now)
 
     def metrics_snapshot(self) -> AudioSupplyMetrics:
@@ -764,6 +1068,12 @@ class SoftwareSynthStream:
                 synthesis_utilization=tuple(self._synthesis_utilization),
                 synthesis_durations=tuple(self._synthesis_durations),
                 supply_delays=tuple(self._supply_delay_timestamps),
+                output_underruns=tuple(self._output_underrun_timestamps),
+                producer_starved_output_underruns=tuple(
+                    self._producer_starved_output_underrun_timestamps
+                ),
+                audio_activity=tuple(self._audio_activity_timestamps),
+                currently_active_audio=self._currently_active_audio,
                 ring_buffer_bytes=ring_buffer_bytes,
                 ring_target_bytes=ring_target_bytes,
             )
@@ -774,8 +1084,15 @@ class SoftwareSynthStream:
             self._synthesis_utilization.clear()
             self._synthesis_durations.clear()
             self._supply_delay_timestamps.clear()
+            self._output_underrun_timestamps.clear()
+            self._producer_starved_output_underrun_timestamps.clear()
+            self._audio_activity_timestamps.clear()
             self._last_shortage_at = float("-inf")
             self._last_supply_delay_at = float("-inf")
+            self._last_output_underrun_at = float("-inf")
+            self._last_producer_starved_output_underrun_at = float("-inf")
+            self._last_audio_activity_at = float("-inf")
+            self._currently_active_audio = False
 
     def _prune_metrics_locked(self, now: float) -> None:
         cutoff = now - AUDIO_METRICS_RETENTION_SECONDS
@@ -796,6 +1113,21 @@ class SoftwareSynthStream:
             and self._supply_delay_timestamps[0] < cutoff
         ):
             self._supply_delay_timestamps.popleft()
+        while (
+            self._output_underrun_timestamps
+            and self._output_underrun_timestamps[0] < cutoff
+        ):
+            self._output_underrun_timestamps.popleft()
+        while (
+            self._producer_starved_output_underrun_timestamps
+            and self._producer_starved_output_underrun_timestamps[0] < cutoff
+        ):
+            self._producer_starved_output_underrun_timestamps.popleft()
+        while (
+            self._audio_activity_timestamps
+            and self._audio_activity_timestamps[0] < cutoff
+        ):
+            self._audio_activity_timestamps.popleft()
 
     def note_on(self, client_id: int, channel: int, note: int, velocity: int, source: str) -> None:
         source = normalize_sound_source(source)
@@ -1464,22 +1796,37 @@ class _PushAudioOutput(QObject):
         device,
         audio_format: QAudioFormat,
         requested_sink_frames: int,
+        *,
+        start_muted: bool = False,
+        standby_silence: bool = False,
     ) -> None:
         super().__init__()
         self.stream = stream
         self.device = device
         self.audio_format = audio_format
         self.requested_sink_frames = max(1, int(requested_sink_frames))
+        self.start_muted = bool(start_muted)
+        self.standby_silence = bool(standby_silence)
         self.ready = threading.Event()
         self.stopped = threading.Event()
+        self.handoff_ready = threading.Event()
+        self.handoff_frames = 0
+        self.handoff_fade_interval_ms = OUTPUT_FADE_INTERVAL_MS
         self.started_ok = False
         self.error = ""
         self.actual_sink_frames = self.requested_sink_frames
         self._sink: QAudioSink | None = None
         self._output_device = None
         self._timer: QTimer | None = None
+        self._fade_timer: QTimer | None = None
+        self._fade_step = 0
+        self._fade_direction = 0
         self._pending_pcm = b""
+        self._pending_is_audio = False
         self._pumping = False
+        self._primed = False
+        self._stopping = False
+        self._bytes_written_connected = False
 
     @Slot()
     def start_output(self) -> None:
@@ -1492,6 +1839,8 @@ class _PushAudioOutput(QObject):
                 sink.reset()
                 self.error = f"Audio output initialization failed ({error_name})"
                 return
+            if self.start_muted:
+                sink.setVolume(0.0)
             self._sink = sink
             self._output_device = output_device
             actual_frames = int(sink.bufferFrameCount())
@@ -1504,11 +1853,18 @@ class _PushAudioOutput(QObject):
             self._timer = timer
             try:
                 output_device.bytesWritten.connect(self._on_bytes_written)
+                self._bytes_written_connected = True
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+            try:
+                sink.stateChanged.connect(self._on_state_changed)
             except (AttributeError, RuntimeError, TypeError):
                 pass
             self.started_ok = True
             self.pump()
             timer.start()
+            if self.start_muted and not self.standby_silence:
+                self._start_fade(1)
         except Exception as exc:
             self.error = str(exc)
             if self._sink is not None:
@@ -1521,6 +1877,15 @@ class _PushAudioOutput(QObject):
     @Slot(int)
     def _on_bytes_written(self, _byte_count: int) -> None:
         self.pump()
+
+    @Slot(object)
+    def _on_state_changed(self, state: object) -> None:
+        if (
+            state == QAudio.State.IdleState
+            and self._primed
+            and not self._stopping
+        ):
+            self.stream._record_output_underrun()
 
     @Slot()
     def pump(self) -> None:
@@ -1547,11 +1912,22 @@ class _PushAudioOutput(QObject):
                 if written == 0:
                     return
                 self._pending_pcm = self._pending_pcm[written:]
+                if self._pending_is_audio:
+                    self._primed = True
                 if self._pending_pcm:
                     return
+                self._pending_is_audio = False
 
             actual_frames = max(1, int(sink.bufferFrameCount()))
-            target_frames = min(PUSH_TARGET_FRAMES, actual_frames)
+            free_frames = max(0, int(sink.framesFree()))
+            queued_frames = max(0, actual_frames - free_frames)
+            if self._primed and queued_frames <= 0 and not self._stopping:
+                self.stream._record_output_underrun()
+            target_frames = (
+                min(PUSH_WRITE_FRAMES, actual_frames)
+                if self.standby_silence
+                else actual_frames
+            )
             write_frames = min(PUSH_WRITE_FRAMES, target_frames)
             refill_threshold = max(0, target_frames - write_frames)
             max_writes = max(
@@ -1571,21 +1947,35 @@ class _PushAudioOutput(QObject):
                 if frame_count <= 0:
                     return
 
-                pcm = self.stream.take_pcm_frames(
-                    frame_count,
-                    pad_silence=False,
-                )
+                is_audio = False
+                if self.standby_silence:
+                    pcm = bytes(
+                        frame_count * max(1, self.audio_format.bytesPerFrame())
+                    )
+                else:
+                    pcm = self.stream.take_pcm_frames(
+                        frame_count,
+                        pad_silence=False,
+                    )
+                    is_audio = bool(pcm)
                 if not pcm:
                     if queued_frames <= 0:
                         self.stream._record_supply_shortage()
+                        if self._primed and not self._stopping:
+                            self.stream._record_output_underrun(
+                                producer_starved=True
+                            )
                     return
                 written = int(output_device.write(pcm))
                 if written < 0:
                     self.error = "Audio output rejected PCM data"
                     self.stream._record_supply_shortage()
                     return
+                if written > 0 and is_audio:
+                    self._primed = True
                 if written < len(pcm):
                     self._pending_pcm = pcm[max(0, written):]
+                    self._pending_is_audio = is_audio
                     return
         except Exception as exc:
             self.error = str(exc)
@@ -1593,24 +1983,142 @@ class _PushAudioOutput(QObject):
         finally:
             self._pumping = False
 
+    def _start_fade(self, direction: int) -> None:
+        sink = self._sink
+        if sink is None:
+            if direction < 0:
+                self._finish_stop()
+            return
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+        self._fade_direction = 1 if direction > 0 else -1
+        self._fade_step = 0
+        timer = QTimer(self)
+        timer.setTimerType(Qt.TimerType.PreciseTimer)
+        timer.setInterval(max(1, int(self.handoff_fade_interval_ms)))
+        timer.timeout.connect(self._advance_fade)
+        self._fade_timer = timer
+        timer.start()
+
+    @Slot()
+    def _advance_fade(self) -> None:
+        sink = self._sink
+        if sink is None:
+            self._finish_stop()
+            return
+        self._fade_step += 1
+        progress = min(1.0, self._fade_step / OUTPUT_FADE_STEPS)
+        volume = progress if self._fade_direction > 0 else 1.0 - progress
+        sink.setVolume(max(0.0, min(1.0, volume)))
+        if progress < 1.0:
+            return
+        if self._fade_timer is not None:
+            self._fade_timer.stop()
+            self._fade_timer = None
+        if self._fade_direction < 0:
+            self._finish_stop()
+
+    @Slot()
+    def pause_for_handoff(self) -> None:
+        self.handoff_ready.clear()
+        try:
+            self._stopping = True
+            if self._timer is not None:
+                self._timer.stop()
+            output_device = self._output_device
+            if output_device is not None and self._bytes_written_connected:
+                try:
+                    output_device.bytesWritten.disconnect(
+                        self._on_bytes_written
+                    )
+                except (AttributeError, RuntimeError, TypeError):
+                    pass
+                self._bytes_written_connected = False
+            sink = self._sink
+            if sink is None:
+                self.handoff_frames = 0
+            else:
+                actual_frames = max(1, int(sink.bufferFrameCount()))
+                free_frames = max(0, int(sink.framesFree()))
+                self.handoff_frames = max(
+                    0,
+                    actual_frames - free_frames,
+                )
+        finally:
+            self.handoff_ready.set()
+
+    @Slot()
+    def resume_after_handoff(self) -> None:
+        self.handoff_ready.clear()
+        try:
+            output_device = self._output_device
+            if output_device is not None and not self._bytes_written_connected:
+                try:
+                    output_device.bytesWritten.connect(
+                        self._on_bytes_written
+                    )
+                    self._bytes_written_connected = True
+                except (AttributeError, RuntimeError, TypeError):
+                    pass
+            self._stopping = False
+            if self._timer is not None:
+                self._timer.start()
+            self.pump()
+        finally:
+            self.handoff_ready.set()
+
+    @Slot()
+    def activate_handoff(self) -> None:
+        self.handoff_ready.clear()
+        try:
+            sink = self._sink
+            if sink is None:
+                return
+            self.standby_silence = False
+            self._primed = False
+            if self.start_muted:
+                self._start_fade(1)
+            self.pump()
+        finally:
+            self.handoff_ready.set()
+
+    @Slot()
+    def begin_handoff_fade_out(self) -> None:
+        self._start_fade(-1)
+
     @Slot()
     def stop_output(self) -> None:
+        self._stopping = True
+        self._finish_stop()
+
+    def _finish_stop(self) -> None:
         try:
+            if self._fade_timer is not None:
+                self._fade_timer.stop()
+                self._fade_timer = None
             if self._timer is not None:
                 self._timer.stop()
                 self._timer = None
             output_device = self._output_device
-            if output_device is not None:
+            if output_device is not None and self._bytes_written_connected:
                 try:
                     output_device.bytesWritten.disconnect(self._on_bytes_written)
                 except (AttributeError, RuntimeError, TypeError):
                     pass
+                self._bytes_written_connected = False
+            if self._sink is not None:
+                try:
+                    self._sink.stateChanged.disconnect(self._on_state_changed)
+                except (AttributeError, RuntimeError, TypeError):
+                    pass
             self._output_device = None
             self._pending_pcm = b""
+            self._pending_is_audio = False
             if self._sink is not None:
                 self._sink.reset()
                 self._sink = None
             self.started_ok = False
+            self._primed = False
         finally:
             self.stopped.set()
 
@@ -1624,13 +2132,26 @@ class SoftwareSynthEngine:
         self._next_client_id = 0
         self.buffer_frames = DEFAULT_AUDIO_BUFFER_FRAMES
         self.qt_frames = DEFAULT_QT_AUDIO_FRAMES
+        self._requested_qt_frames = DEFAULT_QT_AUDIO_FRAMES
+        self.minimum_stable_qt_frames: int | None = None
+        self.qt_audio_environment = ""
+        self._saved_qt_audio_environment = ""
+        self._qt_learning_configured = False
+        self._buffer_frames_configured = False
+        self._audio_device = None
+        self._audio_format: QAudioFormat | None = None
         self.last_error = ""
         self._runtime_callbacks: dict[
             int,
             Callable[[int, int, str], None],
         ] = {}
+        self._qt_learning_callbacks: dict[
+            int,
+            Callable[[int | None, str], None],
+        ] = {}
         self._active_clients: set[int] = set()
         self._buffer_policy = AudioBufferAutoPolicy()
+        self._qt_policy = QtAudioAutoPolicy()
         self._monitor_stop = threading.Event()
         self._monitor_thread = threading.Thread(
             target=self._monitor_audio_supply,
@@ -1650,10 +2171,44 @@ class SoftwareSynthEngine:
             self._next_client_id += 1
             return self._next_client_id
 
+    def configure_qt_learning(
+        self,
+        minimum_stable_frames: int | None,
+        audio_environment: str,
+    ) -> None:
+        with self._lock:
+            if self._qt_learning_configured:
+                return
+            self.minimum_stable_qt_frames = (
+                normalize_qt_audio_frames(minimum_stable_frames)
+                if minimum_stable_frames is not None
+                else None
+            )
+            self._saved_qt_audio_environment = str(audio_environment)
+            self.qt_audio_environment = self._saved_qt_audio_environment
+            self._requested_qt_frames = (
+                self.minimum_stable_qt_frames
+                or DEFAULT_QT_AUDIO_FRAMES
+            )
+            self.qt_frames = self._requested_qt_frames
+            self._qt_policy.configure(
+                self.minimum_stable_qt_frames,
+            )
+            self._qt_learning_configured = True
+
+    def configure_buffer_frames(self, buffer_frames: int) -> None:
+        with self._lock:
+            if self._buffer_frames_configured:
+                return
+            self.buffer_frames = normalize_audio_buffer_frames(buffer_frames)
+            self.stream.set_buffer_frames_live(self.buffer_frames)
+            self._buffer_frames_configured = True
+
     def register_client(
         self,
         client_id: int,
         callback: Callable[[int, int, str], None] | None,
+        learning_callback: Callable[[int | None, str], None] | None = None,
     ) -> None:
         with self._lock:
             self._active_clients.add(int(client_id))
@@ -1661,11 +2216,25 @@ class SoftwareSynthEngine:
                 self._runtime_callbacks[int(client_id)] = callback
             else:
                 self._runtime_callbacks.pop(int(client_id), None)
+            if learning_callback is not None:
+                self._qt_learning_callbacks[int(client_id)] = learning_callback
+            else:
+                self._qt_learning_callbacks.pop(int(client_id), None)
             qt_frames = self.qt_frames
             buffer_frames = self.buffer_frames
+            minimum_stable_qt_frames = self.minimum_stable_qt_frames
+            audio_environment = self.qt_audio_environment
         if callback is not None:
             try:
                 callback(qt_frames, buffer_frames, "")
+            except Exception:
+                pass
+        if learning_callback is not None:
+            try:
+                learning_callback(
+                    minimum_stable_qt_frames,
+                    audio_environment,
+                )
             except Exception:
                 pass
 
@@ -1673,6 +2242,7 @@ class SoftwareSynthEngine:
         with self._lock:
             self._active_clients.discard(int(client_id))
             self._runtime_callbacks.pop(int(client_id), None)
+            self._qt_learning_callbacks.pop(int(client_id), None)
 
     def shutdown(self) -> None:
         self._monitor_stop.set()
@@ -1688,6 +2258,13 @@ class SoftwareSynthEngine:
         thread = self._output_thread
         self._output_worker = None
         self._output_thread = None
+        self._stop_output_worker(worker, thread)
+
+    @staticmethod
+    def _stop_output_worker(
+        worker: _PushAudioOutput | None,
+        thread: QThread | None,
+    ) -> None:
         if worker is not None and thread is not None and thread.isRunning():
             try:
                 QMetaObject.invokeMethod(
@@ -1700,6 +2277,151 @@ class SoftwareSynthEngine:
                 pass
             thread.quit()
             thread.wait(1_000)
+
+    @staticmethod
+    def _invoke_handoff(
+        worker: _PushAudioOutput,
+        method: str,
+    ) -> bool:
+        worker.handoff_ready.clear()
+        try:
+            invoked = QMetaObject.invokeMethod(
+                worker,
+                method,
+                Qt.ConnectionType.QueuedConnection,
+            )
+        except RuntimeError:
+            return False
+        return bool(invoked) and worker.handoff_ready.wait(1.0)
+
+    def _start_output_locked(
+        self,
+        requested_frames: int,
+        *,
+        start_muted: bool,
+        standby_silence: bool = False,
+    ) -> bool:
+        device = self._audio_device
+        audio_format = self._audio_format
+        if device is None or audio_format is None:
+            self.last_error = "Audio output format is not configured"
+            return False
+        requested_frames = normalize_qt_audio_frames(requested_frames)
+        thread = QThread()
+        worker = _PushAudioOutput(
+            self.stream,
+            device,
+            audio_format,
+            requested_frames,
+            start_muted=start_muted,
+            standby_silence=standby_silence,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.start_output)
+        thread.start()
+        if not worker.ready.wait(2.0) or not worker.started_ok:
+            self.last_error = (
+                worker.error
+                or "Software synthesizer push output could not be started"
+            )
+            if thread.isRunning():
+                try:
+                    QMetaObject.invokeMethod(
+                        worker,
+                        "stop_output",
+                        Qt.ConnectionType.QueuedConnection,
+                    )
+                    worker.stopped.wait(1.0)
+                except RuntimeError:
+                    pass
+                thread.quit()
+                thread.wait(1_000)
+            return False
+        self._output_thread = thread
+        self._output_worker = worker
+        self._requested_qt_frames = requested_frames
+        self.qt_frames = worker.actual_sink_frames
+        self.last_error = ""
+        return True
+
+    def _recreate_output_locked(self, requested_frames: int) -> bool:
+        requested_frames = normalize_qt_audio_frames(requested_frames)
+        previous_worker = self._output_worker
+        previous_thread = self._output_thread
+        previous_frames = self._requested_qt_frames
+        previous_actual_frames = self.qt_frames
+        if previous_worker is None or previous_thread is None:
+            return self._start_output_locked(
+                requested_frames,
+                start_muted=False,
+            )
+        if not self._start_output_locked(
+            requested_frames,
+            start_muted=True,
+            standby_silence=True,
+        ):
+            return False
+        next_worker = self._output_worker
+        next_thread = self._output_thread
+        assert next_worker is not None
+        assert next_thread is not None
+        if (
+            requested_frames < previous_frames
+            and self.qt_frames >= previous_actual_frames
+        ):
+            self._output_worker = previous_worker
+            self._output_thread = previous_thread
+            self._requested_qt_frames = previous_frames
+            self.qt_frames = previous_actual_frames
+            self._stop_output_worker(next_worker, next_thread)
+            self.last_error = "The audio backend did not reduce the Qt queue"
+            return False
+        if not self._invoke_handoff(
+            previous_worker,
+            "pause_for_handoff",
+        ):
+            self._output_worker = previous_worker
+            self._output_thread = previous_thread
+            self._requested_qt_frames = previous_frames
+            self.qt_frames = previous_actual_frames
+            self._stop_output_worker(next_worker, next_thread)
+            self.last_error = "The previous audio output could not be paused"
+            return False
+        handoff_frames = max(0, int(previous_worker.handoff_frames))
+        sample_rate = max(1, int(self.stream.sample_rate))
+        handoff_milliseconds = (handoff_frames * 1_000.0) / sample_rate
+        fade_interval_ms = max(
+            1,
+            math.ceil(handoff_milliseconds / OUTPUT_FADE_STEPS),
+        )
+        previous_worker.handoff_fade_interval_ms = fade_interval_ms
+        next_worker.handoff_fade_interval_ms = fade_interval_ms
+        if not self._invoke_handoff(next_worker, "activate_handoff"):
+            self._invoke_handoff(
+                previous_worker,
+                "resume_after_handoff",
+            )
+            self._output_worker = previous_worker
+            self._output_thread = previous_thread
+            self._requested_qt_frames = previous_frames
+            self.qt_frames = previous_actual_frames
+            self._stop_output_worker(next_worker, next_thread)
+            self.last_error = "The new audio output could not be activated"
+            return False
+        try:
+            QMetaObject.invokeMethod(
+                previous_worker,
+                "begin_handoff_fade_out",
+                Qt.ConnectionType.QueuedConnection,
+            )
+        except RuntimeError:
+            pass
+        previous_worker.stopped.wait(
+            max(0.1, handoff_milliseconds / 1_000.0 + 0.1)
+        )
+        self._stop_output_worker(previous_worker, previous_thread)
+        self.last_error = ""
+        return True
 
     def _apply_buffer_frames_live_locked(self, buffer_frames: int) -> bool:
         """Update the PCM reserve depth without replacing the audio sink."""
@@ -1724,6 +2446,10 @@ class SoftwareSynthEngine:
         if audio_format is None:
             self.last_error = "The audio device has no supported PCM format"
             return False
+        audio_environment = self._audio_environment_key(device, audio_format)
+        self._apply_audio_environment_locked(audio_environment)
+        self._audio_device = device
+        self._audio_format = audio_format
         self.stream.configure(
             audio_format.sampleRate(),
             audio_format.channelCount(),
@@ -1734,38 +2460,21 @@ class SoftwareSynthEngine:
             self.last_error = "Software synthesizer worker could not be primed"
             self.stream.stop_worker()
             return False
-        thread = QThread()
-        worker = _PushAudioOutput(
-            self.stream,
-            device,
-            audio_format,
-            self.qt_frames,
-        )
-        worker.moveToThread(thread)
-        thread.started.connect(worker.start_output)
-        thread.start()
-        if not worker.ready.wait(2.0) or not worker.started_ok:
-            self.last_error = (
-                worker.error
-                or "Software synthesizer push output could not be started"
-            )
-            if thread.isRunning():
-                try:
-                    QMetaObject.invokeMethod(
-                        worker,
-                        "stop_output",
-                        Qt.ConnectionType.QueuedConnection,
-                    )
-                    worker.stopped.wait(1.0)
-                except RuntimeError:
-                    pass
-                thread.quit()
-                thread.wait(1_000)
+        if not self._start_output_locked(
+            self._requested_qt_frames,
+            start_muted=False,
+        ):
             self.stream.stop_worker()
+            self._audio_device = None
+            self._audio_format = None
             return False
-        self._output_thread = thread
-        self._output_worker = worker
-        self.qt_frames = worker.actual_sink_frames
+        if self.qt_frames > self._requested_qt_frames:
+            effective_frames = qt_audio_frame_ceiling(self.qt_frames)
+            learned = self._qt_policy.learn_backend_minimum(
+                effective_frames,
+            )
+            self._requested_qt_frames = effective_frames
+            self.minimum_stable_qt_frames = learned
         self._buffer_policy.reset()
         self.stream.clear_metrics()
         self.last_error = ""
@@ -1774,6 +2483,15 @@ class SoftwareSynthEngine:
     def _monitor_audio_supply(self) -> None:
         while not self._monitor_stop.wait(0.25):
             metrics = self.stream.metrics_snapshot()
+            runtime_callbacks: tuple[
+                Callable[[int, int, str], None],
+                ...,
+            ] = ()
+            learning_callbacks: tuple[
+                Callable[[int | None, str], None],
+                ...,
+            ] = ()
+            learned_update: tuple[int | None, str] | None = None
             with self._lock:
                 if self._output_worker is None or not self._active_clients:
                     continue
@@ -1784,23 +2502,81 @@ class SoftwareSynthEngine:
                     metrics,
                     self.stream.minimum_effective_buffer_frames(),
                 )
-                if (
-                    decision is not None
-                    and decision.frames != self.buffer_frames
-                    and not self._apply_buffer_frames_live_locked(decision.frames)
-                ):
-                    decision = None
+                if decision is not None:
+                    if (
+                        decision.frames != self.buffer_frames
+                        and not self._apply_buffer_frames_live_locked(
+                            decision.frames
+                        )
+                    ):
+                        decision = None
+                qt_decision = None
                 if decision is None:
+                    qt_decision = self._qt_policy.evaluate(
+                        now,
+                        self._requested_qt_frames,
+                        metrics,
+                    )
+                    if qt_decision is not None:
+                        previous_frames = self._requested_qt_frames
+                        if (
+                            qt_decision.frames != previous_frames
+                            and not self._recreate_output_locked(
+                                qt_decision.frames
+                            )
+                        ):
+                            qt_decision = self._qt_policy.reject_candidate(
+                                previous_frames,
+                                now=now,
+                            )
+                        if qt_decision.learned_minimum_frames is not None:
+                            learned_frames = (
+                                qt_decision.learned_minimum_frames
+                            )
+                            if (
+                                learned_frames
+                                != self.minimum_stable_qt_frames
+                            ):
+                                self.minimum_stable_qt_frames = (
+                                    learned_frames
+                                )
+                                learned_update = (
+                                    learned_frames,
+                                    self.qt_audio_environment,
+                                )
+                                learning_callbacks = tuple(
+                                    self._qt_learning_callbacks.values()
+                                )
+                if decision is None and qt_decision is None:
                     continue
-                self.stream.clear_metrics()
-                callbacks = tuple(self._runtime_callbacks.values())
-                qt_frames = self.qt_frames
-                buffer_frames = self.buffer_frames
-            for callback in callbacks:
+                if decision is not None:
+                    self.stream.clear_metrics()
+                    runtime_callbacks = tuple(
+                        self._runtime_callbacks.values()
+                    )
+                    qt_frames = self.qt_frames
+                    buffer_frames = self.buffer_frames
+                    reason = decision.reason
+                else:
+                    assert qt_decision is not None
+                    self.stream.clear_metrics()
+                    runtime_callbacks = tuple(
+                        self._runtime_callbacks.values()
+                    )
+                    qt_frames = self.qt_frames
+                    buffer_frames = self.buffer_frames
+                    reason = qt_decision.reason
+            for callback in runtime_callbacks:
                 try:
-                    callback(qt_frames, buffer_frames, decision.reason)
+                    callback(qt_frames, buffer_frames, reason)
                 except Exception:
                     continue
+            if learned_update is not None:
+                for callback in learning_callbacks:
+                    try:
+                        callback(*learned_update)
+                    except Exception:
+                        continue
 
     @staticmethod
     def _choose_format(device) -> QAudioFormat | None:  # type: ignore[no-untyped-def]
@@ -1837,6 +2613,42 @@ class SoftwareSynthEngine:
         return None
 
     @staticmethod
+    def _audio_environment_key(
+        device,
+        audio_format: QAudioFormat,
+    ) -> str:  # type: ignore[no-untyped-def]
+        try:
+            device_id = bytes(device.id().toHex()).decode("ascii")
+        except (AttributeError, TypeError, ValueError):
+            device_id = str(device.description())
+        return "|".join(
+            (
+                device_id,
+                str(audio_format.sampleRate()),
+                str(audio_format.channelCount()),
+                audio_format.sampleFormat().name,
+            )
+        )
+
+    def _apply_audio_environment_locked(
+        self,
+        audio_environment: str,
+    ) -> bool:
+        audio_environment = str(audio_environment)
+        changed = bool(
+            self._saved_qt_audio_environment
+            and self._saved_qt_audio_environment != audio_environment
+        )
+        if changed:
+            self.minimum_stable_qt_frames = None
+            self._requested_qt_frames = DEFAULT_QT_AUDIO_FRAMES
+            self.qt_frames = DEFAULT_QT_AUDIO_FRAMES
+            self._qt_policy.configure(None)
+        self._saved_qt_audio_environment = audio_environment
+        self.qt_audio_environment = audio_environment
+        return changed
+
+    @staticmethod
     def _audio_start_failed(sink) -> bool:  # type: ignore[no-untyped-def]
         return _audio_start_failed(sink)
 
@@ -1868,11 +2680,20 @@ class SoftwareSynthClient:
         sound_source: str = DEFAULT_SOUND_SOURCE,
         *,
         on_runtime_changed: Callable[[int, int, str], None] | None = None,
+        buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES,
+        minimum_stable_qt_frames: int | None = None,
+        qt_audio_environment: str = "",
+        on_qt_learning_changed: (
+            Callable[[int | None, str], None] | None
+        ) = None,
     ) -> None:
         self.sound_source = normalize_sound_source(sound_source)
         self.qt_frames = DEFAULT_QT_AUDIO_FRAMES
-        self.buffer_frames = DEFAULT_AUDIO_BUFFER_FRAMES
+        self.buffer_frames = normalize_audio_buffer_frames(buffer_frames)
         self.on_runtime_changed = on_runtime_changed
+        self.minimum_stable_qt_frames = minimum_stable_qt_frames
+        self.qt_audio_environment = str(qt_audio_environment)
+        self.on_qt_learning_changed = on_qt_learning_changed
         self._engine: SoftwareSynthEngine | None = None
         self._client_id: int | None = None
         self._last_error = ""
@@ -1889,6 +2710,11 @@ class SoftwareSynthClient:
         if self.is_open:
             return True
         engine = shared_software_synth()
+        engine.configure_qt_learning(
+            self.minimum_stable_qt_frames,
+            self.qt_audio_environment,
+        )
+        engine.configure_buffer_frames(self.buffer_frames)
         if not engine.start():
             self._last_error = engine.last_error
             return False
@@ -1897,6 +2723,7 @@ class SoftwareSynthClient:
         engine.register_client(
             self._client_id,
             self._runtime_changed,
+            self._qt_learning_changed,
         )
         self._last_error = ""
         return True
@@ -1927,6 +2754,23 @@ class SoftwareSynthClient:
                 self.qt_frames,
                 self.buffer_frames,
                 str(reason),
+            )
+
+    def _qt_learning_changed(
+        self,
+        minimum_stable_qt_frames: int | None,
+        audio_environment: str,
+    ) -> None:
+        self.minimum_stable_qt_frames = (
+            normalize_qt_audio_frames(minimum_stable_qt_frames)
+            if minimum_stable_qt_frames is not None
+            else None
+        )
+        self.qt_audio_environment = str(audio_environment)
+        if self.on_qt_learning_changed is not None:
+            self.on_qt_learning_changed(
+                self.minimum_stable_qt_frames,
+                self.qt_audio_environment,
             )
 
     def note_on(self, channel: int, note: int, velocity: int) -> None:

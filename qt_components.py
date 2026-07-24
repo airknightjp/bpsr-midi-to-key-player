@@ -848,13 +848,40 @@ class PianoKeyboardWidget(QWidget):
         self._retrigger_timer.setInterval(16)
         self._retrigger_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._retrigger_timer.timeout.connect(self._advance_retrigger_release)
+        self._rendering_enabled = True
         self.apply_scale(1.0)
 
     @property
     def active_notes(self) -> frozenset[int]:
         return self._active_notes
 
+    @property
+    def rendering_enabled(self) -> bool:
+        return self._rendering_enabled
+
+    def set_rendering_enabled(
+        self,
+        enabled: bool,
+        *,
+        current_retrigger_events: object = (),
+    ) -> None:
+        enabled = bool(enabled)
+        if self._rendering_enabled == enabled:
+            return
+        self._rendering_enabled = enabled
+        self._retrigger_timer.stop()
+        self._retrigger_release_until.clear()
+        if enabled:
+            try:
+                for note, serial in current_retrigger_events:  # type: ignore[union-attr]
+                    self._last_retrigger_serials[int(note)] = int(serial)
+            except (TypeError, ValueError):
+                pass
+            self.update()
+
     def set_active_notes(self, notes: object) -> None:
+        if not self._rendering_enabled:
+            return
         try:
             active = frozenset(
                 int(note)
@@ -868,6 +895,8 @@ class PianoKeyboardWidget(QWidget):
             self.update()
 
     def set_retrigger_events(self, events: object) -> None:
+        if not self._rendering_enabled:
+            return
         try:
             retrigger_events = tuple(
                 (int(note), int(serial))
@@ -892,6 +921,9 @@ class PianoKeyboardWidget(QWidget):
         self.update()
 
     def _advance_retrigger_release(self) -> None:
+        if not self._rendering_enabled:
+            self._retrigger_timer.stop()
+            return
         now = time.monotonic()
         expired = [
             note
@@ -1108,11 +1140,16 @@ class FallingNotesWidget(QWidget):
         self._animation_timer.setInterval(16)
         self._animation_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._animation_timer.timeout.connect(self._advance_animation)
+        self._rendering_enabled = True
         self.apply_scale(1.0)
 
     @property
     def sequence_notes(self) -> tuple[PianoRollNote, ...]:
         return self._sequence_notes
+
+    @property
+    def rendering_enabled(self) -> bool:
+        return self._rendering_enabled
 
     @property
     def live_trail_count(self) -> int:
@@ -1146,6 +1183,41 @@ class FallingNotesWidget(QWidget):
     def lane_fade_count(self) -> int:
         return len(self._lane_fades)
 
+    def set_rendering_enabled(
+        self,
+        enabled: bool,
+        *,
+        latest_hit_events: object = (),
+    ) -> None:
+        enabled = bool(enabled)
+        if self._rendering_enabled == enabled:
+            return
+        self._rendering_enabled = enabled
+        self._animation_timer.stop()
+        self._pending_effect_notes.clear()
+        self._score_update_pending = False
+        self._hit_impacts.clear()
+        self._held_lane_counts.clear()
+        self._lane_fades.clear()
+        self._frame_visible_notes = ()
+        self._frame_visible_lanes = frozenset()
+        self._playback_running = False
+        self._reset_active_sequence_cache()
+        if enabled:
+            try:
+                serials = []
+                for event in latest_hit_events:  # type: ignore[union-attr]
+                    values = tuple(event)
+                    if values:
+                        serials.append(int(values[0]))
+                self._last_hit_serial = max(
+                    serials,
+                    default=self._last_hit_serial,
+                )
+            except (TypeError, ValueError, IndexError):
+                pass
+            self.update()
+
     def set_score(
         self,
         score: int,
@@ -1153,6 +1225,8 @@ class FallingNotesWidget(QWidget):
         judgment: str = "",
         multiplier_tenths: int = 10,
     ) -> None:
+        if not self._rendering_enabled:
+            return
         next_score = max(0, int(score))
         next_combo = max(0, int(combo))
         next_judgment = str(judgment).upper()
@@ -1190,6 +1264,8 @@ class FallingNotesWidget(QWidget):
             )
 
     def set_hit_events(self, events: object) -> None:
+        if not self._rendering_enabled:
+            return
         try:
             normalized_events = []
             for raw_event in events:  # type: ignore[union-attr]
@@ -1284,6 +1360,8 @@ class FallingNotesWidget(QWidget):
             self._held_lane_counts[note] = active_count - 1
 
     def set_sequence_notes(self, notes: tuple[PianoRollNote, ...]) -> None:
+        if not self._rendering_enabled:
+            return
         normalized = tuple(sorted(notes, key=lambda item: (item.start, item.note, item.end)))
         if normalized != self._sequence_notes:
             self._sequence_notes = normalized
@@ -1317,6 +1395,8 @@ class FallingNotesWidget(QWidget):
         speed_percent: int,
         running: bool,
     ) -> None:
+        if not self._rendering_enabled:
+            return
         was_running = self._playback_running
         self._position = max(0.0, float(position))
         self._position_anchor = time.monotonic()
@@ -1333,6 +1413,8 @@ class FallingNotesWidget(QWidget):
         active_notes: object,
         trigger_events: object,
     ) -> None:
+        if not self._rendering_enabled:
+            return
         _ = trigger_events
         try:
             active = {int(note) for note in active_notes}  # type: ignore[union-attr]
@@ -1378,6 +1460,9 @@ class FallingNotesWidget(QWidget):
         return self._position + (now - self._position_anchor) * self._speed_ratio
 
     def _advance_animation(self) -> None:
+        if not self._rendering_enabled:
+            self._animation_timer.stop()
+            return
         now = time.monotonic()
         effect_notes = set(self._pending_effect_notes) | {
             impact.note for impact in self._hit_impacts
@@ -1408,9 +1493,12 @@ class FallingNotesWidget(QWidget):
 
     def _update_animation_timer(self) -> None:
         should_run = (
-            self._playback_running
-            or bool(self._hit_impacts)
-            or bool(self._lane_fades)
+            self._rendering_enabled
+            and (
+                self._playback_running
+                or bool(self._hit_impacts)
+                or bool(self._lane_fades)
+            )
         )
         if should_run and not self._animation_timer.isActive():
             self._animation_timer.start()

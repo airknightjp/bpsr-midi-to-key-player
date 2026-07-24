@@ -24,7 +24,6 @@ class RecordingView:
         self.logs: list[str] = []
         self.messages: list[tuple[str, str, str]] = []
         self.clear_count = 0
-        self.settings_save_delays: list[int] = []
         self.output_release_delays: list[int] = []
         self.rhythm_score_delays: list[int | None] = []
 
@@ -39,9 +38,6 @@ class RecordingView:
 
     def show_message(self, level: str, title: str, message: str) -> None:
         self.messages.append((level, title, message))
-
-    def schedule_settings_save(self, delay_ms: int) -> None:
-        self.settings_save_delays.append(delay_ms)
 
     def schedule_output_note_release(self, delay_ms: int) -> None:
         self.output_release_delays.append(delay_ms)
@@ -134,17 +130,38 @@ class AppControllerTests(unittest.TestCase):
 
         self.assertAlmostEqual(controller.state.position, 90.1)
 
-    def test_deferred_work_uses_single_shot_view_schedules(self) -> None:
+    def test_settings_are_saved_only_when_controller_shuts_down(self) -> None:
+        controller = self.make_controller()
+        with patch("app_controller.save_settings") as save:
+            controller.request_save()
+            save.assert_not_called()
+
+            controller.shutdown()
+
+        save.assert_called_once()
+
+    def test_settings_can_be_saved_explicitly_without_duplicate_shutdown_save(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        controller.request_save()
+
+        with patch("app_controller.save_settings") as save:
+            self.assertTrue(controller.save_settings_now())
+            save.assert_called_once()
+
+            controller.shutdown()
+
+        save.assert_called_once()
+
+    def test_output_note_release_uses_single_shot_view_schedule(self) -> None:
         controller = self.make_controller()
         view = RecordingView()
         controller.attach_view(view)
-        view.settings_save_delays.clear()
 
-        controller.request_save()
         controller._set_output_note_state(("sound", 1), 60, True)
         controller._set_output_note_state(("sound", 1), 60, False)
 
-        self.assertEqual(view.settings_save_delays, [300])
         self.assertEqual(len(view.output_release_delays), 1)
         self.assertGreater(view.output_release_delays[0], 0)
 
@@ -156,16 +173,19 @@ class AppControllerTests(unittest.TestCase):
             playback_speed_percent=137,
             transpose_semitones=4,
             octave_shift=-1,
+            automatic_audio_buffer_frames=2_048,
+            hide_release_notes_on_startup=True,
         )
 
         self.assertEqual(controller.state.language, "ja")
         self.assertEqual(controller.state.midi_sound_volume, 64)
         self.assertEqual(controller.state.sound_source, "organ")
         self.assertEqual(controller.state.audio_qt_frames, 1_024)
-        self.assertEqual(controller.state.audio_buffer_frames, 512)
+        self.assertEqual(controller.state.audio_buffer_frames, 2_048)
         self.assertEqual(controller.state.playback_speed_percent, 137)
         self.assertEqual(controller.state.transpose_semitones, 4)
         self.assertEqual(controller.state.octave_shift, -1)
+        self.assertTrue(controller.state.hide_release_notes_on_startup)
 
     def test_pause_and_resume_keyboard_playback_from_current_position(self) -> None:
         controller = self.make_controller()
@@ -392,7 +412,25 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.panel_order[:2], ("player", "keyboard"))
         self.assertEqual(len(controller.state.panel_order), 5)
         self.assertEqual(controller.current_settings().panel_order, controller.state.panel_order)
-        self.assertTrue(view.settings_save_delays)
+
+    def test_section_visibility_is_restored_and_persistent(self) -> None:
+        controller = self.make_controller(
+            section_visibility={
+                "input_conversion": False,
+                "common_settings": True,
+                "piano_roll": False,
+                "keyboard": True,
+                "player": True,
+            }
+        )
+
+        self.assertFalse(controller.state.section_visibility["input_conversion"])
+        self.assertFalse(controller.state.section_visibility["piano_roll"])
+
+        controller.set_section_visible("keyboard", False)
+
+        self.assertTrue(controller._settings_dirty)
+        self.assertFalse(controller.current_settings().section_visibility["keyboard"])
 
     def test_auto_sustain_is_persistent_and_updates_all_active_outputs(self) -> None:
         controller = self.make_controller()
@@ -501,7 +539,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(sound_player.sound_source, "electric_piano")
         self.assertEqual(realtime_output.sound_source, "electric_piano")
 
-    def test_automatic_audio_runtime_change_updates_transient_state(self) -> None:
+    def test_automatic_audio_runtime_change_persists_buffer_state(self) -> None:
         controller = self.make_controller()
         view = RecordingView()
         controller.attach_view(view)
@@ -518,10 +556,53 @@ class AppControllerTests(unittest.TestCase):
 
         self.assertEqual(controller.state.audio_qt_frames, 480)
         self.assertEqual(controller.state.audio_buffer_frames, 1_024)
-        self.assertFalse(hasattr(controller.current_settings(), "audio_buffer_frames"))
+        self.assertEqual(
+            controller.current_settings().automatic_audio_buffer_frames,
+            1_024,
+        )
         self.assertIn(
             "Audio runtime automatically adjusted",
             view.logs,
+        )
+
+    def test_learned_qt_minimum_is_persisted_through_settings(self) -> None:
+        controller = self.make_controller(
+            minimum_stable_qt_frames=1_024,
+            qt_audio_environment="old-device|48000|2|Float",
+        )
+        view = RecordingView()
+        controller.attach_view(view)
+
+        controller._queue_worker_message(
+            ("qt_learning", 512, "device|48000|2|Float")
+        )
+        controller.process_pending_events()
+
+        current = controller.current_settings()
+        self.assertEqual(current.minimum_stable_qt_frames, 512)
+        self.assertEqual(
+            current.qt_audio_environment,
+            "device|48000|2|Float",
+        )
+
+    def test_changed_audio_environment_clears_learned_qt_minimum(self) -> None:
+        controller = self.make_controller(
+            minimum_stable_qt_frames=512,
+            qt_audio_environment="old-device|48000|2|Float",
+        )
+        view = RecordingView()
+        controller.attach_view(view)
+
+        controller._queue_worker_message(
+            ("qt_learning", None, "new-device|44100|2|Int16")
+        )
+        controller.process_pending_events()
+
+        current = controller.current_settings()
+        self.assertIsNone(current.minimum_stable_qt_frames)
+        self.assertEqual(
+            current.qt_audio_environment,
+            "new-device|44100|2|Int16",
         )
 
     def test_track_channel_toggle_updates_source_snapshots(self) -> None:
@@ -1030,6 +1111,59 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.rhythm_score, 110)
         self.assertEqual(controller.state.rhythm_combo, 1)
         self.assertEqual(view.rhythm_score_delays[-1], 100)
+
+    def test_hidden_rhythm_game_skips_automatic_scoring(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 3
+        controller.state.current_mode = "sound"
+        controller.set_section_visible("piano_roll", False)
+        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
+        controller.worker_queue.put(("sound_output_note", 3, 60, False, 11.0))
+
+        with patch("app_controller.time.monotonic", return_value=11.0):
+            controller.process_pending_events()
+
+        self.assertEqual(controller.state.rhythm_score, 0)
+        self.assertEqual(controller.state.rhythm_combo, 0)
+        self.assertEqual(controller.state.rhythm_hit_events, ())
+
+    def test_hiding_rhythm_game_cancels_pending_scoring_until_reshown(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        view = RecordingView()
+        controller.attach_view(view)
+        controller.playback_id = 3
+        controller.midi_input_id = 4
+        controller.state.current_mode = "sound"
+        controller.state.midi_input_running = True
+        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
+        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.0))
+
+        with patch("app_controller.time.monotonic", return_value=10.0):
+            controller.process_pending_events()
+
+        self.assertEqual(controller.state.rhythm_score, 100)
+        self.assertTrue(controller._rhythm_scorer.has_active_holds)
+
+        controller.set_section_visible("piano_roll", False)
+        self.assertIsNone(view.rhythm_score_delays[-1])
+        self.assertFalse(controller._rhythm_scorer.has_active_holds)
+
+        with patch("app_controller.time.monotonic", return_value=10.5):
+            controller.process_rhythm_score_update()
+        self.assertEqual(controller.state.rhythm_score, 100)
+        self.assertEqual(controller.state.rhythm_hit_events, ((1, 60, "PERFECT", False),))
+        self.assertIsNone(view.rhythm_score_delays[-1])
+
+        controller.set_section_visible("piano_roll", True)
+        controller.worker_queue.put(("sound_output_note", 3, 64, True, 11.0))
+        controller.worker_queue.put(("midi_output_note", 4, 64, True, 11.0))
+        with patch("app_controller.time.monotonic", return_value=11.0):
+            controller.process_pending_events()
+
+        self.assertGreater(controller.state.rhythm_score, 100)
+        self.assertEqual(controller.state.rhythm_hit_events[-1][1:], (64, "PERFECT", False))
 
     def test_pending_note_timer_displays_miss_without_another_midi_event(
         self,
