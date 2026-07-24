@@ -56,6 +56,7 @@ from config import (
 from i18n import COLOR_THEME_NAMES, LANGUAGE_NAMES, SOUND_SOURCE_NAMES, TEXT
 from note_visualization import build_piano_roll_notes
 from qt_components import (
+    ColumnSeparatorHeaderView,
     ContentPanel,
     FallingNotesWidget,
     InteractiveIconButton,
@@ -860,6 +861,11 @@ class MidiMainWindow(QMainWindow):
 
         self.player_stack = QStackedWidget()
         self.midi_table = QTableWidget(0, 4)
+        self.midi_header = ColumnSeparatorHeaderView(
+            Qt.Orientation.Horizontal,
+            self.midi_table,
+        )
+        self.midi_table.setHorizontalHeader(self.midi_header)
         self.midi_table.setAlternatingRowColors(True)
         self.midi_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.midi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -1474,6 +1480,7 @@ class MidiMainWindow(QMainWindow):
             palette.canvas,
             palette.text,
         )
+        self.midi_header.set_separator_color(palette.border)
         for control in (
             self.volume_control,
             self.speed_control,

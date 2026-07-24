@@ -1617,17 +1617,37 @@ class QtUiTests(unittest.TestCase):
             "Library > Album",
         )
 
-    def test_table_headers_show_theme_colored_column_separators(self) -> None:
+    def test_midi_header_separators_align_with_column_edges(self) -> None:
+        self.window.show()
+        self.application.processEvents()
+        header = self.window.midi_header
+
         for theme_name, palette in THEMES.items():
             with self.subTest(theme=theme_name):
-                stylesheet = build_stylesheet(theme_name)
-                header_rule = stylesheet.split(
-                    "QHeaderView::section {", 1
-                )[1].split("}", 1)[0]
-                self.assertIn(
-                    f"border-right: 1px solid {palette.border};",
-                    header_rule,
+                self.controller.set_option("color_theme", theme_name)
+                self.application.processEvents()
+                image = self.window.midi_table.grab().toImage()
+                header_origin = header.viewport().mapTo(
+                    self.window.midi_table,
+                    QPoint(0, 0),
                 )
+                body_origin = self.window.midi_table.viewport().mapTo(
+                    self.window.midi_table,
+                    QPoint(0, 0),
+                )
+                y = header_origin.y() + max(0, header.viewport().height() // 2)
+                for visual_index in range(header.count() - 1):
+                    logical_index = header.logicalIndex(visual_index)
+                    x = (
+                        body_origin.x()
+                        + header.sectionViewportPosition(logical_index)
+                        + header.sectionSize(logical_index)
+                        - 1
+                    )
+                    self.assertEqual(
+                        image.pixelColor(x, y),
+                        QColor(palette.border),
+                    )
 
     def test_midi_column_widths_are_resizable_saved_and_scale_aware(self) -> None:
         self.window.show()

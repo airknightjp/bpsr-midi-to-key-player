@@ -3461,6 +3461,47 @@ class TrackChannelButton(QToolButton):
         painter.end()
 
 
+class ColumnSeparatorHeaderView(QHeaderView):
+    def __init__(
+        self,
+        orientation: Qt.Orientation,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(orientation, parent)
+        self._separator_color = QColor("#c4ccd6")
+
+    def set_separator_color(self, color: str | QColor) -> None:
+        self._separator_color = QColor(color)
+        self.viewport().update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().paintEvent(event)
+        if self.orientation() != Qt.Orientation.Horizontal or self.count() < 2:
+            return
+
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(self._separator_color, 1))
+        line_bottom = max(0, self.viewport().height() - 2)
+        viewport_offset = 0
+        table = self.parentWidget()
+        if isinstance(table, QTableWidget):
+            viewport_offset = (
+                table.viewport().mapTo(table, QPoint(0, 0)).x()
+                - self.viewport().mapTo(table, QPoint(0, 0)).x()
+            )
+        for visual_index in range(self.count() - 1):
+            logical_index = self.logicalIndex(visual_index)
+            x = (
+                self.sectionViewportPosition(logical_index)
+                + self.sectionSize(logical_index)
+                - 1
+                + viewport_offset
+            )
+            if 0 <= x < self.viewport().width():
+                painter.drawLine(x, 0, x, line_bottom)
+        painter.end()
+
+
 class TrackChannelTable(QTableWidget):
     sourceToggled = Signal(int, int)
     ENABLED_ROLE = Qt.ItemDataRole.UserRole + 1
