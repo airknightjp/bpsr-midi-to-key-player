@@ -12,7 +12,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QFrame, QLabel
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QFrame,
+    QLabel,
+    QPlainTextEdit,
+)
 
 import main as app_main
 import qt_main_window
@@ -184,8 +191,16 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
+        self.assertEqual(qt_main_window.APP_VERSION, "1.3.0")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
+        legacy_source = (project_root / "legacy_tk_main.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            f'APP_VERSION = "{qt_main_window.APP_VERSION}"',
+            legacy_source,
+        )
         for relative_path in (
             "README.md",
             "README.ja.md",
@@ -197,6 +212,11 @@ class QtUiTests(unittest.TestCase):
                 text = (project_root / relative_path).read_text(encoding="utf-8")
                 self.assertIn(expected, text)
                 self.assertNotIn("v1.1.2", text)
+        for language in ("en", "ja", "zh"):
+            with self.subTest(release_notes_language=language):
+                self.assertTrue(
+                    TEXT[language]["release_notes_content"].startswith(expected)
+                )
 
     def test_all_languages_keep_countdown_and_shortcuts_on_one_row(self) -> None:
         self.window.show()
@@ -1806,13 +1826,17 @@ class QtUiTests(unittest.TestCase):
 
         def execute(dialog: QDialog) -> int:
             dialogs.append(dialog)
-            content = dialog.findChild(QLabel, "ReleaseNotesContent")
+            content = dialog.findChild(QPlainTextEdit, "ReleaseNotesContent")
             dont_show = dialog.findChild(
                 QCheckBox,
                 "ReleaseNotesDontShowAgain",
             )
             self.assertIsNotNone(content)
-            self.assertEqual(content.text(), "")
+            self.assertEqual(
+                content.toPlainText(),
+                TEXT["en"]["release_notes_content"],
+            )
+            self.assertTrue(content.isReadOnly())
             self.assertIsNotNone(dont_show)
             dont_show.setChecked(True)
             return 0

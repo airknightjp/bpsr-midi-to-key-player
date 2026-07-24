@@ -21,30 +21,34 @@ The `_internal` folder contains files required by the application. Do not move t
 - Double-click a MIDI file to play or stop MIDI sound playback.
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.
-- Use test mode to log conversion output without sending real key input.
+- Use test mode to hear and log conversion output without sending real key input.
 - Adjust volume, playback position, and playback speed (10-200%). Double-click the volume or speed label to reset it to 100%.
 - Adjust UI scale (100-200%) and window opacity from the View menu.
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
-- Configure timing variation, chord spread, chord reconstruction, and automatic sustain generation under Performance Correction.
-- Configure rapid-repeat prevention under Common Settings.
-- Display used track/channel combinations under a `TC` header in `11` format.
+- Configure timing variation, chord spread, chord reconstruction, and automatic sustain generation.
+- Configure rapid-repeat prevention.
+- Display used track/channel combinations as circular buttons in `11` format.
 - Toggle each track/channel combination, with immediate changes during playback.
 - Convert sustain pedal CC64 to the Space key.
-- Select the software-synth output buffer. The default for new settings is 2048 frames.
+- Select Piano, Electric Piano, Organ, or Synth as the software sound source.
+- Automatically tune the Qt audio queue and internal Buffer for the current environment.
+- Show final output notes on a full A0-C8 keyboard and falling-note rhythm display.
+- Judge MIDI playback against realtime input timing and show score and combo.
+- Control Previous, Play/Pause, Next, Continuous playback, and Repeat one.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Log countdown ticks and in-game countdown key presses.
 - Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported.
 - Lock shortcut settings to avoid accidental changes.
-- Edit the three-octave C3-B5 key bindings from `Settings > Key Bindings`.
+- Edit the C3-B5 bindings and the Sustain, Octave down, and Octave up keys from `Settings > Key Bindings`.
 - Highlight duplicate key bindings in red.
 - Restore all key bindings to their defaults.
 - Switch UI language between Japanese, English, and Chinese.
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
-- Show or hide each of the four main sections from the View menu.
+- Reorder the five main panels by drag and drop and show or hide them from the View menu.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Show version, copyright, and GitHub link from `Other > About BPSR MIDI to KEY Player`.
@@ -52,10 +56,31 @@ The `_internal` folder contains files required by the application. Do not move t
 ## Menus
 
 - `File > Select MIDI Folder`: Select a folder containing MIDI files.
+- `File > Save Settings`: Save the current settings immediately.
 - `File > Exit`: Fully exit the app.
-- `View`: Change scale, opacity, always-on-top, and section visibility.
+- `View`: Change scale, opacity, always-on-top, and panel visibility.
 - `Settings`: Change theme, language, key bindings, and tray behavior.
+- `Other > Release Notes`: Show the changes in the current version.
 - `Other > About BPSR MIDI to KEY Player`: Show version information and the GitHub link.
+
+## Software Synth and Audio Output
+
+MIDI sound playback and realtime preview sound use an in-app software synthesizer without connecting to WinMM MIDI output.
+
+- Select from Piano, Electric Piano, Organ, and Synth.
+- Play up to 64 simultaneous voices.
+- Prefer the output device's recommended audio format, with fallback to Float32, Int16, or Int32 when needed.
+- Automatically tune the Qt audio queue and internal Buffer by monitoring audio starvation, output underruns, and synthesis load.
+- Learn the smallest stable Qt value for the current audio environment and reuse it on the next launch.
+- Show the current values as `Qt ... | Buffer ...` at the right end of the menu bar.
+
+## Performance Display and Scoring
+
+- Show the final output notes from MIDI playback, MIDI input conversion, and realtime input conversion on a full A0-C8 keyboard.
+- Display each note's start, duration, and release position in a falling-note lane aligned with the keyboard.
+- When MIDI playback and realtime input are used together, judge press, hold, and release timing as PERFECT, GREAT, or GOOD and show score and combo.
+- MIDI-only sound playback and MIDI input conversion are displayed as automatic PERFECT performances.
+- Hiding the Rhythm Game or Keyboard panel stops its related drawing and calculations and resynchronizes it when shown again.
 
 ## Note Range
 
@@ -77,7 +102,7 @@ When `Chord reconstruction` is enabled, notes starting within approximately 35 m
 - With `Fit to 3 octaves` enabled, every optimized chord stays inside C3-B5.
 - With range fitting disabled, the low, normal, and high ranges are compared, and `<` or `>` is used only where the optimized chord benefits from a range change.
 - With range fitting disabled, the current playback speed is evaluated continuously. Slower playback can use the added real-time switching margin to select a wider range, while faster playback avoids unnatural consecutive range changes. Changes made during playback take effect immediately.
-- During initial planning, the status shows progress from `Optimizing 0%` through `Optimizing 100%`. The playback clock starts after the plan is ready.
+- The playback clock starts after the initial plan is ready.
 - Replanning during playback runs in the background and playback continues with the current plan until the replacement is ready. Continuous speed changes are debounced for 150 ms and obsolete calculations are cancelled.
 - If every note cannot be placed at once, redundant notes or inner voices are omitted before the top voice or bass.
 - This applies to MIDI file keyboard conversion and MIDI sound playback, not realtime input conversion.
@@ -102,6 +127,7 @@ Use `Settings > Key Bindings` to change the output keys for the C3-B5 three-octa
 - Select a key field and press a key to assign it.
 - Duplicate assignments are shown in red.
 - `Restore Defaults` restores all bindings to the current default map.
+- Sustain, Octave down, and Octave up keys can also be changed.
 - Changes are applied immediately to MIDI file keyboard conversion and realtime input conversion.
 - Only bindings changed from the default are saved to the settings file.
 
@@ -111,8 +137,8 @@ Use `Settings > Key Bindings` to change the output keys for the C3-B5 three-octa
 2. Select `File > Select MIDI Folder` and choose a folder containing MIDI files.
 3. Select a MIDI file from the MIDI list.
 4. Double-click a MIDI file if you only want to play its MIDI sound.
-5. Use `MIDI Input Conversion > Start Playback` to play the selected MIDI as keyboard input.
-6. Use `Realtime Input Conversion > Start Listening` to convert a USB MIDI keyboard in realtime.
+5. Select `MIDI Input Conversion` and press the shared Start button to play the selected MIDI as keyboard input.
+6. Select `Realtime Input Conversion` and press the shared Start button to convert a USB MIDI keyboard in realtime.
 7. During countdown, focus the target application that should receive keyboard input.
 8. Enable `Test mode (sound/log only)` when you want to check conversion sound and logs without sending real keys.
 
@@ -140,6 +166,7 @@ BPSR_MIDI_to_KEY_Player\settings.json
 ```
 
 Settings are saved atomically to reduce the chance of broken settings after an interrupted write.
+Normal setting changes are saved together when the application exits. Use `File > Save Settings` to save them immediately.
 
 ## Requirements
 
@@ -149,7 +176,7 @@ Settings are saved atomically to reduce the chance of broken settings after an i
 
 ## Version
 
-v1.2.0
+v1.3.0
 
 ## Copyright
 

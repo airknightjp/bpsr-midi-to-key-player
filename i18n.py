@@ -67,6 +67,180 @@ SOUND_SOURCE_NAMES = {
 }
 
 
+RELEASE_NOTES_CONTENT = {
+    "en": """v1.3.0
+
+This release adds an in-app software synthesizer, automatic audio tuning,
+performance visualization and scoring, and automatic sustain generation.
+
+[Main changes]
+
+- Replaced WinMM-based MIDI playback and realtime preview audio with an
+  in-app software synthesizer.
+- Added four selectable sound sources: Piano, Electric Piano, Organ, and Synth.
+- Added automatic tuning for the Qt audio queue and internal Buffer. The app
+  monitors audio starvation, output underruns, and synthesis load to balance
+  latency and stability for the current environment.
+- The smallest stable Qt value is learned for each audio environment and saved
+  as the starting value for the next launch.
+- The output device's preferred audio format is used first, with automatic
+  fallback to Float32, Int16, or Int32 when necessary.
+- Added Automatic sustain generation. Harmony, semitone clashes, bass overlap,
+  held-note count, duration, and pitch range are analyzed to avoid muddy pedal
+  use. Existing CC64 pedal events take priority.
+- Added a full A0-C8 keyboard and falling-note rhythm-game display. Both show
+  the notes produced by the final output mapping.
+- Added PERFECT, GREAT, and GOOD timing judgments, combo multipliers, and
+  scoring for note press, hold, and release timing.
+- MIDI-only playback and MIDI input conversion are displayed as automatic
+  PERFECT performances.
+- Added Previous, Play/Pause, Next, Continuous playback, Repeat one, and
+  Continuous playback off controls.
+- Unified realtime input conversion and MIDI input conversion under one Start
+  button while showing the options for the selected mode.
+- Realtime USB MIDI input conversion can now be used during MIDI sound playback.
+- Sustain, Octave down, and Octave up keys can now be changed in Key Bindings.
+- Main panels can be reordered by drag and drop and individually shown or
+  hidden from the View menu. Their order and visibility are saved.
+- Rhythm-game and keyboard calculations stop while those panels are hidden and
+  resynchronize when shown again.
+- Added File > Save Settings. Normal setting changes are saved together when
+  the application exits.
+- Added this release-notes window at startup. Select Don't show again to disable
+  the automatic display.
+
+[Fixes]
+
+- Fixed MIDI list rows not receiving the selected state correctly.
+- Seeking is now applied only when the playback-position drag is released.
+- Fixed repeated and very short notes not updating the keyboard correctly.
+- Active MIDI playback, realtime input, keyboard, and rhythm-game displays now
+  immediately reflect supported setting changes.
+- Moved audio processing to a worker, command queue, PCM ring buffer, and Qt
+  push output to reduce dropouts, latency, and processing load.
+
+[Important changes]
+
+- Distribution changed from a single executable to an install-free extracted
+  folder. Keep the executable and _internal folder together.
+- settings.json is now stored in the extracted application folder. Settings
+  from the previous location are not migrated automatically.""",
+    "ja": """v1.3.0
+
+本バージョンでは、アプリ内ソフトウェア音源、音声出力の自動最適化、
+演奏の可視化・採点機能、サスティンの自動生成を追加しました。
+
+【主な変更】
+
+- MIDI音源再生とリアルタイム試聴音を、WinMMに依存しない
+  アプリ内ソフトウェアシンセへ変更しました。
+- ピアノ、エレクトリックピアノ、オルガン、シンセの
+  4種類から音源を選択できるようになりました。
+- Qtの音声待機量と内部Bufferを自動調整する機能を追加しました。
+  音声供給不足、出力空状態、波形生成負荷を監視し、
+  利用環境に合わせて遅延と安定性のバランスを自動調整します。
+- 利用環境で安定する最小のQt値を学習し、次回起動時の開始値として
+  設定ファイルへ保存するようになりました。
+- 出力デバイスの推奨音声形式を優先し、利用できない場合は
+  Float32、Int16、Int32から対応形式を自動選択します。
+- 「サスティンの自動生成」を追加しました。
+  和声、半音衝突、低音の重なり、保持音数、保持時間などを解析し、
+  音が濁りにくいペダル操作を自動生成します。
+  元の演奏にCC64が含まれる場合は、そのペダル操作を優先します。
+- A0-C8のフル鍵盤表示と、上から音が流れる音ゲー表示を追加しました。
+  実際の最終出力音を鍵盤と音ゲー画面へ反映します。
+- MIDI再生とリアルタイム入力のタイミングを比較する採点機能を
+  追加しました。PERFECT、GREAT、GOODの判定、コンボ倍率、
+  押下、長押し、離上の採点に対応しています。
+- MIDI音源再生のみの場合とMIDI入力変換では、
+  演奏内容を自動的にPERFECTとして表示します。
+- 前の曲、再生／一時停止、次の曲、連続再生、
+  1曲ループ再生の操作を追加しました。
+- リアルタイム入力変換とMIDI入力変換を共通の開始ボタンへ統合し、
+  選択した入力方式の設定だけを表示するようにしました。
+- MIDI音源再生中も、USB MIDIキーボードのリアルタイム入力変換を
+  同時に利用できるようになりました。
+- サスティン、音域下げ、音域上げのキーを
+  キーバインド画面から変更できるようになりました。
+- 各パネルの並び順をドラッグ＆ドロップで変更できるようになりました。
+  表示メニューから各パネルを個別に表示／非表示にでき、
+  並び順と表示状態は設定へ保存されます。
+- 音ゲーまたは鍵盤を非表示にした場合は関連する描画と計算を停止し、
+  再表示時に現在の演奏位置へ同期するようになりました。
+- 「ファイル」メニューへ「設定を保存」を追加しました。
+  通常の設定保存はアプリ終了時にまとめて行います。
+- 起動時にリリースノートを表示する機能を追加しました。
+  「今後表示しない」を選択した場合は、次回から自動表示されません。
+
+【主な修正】
+
+- MIDI一覧をクリックしても選択状態が正しく移動しない問題を修正しました。
+- 再生位置のドラッグ中に再生処理へ影響していた問題を修正し、
+  ドロップ時にのみシークするようにしました。
+- 同じ音の再発音や短い発音が、鍵盤表示へ正しく反映されない問題を
+  修正しました。
+- 設定変更が再生中のMIDI、リアルタイム入力、鍵盤、
+  音ゲー表示へ即時反映されない問題を修正しました。
+- 音声処理を専用ワーカー、コマンドキュー、PCMリングバッファ、
+  Qtへのプッシュ出力へ変更し、音切れ、遅延、処理負荷を改善しました。
+
+【重要な変更】
+
+- 配布形式を単体EXEから、インストール不要のフォルダ展開版へ
+  変更しました。EXEと_internalフォルダを同じ場所で使用してください。
+- 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
+  変更しました。旧保存先の設定は自動移行されません。""",
+    "zh": """v1.3.0
+
+本版本新增了应用内软件合成器、音频输出自动优化、
+演奏可视化与评分，以及自动延音生成功能。
+
+【主要变更】
+
+- 将MIDI音源播放和实时试听音频从WinMM改为应用内软件合成器。
+- 新增钢琴、电钢琴、风琴和合成器四种可选音源。
+- 新增Qt音频等待量和内部Buffer的自动调节。应用会监控音频供给不足、
+  输出欠载和波形生成负载，并根据当前环境自动平衡延迟与稳定性。
+- 学习当前音频环境中可稳定使用的最小Qt值，并保存为下次启动值。
+- 优先使用输出设备的推荐音频格式，必要时自动回退到
+  Float32、Int16或Int32。
+- 新增“自动延音生成”。系统会分析和声、半音冲突、低音重叠、
+  保持音数量、保持时间和音域，生成不易造成声音浑浊的踏板操作。
+  原始演奏中包含CC64时，优先使用原有踏板操作。
+- 新增A0-C8完整键盘和下落式音符显示，并反映最终输出映射后的音符。
+- 新增PERFECT、GREAT、GOOD判定、连击倍率，以及按下、长按和松开评分。
+- 仅播放MIDI音源或执行MIDI输入转换时，演奏会自动显示为PERFECT。
+- 新增上一首、播放／暂停、下一首、连续播放、单曲循环和
+  关闭连续播放操作。
+- 将实时输入转换与MIDI输入转换合并为一个开始按钮，
+  并仅显示当前所选输入方式的设置。
+- MIDI音源播放期间也可以同时使用USB MIDI键盘实时输入转换。
+- 可在按键绑定画面中修改延音、降低八度和升高八度按键。
+- 支持通过拖放调整主面板顺序，也可从“显示”菜单单独显示或隐藏面板。
+  面板顺序与显示状态会保存到设置中。
+- 音乐游戏或键盘面板隐藏时会停止相关绘制与计算，
+  重新显示时同步到当前演奏位置。
+- 在“文件”菜单中新增“保存设置”。普通设置变更会在应用退出时统一保存。
+- 新增启动时显示的发行说明窗口。勾选“以后不再显示”后，
+  下次启动时不会自动显示。
+
+【主要修复】
+
+- 修复点击MIDI列表后选择状态不能正确移动的问题。
+- 拖动播放位置时不再立即影响播放，仅在释放后执行跳转。
+- 修复重复音和极短音符不能正确更新键盘显示的问题。
+- 支持的设置变更会立即反映到MIDI播放、实时输入、键盘和音乐游戏显示。
+- 将音频处理改为专用工作线程、命令队列、PCM环形缓冲区和Qt推送输出，
+  以降低断音、延迟和处理负载。
+
+【重要变更】
+
+- 发布形式由单文件EXE改为免安装文件夹版。请将EXE与_internal文件夹
+  保持在同一位置。
+- settings.json改为保存在应用展开目录中，旧位置的设置不会自动迁移。""",
+}
+
+
 TEXT = {
     "en": {
         "title": "BPSR MIDI to KEY Player",
@@ -75,7 +249,7 @@ TEXT = {
         "menu_settings": "Settings",
         "menu_other": "Other",
         "release_notes": "Release Notes",
-        "release_notes_content": "",
+        "release_notes_content": RELEASE_NOTES_CONTENT["en"],
         "dont_show_again": "Don't show again",
         "about_app": "About BPSR MIDI to KEY Player",
         "about_title": "About BPSR MIDI to KEY Player",
@@ -172,7 +346,7 @@ TEXT = {
         "menu_settings": "\u8a2d\u5b9a",
         "menu_other": "\u305d\u306e\u4ed6",
         "release_notes": "\u30ea\u30ea\u30fc\u30b9\u30ce\u30fc\u30c8",
-        "release_notes_content": "",
+        "release_notes_content": RELEASE_NOTES_CONTENT["ja"],
         "dont_show_again": "\u4eca\u5f8c\u8868\u793a\u3057\u306a\u3044",
         "about_app": "BPSR MIDI to KEY Player \u306b\u3064\u3044\u3066",
         "about_title": "BPSR MIDI to KEY Player \u306b\u3064\u3044\u3066",
@@ -269,7 +443,7 @@ TEXT = {
         "menu_settings": "\u8bbe\u7f6e",
         "menu_other": "\u5176\u4ed6",
         "release_notes": "\u53d1\u884c\u8bf4\u660e",
-        "release_notes_content": "",
+        "release_notes_content": RELEASE_NOTES_CONTENT["zh"],
         "dont_show_again": "\u4ee5\u540e\u4e0d\u518d\u663e\u793a",
         "about_app": "\u5173\u4e8e BPSR MIDI to KEY Player",
         "about_title": "\u5173\u4e8e BPSR MIDI to KEY Player",

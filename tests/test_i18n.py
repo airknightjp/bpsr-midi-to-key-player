@@ -46,14 +46,20 @@ class I18nTests(unittest.TestCase):
 
     def test_release_notes_labels_exist_for_all_languages(self) -> None:
         expected = {
-            "en": ("Release Notes", "Don't show again"),
+            "en": (
+                "Release Notes",
+                "Don't show again",
+                "in-app software synthesizer",
+            ),
             "ja": (
                 "\u30ea\u30ea\u30fc\u30b9\u30ce\u30fc\u30c8",
                 "\u4eca\u5f8c\u8868\u793a\u3057\u306a\u3044",
+                "\u30a2\u30d7\u30ea\u5185\u30bd\u30d5\u30c8\u30a6\u30a7\u30a2\u97f3\u6e90",
             ),
             "zh": (
                 "\u53d1\u884c\u8bf4\u660e",
                 "\u4ee5\u540e\u4e0d\u518d\u663e\u793a",
+                "\u5e94\u7528\u5185\u8f6f\u4ef6\u5408\u6210\u5668",
             ),
         }
         for language, labels in expected.items():
@@ -61,7 +67,11 @@ class I18nTests(unittest.TestCase):
                 translations = TEXT[language]
                 self.assertEqual(translations["release_notes"], labels[0])
                 self.assertEqual(translations["dont_show_again"], labels[1])
-                self.assertEqual(translations["release_notes_content"], "")
+                content = translations["release_notes_content"]
+                self.assertTrue(content.startswith("v1.3.0"))
+                self.assertIn(labels[2], content)
+                self.assertIn("Qt", content)
+                self.assertIn("Buffer", content)
 
     def test_view_scale_and_advanced_settings_labels_exist_for_all_languages(self) -> None:
         expected = {

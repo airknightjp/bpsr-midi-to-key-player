@@ -71,7 +71,7 @@ from qt_components import (
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 KEYBOARD_PANEL_HEIGHT = 71
@@ -2189,12 +2189,10 @@ class MidiMainWindow(QMainWindow):
         dialog.resize(round(520 * scale), round(300 * scale))
         layout = QVBoxLayout(dialog)
 
-        content = QLabel(text["release_notes_content"])
+        content = QPlainTextEdit()
         content.setObjectName("ReleaseNotesContent")
-        content.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
-        content.setWordWrap(True)
+        content.setReadOnly(True)
+        content.setPlainText(text["release_notes_content"])
         content.setMinimumHeight(round(190 * scale))
         layout.addWidget(content, 1)
 
