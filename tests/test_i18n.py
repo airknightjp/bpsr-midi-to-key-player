@@ -195,11 +195,6 @@ class I18nTests(unittest.TestCase):
                 self.assertEqual(next(iter(theme_names)), "sky_blue")
                 self.assertNotIn("\u2605", theme_names["sky_blue"])
 
-    def test_note_range_column_label_exists_for_all_languages(self) -> None:
-        self.assertEqual(TEXT["en"]["note_range"], "Range")
-        self.assertEqual(TEXT["ja"]["note_range"], "\u97f3\u57df")
-        self.assertEqual(TEXT["zh"]["note_range"], "\u97f3\u57df")
-
     def test_folder_column_label_exists_for_all_languages(self) -> None:
         self.assertEqual(TEXT["en"]["folder"], "Folder")
         self.assertEqual(TEXT["ja"]["folder"], "\u30d5\u30a9\u30eb\u30c0")

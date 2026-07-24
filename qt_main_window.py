@@ -54,7 +54,7 @@ from config import (
     normalize_panel_order,
 )
 from i18n import COLOR_THEME_NAMES, LANGUAGE_NAMES, SOUND_SOURCE_NAMES, TEXT
-from note_visualization import build_piano_roll_notes
+from note_visualization import build_output_note_range, build_piano_roll_notes
 from qt_components import (
     ColumnSeparatorHeaderView,
     ContentPanel,
@@ -860,7 +860,7 @@ class MidiMainWindow(QMainWindow):
         )
 
         self.player_stack = QStackedWidget()
-        self.midi_table = QTableWidget(0, 4)
+        self.midi_table = QTableWidget(0, 3)
         self.midi_header = ColumnSeparatorHeaderView(
             Qt.Orientation.Horizontal,
             self.midi_table,
@@ -1033,6 +1033,45 @@ class MidiMainWindow(QMainWindow):
             if self._signature_changed("settings", settings_signature):
                 self._render_settings(state)
 
+            optimization_plan = self.controller.current_chord_optimization_plan()
+            applied_optimization_plan = (
+                optimization_plan
+                if state.chord_optimization
+                else None
+            )
+            if (
+                state.section_visibility["keyboard"]
+                or state.section_visibility["piano_roll"]
+            ):
+                output_range_signature = (
+                    id(self.controller.events),
+                    len(self.controller.events),
+                    tuple(
+                        (item.track, item.channel, item.enabled)
+                        for item in state.track_channels
+                    ),
+                    state.auto_fit_note_range,
+                    state.transpose_semitones,
+                    state.octave_shift,
+                    state.chord_optimization,
+                    id(applied_optimization_plan),
+                )
+                if self._signature_changed(
+                    "output_note_range",
+                    output_range_signature,
+                ):
+                    output_note_range = build_output_note_range(
+                        self.controller.events,
+                        enabled_sources=self.controller.enabled_sources(),
+                        enabled_channels=self.controller.enabled_channels(),
+                        auto_fit_note_range=state.auto_fit_note_range,
+                        transpose_semitones=state.transpose_semitones,
+                        octave_shift=state.octave_shift,
+                        chord_optimization_plan=applied_optimization_plan,
+                    )
+                    self.output_keyboard.set_used_note_range(output_note_range)
+                    self.piano_roll.set_used_note_range(output_note_range)
+
             if state.section_visibility["keyboard"]:
                 keyboard_visual_signature = (
                     keyboard_display_notes,
@@ -1049,9 +1088,6 @@ class MidiMainWindow(QMainWindow):
             piano_roll_running = self.controller.piano_roll_playback_running()
             self.position_slider.set_playback_running(piano_roll_running)
             if state.section_visibility["piano_roll"]:
-                optimization_plan = (
-                    self.controller.current_chord_optimization_plan()
-                )
                 piano_roll_sequence_signature = (
                     id(self.controller.events),
                     len(self.controller.events),
@@ -1082,9 +1118,7 @@ class MidiMainWindow(QMainWindow):
                             transpose_semitones=state.transpose_semitones,
                             octave_shift=state.octave_shift,
                             chord_optimization_plan=(
-                                optimization_plan
-                                if state.chord_optimization
-                                else None
+                                applied_optimization_plan
                             ),
                             humanize_timing=state.humanize_timing,
                             chord_strum=state.chord_strum,
@@ -1248,7 +1282,6 @@ class MidiMainWindow(QMainWindow):
                 text["name"],
                 text["folder"],
                 text["duration"],
-                text["note_range"],
             ]
         )
         for column in range(self.midi_table.columnCount()):
@@ -1696,6 +1729,7 @@ class MidiMainWindow(QMainWindow):
             )
             if visibility[2]:
                 for signature in (
+                    "output_note_range",
                     "piano_roll_sequence",
                     "piano_roll_playback",
                     "piano_roll_live",
@@ -1717,6 +1751,10 @@ class MidiMainWindow(QMainWindow):
                 current_retrigger_events=current_retrigger_events,
             )
             if visibility[3]:
+                self._render_signatures.pop(
+                    "output_note_range",
+                    None,
+                )
                 self._render_signatures.pop(
                     "keyboard_visualization",
                     None,
@@ -2026,7 +2064,7 @@ class MidiMainWindow(QMainWindow):
                 self.midi_table.setRowCount(len(state.midi_rows))
             for row_index, row in enumerate(state.midi_rows):
                 for column, value in enumerate(
-                    (row.name, row.folder, row.duration, row.note_range)
+                    (row.name, row.folder, row.duration)
                 ):
                     item = self.midi_table.item(row_index, column)
                     if item is None:

@@ -1582,7 +1582,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.midi_table.horizontalHeader().height(), 24)
         self.assertEqual(self.window.player_body_gap.height(), 0)
 
-    def test_midi_list_renders_folder_column_after_name(self) -> None:
+    def test_midi_list_renders_folder_and_duration_columns(self) -> None:
         path = Path("Library") / "Album" / "song.mid"
         self.controller.midi_files = [path]
         self.controller.state.midi_rows = [
@@ -1597,20 +1597,20 @@ class QtUiTests(unittest.TestCase):
         self.controller._notify()
         self.application.processEvents()
 
-        self.assertEqual(self.window.midi_table.columnCount(), 4)
+        self.assertEqual(self.window.midi_table.columnCount(), 3)
         self.assertEqual(
             [
                 self.window.midi_table.horizontalHeaderItem(column).text()
-                for column in range(4)
+                for column in range(3)
             ],
-            ["Name", "Folder", "Duration", "Range"],
+            ["Name", "Folder", "Duration"],
         )
         self.assertEqual(
             [
                 self.window.midi_table.item(0, column).text()
-                for column in range(4)
+                for column in range(3)
             ],
-            ["song.mid", "Library > Album", "01:23", "C3-B5"],
+            ["song.mid", "Library > Album", "01:23"],
         )
         self.assertEqual(
             self.window.midi_table.item(0, 1).toolTip(),
@@ -1668,7 +1668,7 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
         header = self.window.midi_table.horizontalHeader()
 
-        for column in range(4):
+        for column in range(3):
             with self.subTest(column=column):
                 self.assertEqual(
                     header.sectionResizeMode(column),
@@ -1679,25 +1679,25 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
         self.assertEqual(
             self.controller.state.midi_column_widths,
-            (630, 240, 80, 90),
+            (630, 240, 80),
         )
         self.assertEqual(
             self.controller.current_settings().midi_column_widths,
-            (630, 240, 80, 90),
+            (630, 240, 80),
         )
 
         self.controller.set_option("ui_scale_percent", 200)
         self.application.processEvents()
         self.assertEqual(
-            [self.window.midi_table.columnWidth(column) for column in range(4)],
-            [1260, 480, 160, 180],
+            [self.window.midi_table.columnWidth(column) for column in range(3)],
+            [1260, 480, 160],
         )
 
         header.resizeSection(2, 200)
         self.application.processEvents()
         self.assertEqual(
             self.controller.state.midi_column_widths,
-            (630, 240, 100, 90),
+            (630, 240, 100),
         )
 
     def test_clicking_playback_position_seeks_to_clicked_value(self) -> None:
@@ -3492,6 +3492,85 @@ class QtUiTests(unittest.TestCase):
             frozenset((21, 61, 108)),
         )
 
+    def test_final_output_range_updates_keyboard_and_falling_notes(self) -> None:
+        self.controller.events = [
+            MidiEvent(0.0, "note_on", channel=0, note=24, velocity=90, track=0),
+            MidiEvent(1.0, "note_on", channel=0, note=84, velocity=90, track=0),
+        ]
+        self.controller.state.track_channels = [TrackChannelItem(0, 0, True)]
+        self.controller._set_enabled_sources(((0, 0),))
+        self.controller.state.auto_fit_note_range = True
+        self.controller._notify()
+
+        self.assertEqual(self.window.output_keyboard.used_note_range, (48, 72))
+        self.assertEqual(self.window.piano_roll.used_note_range, (48, 72))
+
+        self.controller.set_option("transpose_semitones", 2)
+        self.application.processEvents()
+
+        self.assertEqual(self.window.output_keyboard.used_note_range, (50, 74))
+        self.assertEqual(self.window.piano_roll.used_note_range, (50, 74))
+
+    def test_unused_final_output_range_is_visually_dimmed(self) -> None:
+        keyboard = PianoKeyboardWidget()
+        keyboard.resize(1080, 57)
+        keyboard.show()
+        roll = FallingNotesWidget()
+        roll.resize(1080, 57)
+        roll.show()
+        self.application.processEvents()
+        keyboard_plain = keyboard.grab().toImage()
+        roll_plain = roll.grab().toImage()
+
+        keyboard.set_used_note_range((48, 72))
+        roll.set_used_note_range((48, 72))
+        self.application.processEvents()
+        keyboard_ranged = keyboard.grab().toImage()
+        roll_ranged = roll.grab().toImage()
+
+        white_notes = [
+            note
+            for note in range(keyboard.NOTE_MIN, keyboard.NOTE_MAX + 1)
+            if note % 12 in keyboard.WHITE_PITCH_CLASSES
+        ]
+        white_width = (keyboard.width() - 1) / len(white_notes)
+        unused_x = round((white_notes.index(21) + 0.5) * white_width)
+        used_x = round((white_notes.index(60) + 0.5) * white_width)
+        self.assertNotEqual(
+            keyboard_plain.pixelColor(unused_x, 30),
+            keyboard_ranged.pixelColor(unused_x, 30),
+        )
+        self.assertEqual(
+            keyboard_plain.pixelColor(used_x, 30),
+            keyboard_ranged.pixelColor(used_x, 30),
+        )
+
+        unused_roll_rect = roll._note_rect(21, roll.width() - 1)
+        used_roll_rect = roll._note_rect(60, roll.width() - 1)
+        self.assertIsNotNone(unused_roll_rect)
+        self.assertIsNotNone(used_roll_rect)
+        unused_roll_end = round(
+            unused_roll_rect[0] + unused_roll_rect[1]
+        )
+        used_roll_start = round(used_roll_rect[0])
+        used_roll_end = round(used_roll_rect[0] + used_roll_rect[1])
+        self.assertTrue(
+            any(
+                roll_plain.pixelColor(x, y) != roll_ranged.pixelColor(x, y)
+                for x in range(0, max(1, unused_roll_end))
+                for y in range(roll.height())
+            )
+        )
+        self.assertFalse(
+            any(
+                roll_plain.pixelColor(x, y) != roll_ranged.pixelColor(x, y)
+                for x in range(used_roll_start, max(used_roll_start + 1, used_roll_end))
+                for y in range(roll.height())
+            )
+        )
+        keyboard.close()
+        roll.close()
+
     def test_three_octave_keyboard_visibly_changes_a_pressed_key(self) -> None:
         keyboard = PianoKeyboardWidget()
         keyboard.resize(420, 76)
@@ -3937,8 +4016,8 @@ class QtUiTests(unittest.TestCase):
             "slider_pane_width": self.window.slider_pane.width(),
             "track_width": self.window.track_channel_container.width(),
             "tab_height": self.window.tab_bar.height(),
-            "length_column": self.window.midi_table.columnWidth(1),
-            "range_column": self.window.midi_table.columnWidth(2),
+            "folder_column": self.window.midi_table.columnWidth(1),
+            "duration_column": self.window.midi_table.columnWidth(2),
         }
 
         self.controller.set_option("ui_scale_percent", 200)
@@ -3950,8 +4029,8 @@ class QtUiTests(unittest.TestCase):
             "slider_pane_width": self.window.slider_pane.width(),
             "track_width": self.window.track_channel_container.width(),
             "tab_height": self.window.tab_bar.height(),
-            "length_column": self.window.midi_table.columnWidth(1),
-            "range_column": self.window.midi_table.columnWidth(2),
+            "folder_column": self.window.midi_table.columnWidth(1),
+            "duration_column": self.window.midi_table.columnWidth(2),
         }
 
         font_dependent_dimensions = {"slider_pane_width"}

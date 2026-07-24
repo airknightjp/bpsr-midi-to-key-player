@@ -71,7 +71,7 @@ class AppSettings:
     ui_scale_percent: int = 100
     window_width: int = 900
     window_height: int = 560
-    midi_column_widths: tuple[int, int, int, int] = DEFAULT_MIDI_COLUMN_WIDTHS
+    midi_column_widths: tuple[int, int, int] = DEFAULT_MIDI_COLUMN_WIDTHS
     last_midi_folder: str = ""
     keyboard_play_shortcut: str = DEFAULT_KEYBOARD_PLAY_SHORTCUT
     keyboard_pause_shortcut: str = DEFAULT_KEYBOARD_PAUSE_SHORTCUT

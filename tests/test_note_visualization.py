@@ -4,7 +4,11 @@ import unittest
 
 from chord_optimization import ChordOptimizationPlan
 from midi_parser import MidiEvent
-from note_visualization import PianoRollNote, build_piano_roll_notes
+from note_visualization import (
+    PianoRollNote,
+    build_output_note_range,
+    build_piano_roll_notes,
+)
 
 
 class NoteVisualizationTests(unittest.TestCase):
@@ -38,6 +42,23 @@ class NoteVisualizationTests(unittest.TestCase):
         )
 
         self.assertEqual([note.note for note in notes], [50])
+
+    def test_output_range_uses_final_transformed_notes(self) -> None:
+        events = [
+            MidiEvent(0.0, "note_on", channel=0, note=24, velocity=90, track=0),
+            MidiEvent(1.0, "note_on", channel=0, note=83, velocity=90, track=0),
+            MidiEvent(2.0, "note_on", channel=1, note=96, velocity=90, track=1),
+        ]
+
+        note_range = build_output_note_range(
+            events,
+            enabled_sources={(0, 0)},
+            auto_fit_note_range=True,
+            transpose_semitones=2,
+            octave_shift=1,
+        )
+
+        self.assertEqual(note_range, (50, 73))
 
     def test_excludes_disabled_sources_and_notes_outside_full_piano(self) -> None:
         events = [

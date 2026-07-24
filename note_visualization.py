@@ -20,6 +20,39 @@ class PianoRollNote:
     note: int
 
 
+def build_output_note_range(
+    events: Iterable[MidiEvent],
+    *,
+    enabled_sources: set[tuple[int, int]] | None = None,
+    enabled_channels: set[int] | None = None,
+    auto_fit_note_range: bool = False,
+    transpose_semitones: int = 0,
+    octave_shift: int = 0,
+    chord_optimization_plan: ChordOptimizationPlan | None = None,
+) -> tuple[int, int] | None:
+    output_notes: list[int] = []
+    for event in events:
+        if (
+            event.kind != "note_on"
+            or event.note is None
+            or event.channel is None
+            or not _event_enabled(event, enabled_sources, enabled_channels)
+        ):
+            continue
+        note = _visual_note(
+            event,
+            auto_fit_note_range=auto_fit_note_range,
+            transpose_semitones=transpose_semitones,
+            octave_shift=octave_shift,
+            chord_optimization_plan=chord_optimization_plan,
+        )
+        if note is not None:
+            output_notes.append(note)
+    if not output_notes:
+        return None
+    return min(output_notes), max(output_notes)
+
+
 def build_piano_roll_notes(
     events: Iterable[MidiEvent],
     *,

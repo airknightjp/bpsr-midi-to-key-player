@@ -842,6 +842,7 @@ class PianoKeyboardWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._active_notes: frozenset[int] = frozenset()
+        self._used_note_range: tuple[int, int] | None = None
         self._surface = QColor("#ffffff")
         self._border = QColor("#9aa5b1")
         self._text = QColor("#5d6878")
@@ -861,6 +862,10 @@ class PianoKeyboardWidget(QWidget):
     @property
     def active_notes(self) -> frozenset[int]:
         return self._active_notes
+
+    @property
+    def used_note_range(self) -> tuple[int, int] | None:
+        return self._used_note_range
 
     @property
     def rendering_enabled(self) -> bool:
@@ -900,6 +905,27 @@ class PianoKeyboardWidget(QWidget):
         if active != self._active_notes:
             self._active_notes = active
             self.update()
+
+    def set_used_note_range(self, note_range: object) -> None:
+        normalized: tuple[int, int] | None = None
+        if note_range is not None:
+            try:
+                low, high = note_range  # type: ignore[misc]
+                low = max(self.NOTE_MIN, min(self.NOTE_MAX, int(low)))
+                high = max(self.NOTE_MIN, min(self.NOTE_MAX, int(high)))
+                if low <= high:
+                    normalized = (low, high)
+            except (TypeError, ValueError):
+                normalized = None
+        if normalized != self._used_note_range:
+            self._used_note_range = normalized
+            self.update()
+
+    def _note_is_used(self, note: int) -> bool:
+        return (
+            self._used_note_range is None
+            or self._used_note_range[0] <= note <= self._used_note_range[1]
+        )
 
     def set_retrigger_events(self, events: object) -> None:
         if not self._rendering_enabled:
@@ -993,14 +1019,23 @@ class PianoKeyboardWidget(QWidget):
                 note in self._active_notes
                 and note not in self._retrigger_release_until
             )
-            painter.fillRect(key_rect, self._accent if active else self._surface)
-            painter.setPen(QPen(self._accent_border, 1.0) if active else border_pen)
+            used = self._note_is_used(note)
+            fill = self._surface if used else self._surface.darker(118)
+            painter.fillRect(key_rect, self._accent if active else fill)
+            painter.setPen(
+                QPen(self._accent_border, 1.0)
+                if active
+                else border_pen
+            )
             painter.drawRect(key_rect)
 
         for index, note in enumerate(white_notes):
             if note == self.NOTE_MIN or note % 12 == 0:
                 painter.setFont(label_font)
-                painter.setPen(self._text)
+                label_color = QColor(self._text)
+                if not self._note_is_used(note):
+                    label_color.setAlpha(120)
+                painter.setPen(label_color)
                 key_center = (index + 0.5) * white_width
                 label_text = (
                     f"A{note // 12 - 1}"
@@ -1041,7 +1076,9 @@ class PianoKeyboardWidget(QWidget):
                 note in self._active_notes
                 and note not in self._retrigger_release_until
             )
-            painter.fillRect(key_rect, self._accent if active else self._black)
+            used = self._note_is_used(note)
+            fill = self._black if used else self._black.lighter(145)
+            painter.fillRect(key_rect, self._accent if active else fill)
             painter.setPen(QPen(self._accent_border if active else self._border, 1.0))
             painter.drawRect(key_rect)
         painter.end()
@@ -1102,6 +1139,7 @@ class FallingNotesWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._sequence_notes: tuple[PianoRollNote, ...] = ()
+        self._used_note_range: tuple[int, int] | None = None
         self._sequence_starts: tuple[float, ...] = ()
         self._sequence_by_end: tuple[PianoRollNote, ...] = ()
         self._sequence_ends: tuple[float, ...] = ()
@@ -1153,6 +1191,10 @@ class FallingNotesWidget(QWidget):
     @property
     def sequence_notes(self) -> tuple[PianoRollNote, ...]:
         return self._sequence_notes
+
+    @property
+    def used_note_range(self) -> tuple[int, int] | None:
+        return self._used_note_range
 
     @property
     def rendering_enabled(self) -> bool:
@@ -1396,6 +1438,24 @@ class FallingNotesWidget(QWidget):
             self._frame_visible_lanes = frozenset()
             self.update()
 
+    def set_used_note_range(self, note_range: object) -> None:
+        normalized: tuple[int, int] | None = None
+        if note_range is not None:
+            try:
+                low, high = note_range  # type: ignore[misc]
+                low = max(self.NOTE_MIN, min(self.NOTE_MAX, int(low)))
+                high = max(self.NOTE_MIN, min(self.NOTE_MAX, int(high)))
+                if low <= high:
+                    normalized = (low, high)
+            except (TypeError, ValueError):
+                normalized = None
+        if normalized != self._used_note_range:
+            self._used_note_range = normalized
+            self._static_layer = None
+            self._grid_layer = None
+            self._frame_layer = None
+            self.update()
+
     def set_playback_state(
         self,
         position: float,
@@ -1605,6 +1665,27 @@ class FallingNotesWidget(QWidget):
             if note == self.NOTE_MIN or note % 12 == 0:
                 x = index * white_width + 0.5
                 painter.drawLine(QPointF(x, 0.5), QPointF(x, height))
+        if self._used_note_range is not None:
+            low_rect = self._note_rect(self._used_note_range[0], width)
+            high_rect = self._note_rect(self._used_note_range[1], width)
+            if low_rect is not None and high_rect is not None:
+                used_left = max(0.0, low_rect[0])
+                used_right = min(width, high_rect[0] + high_rect[1])
+                unused_overlay = QColor(self._surface)
+                unused_overlay.setAlpha(205)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(unused_overlay)
+                if used_left > 0:
+                    painter.drawRect(QRectF(0, 0, used_left, height))
+                if used_right < width:
+                    painter.drawRect(
+                        QRectF(
+                            used_right,
+                            0,
+                            width - used_right,
+                            height,
+                        )
+                    )
         painter.end()
         frame_layer = QPixmap(self.size())
         frame_layer.fill(Qt.GlobalColor.transparent)
