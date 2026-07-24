@@ -1617,6 +1617,18 @@ class QtUiTests(unittest.TestCase):
             "Library > Album",
         )
 
+    def test_table_headers_show_theme_colored_column_separators(self) -> None:
+        for theme_name, palette in THEMES.items():
+            with self.subTest(theme=theme_name):
+                stylesheet = build_stylesheet(theme_name)
+                header_rule = stylesheet.split(
+                    "QHeaderView::section {", 1
+                )[1].split("}", 1)[0]
+                self.assertIn(
+                    f"border-right: 1px solid {palette.border};",
+                    header_rule,
+                )
+
     def test_midi_column_widths_are_resizable_saved_and_scale_aware(self) -> None:
         self.window.show()
         self.application.processEvents()

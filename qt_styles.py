@@ -375,6 +375,7 @@ def build_stylesheet(
         background: {palette.panel_alt};
         border: none;
         border-bottom: 1px solid {palette.border};
+        border-right: 1px solid {palette.border};
         padding: {pad_y}px {pad_x}px;
         font-weight: 600;
     }}
