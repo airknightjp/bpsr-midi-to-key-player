@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -69,6 +70,13 @@ from qt_components import (
     make_transport_icon,
 )
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
+from update_service import (
+    AvailableUpdate,
+    UpdateService,
+    automatic_update_supported,
+    launch_update_installer,
+    read_pending_update_error,
+)
 
 
 APP_VERSION = "1.3.1"
@@ -106,6 +114,8 @@ class MidiMainWindow(QMainWindow):
         self._render_signatures: dict[str, object] = {}
         self._rendered_midi_rows: object | None = None
         self._rendered_track_channels: object | None = None
+        self._available_update: AvailableUpdate | None = None
+        self._manual_update_check = False
         self._build_ui()
         self._focus_clear_controls = (
             self.sound_source_combo,
@@ -118,6 +128,13 @@ class MidiMainWindow(QMainWindow):
         if application is not None:
             application.installEventFilter(self)
         self._create_tray_icon()
+        self.update_service = UpdateService(self)
+        self.update_service.checkCompleted.connect(
+            self._update_check_completed
+        )
+        self.update_service.checkFailed.connect(
+            self._update_check_failed
+        )
         self.event_dispatch_requested.connect(
             self.controller.process_pending_events,
             Qt.ConnectionType.QueuedConnection,
@@ -2097,6 +2114,11 @@ class MidiMainWindow(QMainWindow):
         tray_action.toggled.connect(lambda value: self._set_option("tray_resident", value))
 
         other_menu = self.menuBar().addMenu(text["menu_other"])
+        other_menu.addAction(
+            text["check_for_updates"],
+            self.check_for_updates_manually,
+        )
+        other_menu.addSeparator()
         other_menu.addAction(text["release_notes"], self._open_release_notes)
         other_menu.addSeparator()
         other_menu.addAction(text["about_app"], self._open_about)
@@ -2183,6 +2205,149 @@ class MidiMainWindow(QMainWindow):
         }.get(level, QMessageBox.Icon.Information)
         box = QMessageBox(icon, title, message, QMessageBox.StandardButton.Ok, self)
         box.exec()
+
+    def run_startup_tasks(self) -> None:
+        self.show_pending_update_error()
+        self.show_startup_release_notes()
+        self.start_update_check()
+
+    def start_update_check(self, manual: bool = False) -> None:
+        if manual:
+            self._manual_update_check = True
+        self.update_service.check_for_updates(APP_VERSION)
+
+    def check_for_updates_manually(self) -> None:
+        self.start_update_check(manual=True)
+
+    def _update_check_completed(self, update: object) -> None:
+        manual = self._manual_update_check
+        self._manual_update_check = False
+        if isinstance(update, AvailableUpdate):
+            self._show_available_update(update)
+            self._confirm_update()
+            return
+        if manual:
+            self._show_no_updates_dialog()
+
+    def _show_no_updates_dialog(self) -> None:
+        text = TEXT[self.state.language]
+        scale = self.state.ui_scale_percent / 100.0
+        dialog = QDialog(self)
+        dialog.setObjectName("UpdateStatusDialog")
+        dialog.setWindowTitle(text["update_title"])
+        dialog.setWindowIcon(self.windowIcon())
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setFixedWidth(round(300 * scale))
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(
+            round(22 * scale),
+            round(20 * scale),
+            round(22 * scale),
+            round(16 * scale),
+        )
+        layout.setSpacing(round(16 * scale))
+
+        result = QHBoxLayout()
+        result.setSpacing(round(10 * scale))
+        result.addStretch(1)
+
+        badge = QLabel("\u2713")
+        badge.setObjectName("UpdateStatusBadge")
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge_size = round(28 * scale)
+        badge.setFixedSize(badge_size, badge_size)
+        result.addWidget(badge)
+
+        message = QLabel(text["no_updates"])
+        message.setObjectName("UpdateStatusMessage")
+        message.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        result.addWidget(message)
+        result.addStretch(1)
+        layout.addLayout(result)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        close = QPushButton(text["close"])
+        close.setObjectName("UpdateStatusCloseButton")
+        close.setDefault(True)
+        close.setMinimumWidth(round(88 * scale))
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(close)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _update_check_failed(self, error: str) -> None:
+        manual = self._manual_update_check
+        self._manual_update_check = False
+        if not manual:
+            return
+        text = TEXT[self.state.language]
+        QMessageBox.warning(
+            self,
+            text["update_error_title"],
+            text["update_check_failed"].format(error=error),
+        )
+
+    def show_pending_update_error(self) -> None:
+        message = read_pending_update_error()
+        if not message:
+            return
+        text = TEXT[self.state.language]
+        QMessageBox.warning(
+            self,
+            text["update_error_title"],
+            message,
+        )
+
+    def _show_available_update(self, update: object) -> None:
+        if not isinstance(update, AvailableUpdate):
+            return
+        self._available_update = update
+
+    def _confirm_update(self) -> None:
+        update = self._available_update
+        if update is None:
+            return
+        text = TEXT[self.state.language]
+        if not automatic_update_supported():
+            QMessageBox.information(
+                self,
+                text["update_title"],
+                text["update_not_supported"],
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            text["update_title"],
+            text["update_confirm"].format(
+                current=APP_VERSION,
+                version=update.version,
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.controller.save_settings_now()
+            started = launch_update_installer(
+                update,
+                process_id=os.getpid(),
+                language=self.state.language,
+            )
+            if not started:
+                raise RuntimeError("PowerShell updater did not start.")
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                text["update_error_title"],
+                f'{text["update_install_failed"]}\n{exc}',
+            )
+            return
+        self.exit_application()
 
     def show_startup_release_notes(self) -> None:
         if not self.state.hide_release_notes_on_startup:

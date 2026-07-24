@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
+    QPushButton,
 )
 
 import main as app_main
@@ -45,6 +47,7 @@ from qt_components import (
 )
 from qt_styles import THEMES, build_stylesheet
 from settings import AppSettings
+from update_service import AvailableUpdate, ReleaseAsset
 
 
 class QtUiTests(unittest.TestCase):
@@ -1896,17 +1899,30 @@ class QtUiTests(unittest.TestCase):
 
         self.save_settings_mock.assert_called_once()
 
-    def test_other_menu_starts_with_release_notes(self) -> None:
+    def test_other_menu_starts_with_update_check_then_release_notes(self) -> None:
         other_action = next(
             action
             for action in self.window.menuBar().actions()
             if action.text() == "Other"
         )
-
+        commands = [
+            action
+            for action in other_action.menu().actions()
+            if not action.isSeparator()
+        ]
         self.assertEqual(
-            other_action.menu().actions()[0].text(),
-            "Release Notes",
+            [action.text() for action in commands[:2]],
+            ["Check for Updates", "Release Notes"],
         )
+        with patch.object(
+            self.window.update_service,
+            "check_for_updates",
+            return_value=True,
+        ) as check:
+            commands[0].trigger()
+
+        check.assert_called_once_with(qt_main_window.APP_VERSION)
+        self.assertTrue(self.window._manual_update_check)
 
     def test_release_notes_checkbox_saves_immediately_when_checked(self) -> None:
         dialogs: list[QDialog] = []
@@ -1950,10 +1966,174 @@ class QtUiTests(unittest.TestCase):
             self.window.show_startup_release_notes()
             open_notes.assert_called_once()
 
-    def test_main_schedules_release_notes_after_startup(self) -> None:
+    def test_main_schedules_startup_tasks(self) -> None:
         source = inspect.getsource(app_main.main)
 
-        self.assertIn("window.show_startup_release_notes", source)
+        self.assertIn("window.run_startup_tasks", source)
+
+    def test_main_activates_window_after_update_restart(self) -> None:
+        source = inspect.getsource(app_main.main)
+
+        self.assertIn("consume_update_restart_request()", source)
+        self.assertIn("window._restore_from_tray", source)
+        with patch.dict(
+            os.environ,
+            {app_main.UPDATE_RESTART_ENV: "1"},
+            clear=False,
+        ):
+            self.assertTrue(app_main.consume_update_restart_request())
+            self.assertNotIn(app_main.UPDATE_RESTART_ENV, os.environ)
+
+    def test_startup_tasks_check_for_updates_and_show_release_notes(self) -> None:
+        events: list[str] = []
+        with (
+            patch.object(
+                self.window,
+                "start_update_check",
+                side_effect=lambda: events.append("check"),
+            ) as check,
+            patch.object(
+                self.window,
+                "show_pending_update_error",
+                side_effect=lambda: events.append("error"),
+            ) as error,
+            patch.object(
+                self.window,
+                "show_startup_release_notes",
+                side_effect=lambda: events.append("notes"),
+            ) as notes,
+        ):
+            self.window.run_startup_tasks()
+
+        check.assert_called_once_with()
+        error.assert_called_once_with()
+        notes.assert_called_once_with()
+        self.assertEqual(events, ["error", "notes", "check"])
+
+    def test_manual_update_check_reports_when_no_update_exists(self) -> None:
+        self.window._manual_update_check = True
+        dialogs: list[QDialog] = []
+
+        with (
+            patch.object(
+                QDialog,
+                "exec",
+                new=lambda dialog: dialogs.append(dialog) or 0,
+            ),
+            patch("qt_main_window.QMessageBox.information") as information,
+        ):
+            self.window._update_check_completed(None)
+
+        information.assert_not_called()
+        self.assertEqual(len(dialogs), 1)
+        dialog = dialogs[0]
+        self.assertEqual(dialog.objectName(), "UpdateStatusDialog")
+        self.assertEqual(dialog.windowTitle(), TEXT["en"]["update_title"])
+        self.assertEqual(
+            dialog.findChild(QLabel, "UpdateStatusMessage").text(),
+            TEXT["en"]["no_updates"],
+        )
+        self.assertEqual(
+            dialog.findChild(QPushButton, "UpdateStatusCloseButton").text(),
+            TEXT["en"]["close"],
+        )
+        self.assertFalse(self.window._manual_update_check)
+
+    def test_startup_update_check_opens_update_confirmation(self) -> None:
+        update = AvailableUpdate(
+            version="1.3.2",
+            tag_name="v1.3.2",
+            release_url=(
+                "https://github.com/airknightjp/"
+                "bpsr-midi-to-key-player/releases/tag/v1.3.2"
+            ),
+            asset=ReleaseAsset(
+                name="BPSR_MIDI_to_KEY_Player_v1.3.2.zip",
+                download_url=(
+                    "https://github.com/airknightjp/"
+                    "bpsr-midi-to-key-player/releases/download/"
+                    "v1.3.2/BPSR_MIDI_to_KEY_Player_v1.3.2.zip"
+                ),
+                size=1024,
+                sha256="a" * 64,
+            ),
+        )
+
+        with patch.object(self.window, "_confirm_update") as confirm:
+            self.window._update_check_completed(update)
+
+        confirm.assert_called_once_with()
+        self.assertIs(self.window._available_update, update)
+
+    def test_manual_update_check_reports_network_failure(self) -> None:
+        self.window._manual_update_check = True
+
+        with patch("qt_main_window.QMessageBox.warning") as warning:
+            self.window._update_check_failed("offline")
+
+        warning.assert_called_once_with(
+            self.window,
+            TEXT["en"]["update_error_title"],
+            TEXT["en"]["update_check_failed"].format(error="offline"),
+        )
+        self.assertFalse(self.window._manual_update_check)
+
+    def test_startup_update_check_failure_is_silent(self) -> None:
+        with patch("qt_main_window.QMessageBox.warning") as warning:
+            self.window._update_check_failed("offline")
+
+        warning.assert_not_called()
+
+    def test_update_uses_one_external_progress_window(self) -> None:
+        update = AvailableUpdate(
+            version="1.3.2",
+            tag_name="v1.3.2",
+            release_url=(
+                "https://github.com/airknightjp/"
+                "bpsr-midi-to-key-player/releases/tag/v1.3.2"
+            ),
+            asset=ReleaseAsset(
+                name="BPSR_MIDI_to_KEY_Player_v1.3.2.zip",
+                download_url=(
+                    "https://github.com/airknightjp/"
+                    "bpsr-midi-to-key-player/releases/download/"
+                    "v1.3.2/BPSR_MIDI_to_KEY_Player_v1.3.2.zip"
+                ),
+                size=10 * 1024 * 1024,
+                sha256="a" * 64,
+            ),
+        )
+        self.window._show_available_update(update)
+
+        self.assertIs(self.window._available_update, update)
+        self.assertFalse(hasattr(self.window, "update_notification_button"))
+        with (
+            patch(
+                "qt_main_window.automatic_update_supported",
+                return_value=True,
+            ),
+            patch(
+                "qt_main_window.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ),
+            patch(
+                "qt_main_window.launch_update_installer",
+                return_value=True,
+            ) as launch,
+            patch.object(self.window, "exit_application") as exit_app,
+        ):
+            self.window._confirm_update()
+
+        launch.assert_called_once_with(
+            update,
+            process_id=os.getpid(),
+            language="en",
+        )
+        exit_app.assert_called_once_with()
+        self.assertNotIn(
+            "QProgressDialog",
+            inspect.getsource(qt_main_window),
+        )
 
     def test_opacity_menu_is_ordered_from_100_percent_down(self) -> None:
         view_action = next(

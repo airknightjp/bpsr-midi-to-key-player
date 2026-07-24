@@ -220,6 +220,22 @@ def build_stylesheet(
         border: none;
     }}
     QLabel[caption="true"] {{ color: {palette.muted}; font-size: {small}px; }}
+    QLabel#UpdateStatusBadge {{
+        min-width: {round(28 * scale)}px;
+        max-width: {round(28 * scale)}px;
+        min-height: {round(28 * scale)}px;
+        max-height: {round(28 * scale)}px;
+        background: {palette.accent};
+        color: {palette.accent_text};
+        border: none;
+        border-radius: {round(14 * scale)}px;
+        font-size: {round(16 * scale)}px;
+        font-weight: 700;
+    }}
+    QLabel#UpdateStatusMessage {{
+        font-size: {font}px;
+        font-weight: 600;
+    }}
     QPushButton, QToolButton {{
         min-height: {control_height}px;
         background: {palette.surface};
@@ -245,6 +261,20 @@ def build_stylesheet(
         background: {palette.accent}; color: {palette.accent_text}; border-color: {palette.accent};
     }}
     QPushButton:disabled, QToolButton:disabled {{ color: {palette.disabled}; background: {palette.panel_alt}; }}
+    QPushButton#UpdateStatusCloseButton {{
+        background: {palette.accent};
+        color: {palette.accent_text};
+        border-color: {palette.accent};
+        font-weight: 600;
+    }}
+    QPushButton#UpdateStatusCloseButton:hover {{
+        background: {palette.accent_hover};
+        border-color: {palette.accent_hover};
+    }}
+    QPushButton#UpdateStatusCloseButton:pressed {{
+        background: {palette.accent_hover};
+        border-color: {palette.accent_hover};
+    }}
     QToolButton#ConversionStartButton:pressed,
     QToolButton#ConversionStartButton[active="true"] {{
         background: qlineargradient(

@@ -318,6 +318,19 @@ TEXT = {
         "color_theme": "Theme",
         "sound_source": "Sound Source",
         "audio_runtime": "Qt {qt} | Buffer {buffer}",
+        "check_for_updates": "Check for Updates",
+        "no_updates": "No updates are available.",
+        "update_check_failed": "Could not check for updates.\n{error}",
+        "update_title": "Software Update",
+        "update_confirm": (
+            "Update from v{current} to v{version}?\n"
+            "The app will restart automatically after the update."
+        ),
+        "update_install_failed": "The updater could not be started.",
+        "update_not_supported": (
+            "Automatic update is available only in the distributed app."
+        ),
+        "update_error_title": "Update Failed",
         "always_on_top": "Always on top",
         "tray_resident": "Close to tray",
         "window_opacity": "Opacity",
@@ -415,6 +428,19 @@ TEXT = {
         "color_theme": "\u30c6\u30fc\u30de",
         "sound_source": "\u97f3\u6e90",
         "audio_runtime": "Qt {qt} | Buffer {buffer}",
+        "check_for_updates": "\u66f4\u65b0\u3092\u78ba\u8a8d",
+        "no_updates": "\u66f4\u65b0\u306f\u3042\u308a\u307e\u305b\u3093\u3002",
+        "update_check_failed": (
+            "\u66f4\u65b0\u306e\u78ba\u8a8d\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\n{error}"
+        ),
+        "update_title": "\u30bd\u30d5\u30c8\u30a6\u30a7\u30a2\u66f4\u65b0",
+        "update_confirm": (
+            "v{current} \u304b\u3089 v{version} \u3078\u66f4\u65b0\u3057\u307e\u3059\u304b\uff1f\n"
+            "\u66f4\u65b0\u5b8c\u4e86\u5f8c\u3001\u30a2\u30d7\u30ea\u3092\u81ea\u52d5\u7684\u306b\u518d\u8d77\u52d5\u3057\u307e\u3059\u3002"
+        ),
+        "update_install_failed": "\u30a2\u30c3\u30d7\u30c7\u30fc\u30bf\u30fc\u3092\u8d77\u52d5\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002",
+        "update_not_supported": "\u81ea\u52d5\u66f4\u65b0\u306f\u914d\u5e03\u7248\u3067\u306e\u307f\u5229\u7528\u3067\u304d\u307e\u3059\u3002",
+        "update_error_title": "\u30a2\u30c3\u30d7\u30c7\u30fc\u30c8\u5931\u6557",
         "always_on_top": "\u6700\u524d\u9762\u306b\u8868\u793a",
         "tray_resident": "[\u9589\u3058\u308b]\u3067\u30bf\u30b9\u30af\u30c8\u30ec\u30a4\u306b\u683c\u7d0d",
         "window_opacity": "\u900f\u904e\u5ea6",
@@ -512,6 +538,17 @@ TEXT = {
         "color_theme": "\u4e3b\u9898",
         "sound_source": "\u97f3\u6e90",
         "audio_runtime": "Qt {qt} | Buffer {buffer}",
+        "check_for_updates": "\u68c0\u67e5\u66f4\u65b0",
+        "no_updates": "\u6ca1\u6709\u53ef\u7528\u66f4\u65b0\u3002",
+        "update_check_failed": "\u65e0\u6cd5\u68c0\u67e5\u66f4\u65b0\u3002\n{error}",
+        "update_title": "\u8f6f\u4ef6\u66f4\u65b0",
+        "update_confirm": (
+            "\u662f\u5426\u4ece v{current} \u66f4\u65b0\u5230 v{version}\uff1f\n"
+            "\u66f4\u65b0\u5b8c\u6210\u540e\uff0c\u5e94\u7528\u5c06\u81ea\u52a8\u91cd\u542f\u3002"
+        ),
+        "update_install_failed": "\u65e0\u6cd5\u542f\u52a8\u66f4\u65b0\u7a0b\u5e8f\u3002",
+        "update_not_supported": "\u81ea\u52a8\u66f4\u65b0\u4ec5\u5728\u53d1\u5e03\u7248\u5e94\u7528\u4e2d\u53ef\u7528\u3002",
+        "update_error_title": "\u66f4\u65b0\u5931\u8d25",
         "always_on_top": "\u7f6e\u4e8e\u9876\u5c42",
         "tray_resident": "\u5173\u95ed\u65f6\u6700\u5c0f\u5316\u5230\u6258\u76d8",
         "window_opacity": "\u900f\u660e\u5ea6",

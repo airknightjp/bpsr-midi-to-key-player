@@ -149,6 +149,13 @@ class I18nTests(unittest.TestCase):
                     label,
                 )
 
+    def test_update_labels_exist_for_all_languages(self) -> None:
+        for language, translations in TEXT.items():
+            with self.subTest(language=language):
+                self.assertTrue(translations["check_for_updates"])
+                self.assertTrue(translations["no_updates"])
+                self.assertIn("{error}", translations["update_check_failed"])
+
     def test_english_vertical_slider_labels_use_abbreviations(self) -> None:
         self.assertEqual(TEXT["en"]["playback_speed"], "SPD")
         self.assertEqual(TEXT["en"]["midi_sound_volume"], "VOL")

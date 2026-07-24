@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import QTimer
@@ -12,6 +13,11 @@ from software_synth import shutdown_software_synth
 
 
 APP_WINDOW_TITLE = "BPSR MIDI to KEY Player"
+UPDATE_RESTART_ENV = "BPSR_UPDATE_RESTART"
+
+
+def consume_update_restart_request() -> bool:
+    return os.environ.pop(UPDATE_RESTART_ENV, "") == "1"
 
 
 def main() -> int:
@@ -29,9 +35,11 @@ def main() -> int:
     window = MidiMainWindow(controller)
     window.resize(controller.state.window_width, controller.state.window_height)
     window.show()
+    if consume_update_restart_request():
+        QTimer.singleShot(0, window._restore_from_tray)
     controller.start()
     single_instance.start_activation_listener(window.activation_requested.emit)
-    QTimer.singleShot(0, window.show_startup_release_notes)
+    QTimer.singleShot(0, window.run_startup_tasks)
 
     try:
         return application.exec()
