@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from audio_buffer import DEFAULT_AUDIO_BUFFER_FRAMES, DEFAULT_QT_AUDIO_FRAMES
 from config import (
+    DEFAULT_INPUT_CONVERSION_MODE,
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
+    DEFAULT_PANEL_ORDER,
+    DEFAULT_SOUND_PLAYBACK_MODE,
 )
 
 
@@ -34,6 +38,21 @@ class AppState:
     duration: float = 0.0
     current_mode: str | None = None
     midi_input_running: bool = False
+    input_conversion_mode: str = DEFAULT_INPUT_CONVERSION_MODE
+    active_output_notes: frozenset[int] = field(default_factory=frozenset)
+    output_note_retrigger_events: tuple[tuple[int, int], ...] = ()
+    output_note_retrigger_serial: int = 0
+    realtime_output_notes: frozenset[int] = field(default_factory=frozenset)
+    realtime_note_trigger_events: tuple[tuple[int, int], ...] = ()
+    realtime_note_trigger_serial: int = 0
+    realtime_visible_output_notes: frozenset[int] = field(default_factory=frozenset)
+    realtime_output_retrigger_events: tuple[tuple[int, int], ...] = ()
+    realtime_output_retrigger_serial: int = 0
+    rhythm_score: int = 0
+    rhythm_combo: int = 0
+    rhythm_judgment: str = ""
+    rhythm_multiplier_tenths: int = 10
+    rhythm_hit_events: tuple[tuple[int, int, str, bool], ...] = ()
     midi_rows: list[MidiListRow] = field(default_factory=list)
     selected_midi_index: int = -1
     track_channels: list[TrackChannelItem] = field(default_factory=list)
@@ -41,7 +60,11 @@ class AppState:
     midi_input_device: str = ""
     countdown_seconds: int = 3
     midi_sound_volume: int = 80
+    sound_source: str = "piano"
+    audio_qt_frames: int = DEFAULT_QT_AUDIO_FRAMES
+    audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
     playback_speed_percent: int = 100
+    sound_playback_mode: str = DEFAULT_SOUND_PLAYBACK_MODE
     dry_run: bool = True
     countdown_sound: bool = False
     game_countdown_sound: bool = False
@@ -51,6 +74,10 @@ class AppState:
     humanize_timing: bool = False
     chord_optimization: bool = False
     chord_strum: bool = False
+    auto_sustain: bool = False
+    sustain_key: str = "space"
+    octave_down_key: str = "<"
+    octave_up_key: str = ">"
     repeat_prevention: bool = False
     keyboard_play_shortcut: str = DEFAULT_KEYBOARD_PLAY_SHORTCUT
     keyboard_pause_shortcut: str = DEFAULT_KEYBOARD_PAUSE_SHORTCUT
@@ -70,6 +97,7 @@ class AppState:
             "player": True,
         }
     )
+    panel_order: tuple[str, ...] = DEFAULT_PANEL_ORDER
 
     @property
     def keyboard_playing(self) -> bool:
@@ -82,3 +110,7 @@ class AppState:
     @property
     def sound_playing(self) -> bool:
         return self.current_mode == "sound"
+
+    @property
+    def sound_paused(self) -> bool:
+        return self.current_mode == "sound_paused"

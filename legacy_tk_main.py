@@ -23,6 +23,7 @@ from config import (
 from i18n import (
     COLOR_THEME_NAMES,
     LANGUAGE_NAMES,
+    SOUND_SOURCE_NAMES,
     TEXT,
     normalize_color_theme,
     normalize_language,
@@ -35,6 +36,7 @@ from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCE
 from player import MidiKeyboardPlayer
 from settings import AppSettings, consume_settings_error, load_settings, save_settings
 from single_instance import SingleInstance
+from sound_sources import normalize_sound_source
 from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
 from tray_icon import TrayIcon
 from ui_tokens import UiSize, UiSpace
@@ -104,6 +106,7 @@ class App(tk.Tk):
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.language = normalize_language(self.settings.language)
         self.color_theme = normalize_color_theme(self.settings.color_theme)
+        self.sound_source = normalize_sound_source(self.settings.sound_source)
         self.state_var = tk.StringVar(value=self._text("waiting"))
         self.dry_run_var = tk.BooleanVar(value=self.settings.dry_run)
         self.countdown_var = tk.IntVar(value=self.settings.countdown_seconds)
@@ -119,6 +122,7 @@ class App(tk.Tk):
         self.octave_shift_var = tk.IntVar(value=self.settings.octave_shift)
         self.sound_volume_var = tk.IntVar(value=self.settings.midi_sound_volume)
         self.color_theme_menu_var = tk.StringVar(value=self.color_theme)
+        self.sound_source_menu_var = tk.StringVar(value=self.sound_source)
         self.always_on_top_var = tk.BooleanVar(value=self.settings.always_on_top)
         self.tray_resident_var = tk.BooleanVar(value=self.settings.tray_resident)
         self.window_opacity_var = tk.IntVar(value=self.settings.window_opacity)
@@ -743,8 +747,18 @@ class App(tk.Tk):
                 command=lambda value=code: self._set_language(value),
             )
 
+        sound_source_menu = tk.Menu(menu_bar, tearoff=False)
+        for code, label in SOUND_SOURCE_NAMES[self.language].items():
+            sound_source_menu.add_radiobutton(
+                label=label,
+                variable=self.sound_source_menu_var,
+                value=code,
+                command=lambda value=code: self._set_sound_source(value),
+            )
+
         settings_menu = tk.Menu(menu_bar, tearoff=False)
         settings_menu.add_cascade(label=self._text("color_theme"), menu=theme_menu)
+        settings_menu.add_cascade(label=self._text("sound_source"), menu=sound_source_menu)
         settings_menu.add_cascade(label=self._text("language"), menu=language_menu)
         settings_menu.add_command(
             label=self._text("key_bindings"),
@@ -769,6 +783,7 @@ class App(tk.Tk):
         self.midi_menu = midi_menu
         self.view_menu = view_menu
         self.theme_menu = theme_menu
+        self.sound_source_menu = sound_source_menu
         self.language_menu_widget = language_menu
         self.settings_menu = settings_menu
         self.other_menu = other_menu
@@ -1391,6 +1406,7 @@ class App(tk.Tk):
         self._close_realtime_sound_output()
         self.realtime_sound_output = RealtimeMidiSoundOutput(
             volume=self.sound_volume_var.get(),
+            sound_source=self.__dict__.get("sound_source", "piano"),
             log=lambda message: self.log_queue.put(message),
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
@@ -1533,6 +1549,7 @@ class App(tk.Tk):
             enabled_channels=self._enabled_channels,
             enabled_sources=self._enabled_sources,
             volume=self.sound_volume_var.get(),
+            sound_source=self.__dict__.get("sound_source", "piano"),
             auto_fit_note_range=self.auto_fit_note_range_var.get(),
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
@@ -1841,6 +1858,14 @@ class App(tk.Tk):
         self._apply_theme()
         self._save_current_settings()
 
+    def _set_sound_source(self, sound_source: str) -> None:
+        self.sound_source = normalize_sound_source(sound_source)
+        self.sound_source_menu_var.set(self.sound_source)
+        for target in (self.sound_player, self.realtime_sound_output):
+            if target:
+                target.set_sound_source(self.sound_source)
+        self._save_current_settings()
+
     def _on_always_on_top_changed(self, *_args: object) -> None:
         self._apply_always_on_top()
         self._save_current_settings()
@@ -1940,6 +1965,7 @@ class App(tk.Tk):
         return AppSettings(
             countdown_seconds=self._read_int_var(self.countdown_var, minimum=0, maximum=10, default=3),
             midi_sound_volume=self._read_int_var(self.sound_volume_var, minimum=0, maximum=100, default=80),
+            sound_source=self.sound_source,
             dry_run=self.dry_run_var.get(),
             countdown_sound=self.countdown_sound_var.get(),
             game_countdown_sound=self.game_countdown_sound_var.get(),
@@ -2528,9 +2554,10 @@ class App(tk.Tk):
         self.view_menu.entryconfigure(7, label=self._text("midi_sound_settings"))
         self.view_menu.entryconfigure(8, label=self._text("player_section"))
         self.settings_menu.entryconfigure(0, label=self._text("color_theme"))
-        self.settings_menu.entryconfigure(1, label=self._text("language"))
-        self.settings_menu.entryconfigure(2, label=self._text("key_bindings"))
-        self.settings_menu.entryconfigure(4, label=self._text("tray_resident"))
+        self.settings_menu.entryconfigure(1, label=self._text("sound_source"))
+        self.settings_menu.entryconfigure(2, label=self._text("language"))
+        self.settings_menu.entryconfigure(3, label=self._text("key_bindings"))
+        self.settings_menu.entryconfigure(5, label=self._text("tray_resident"))
         self.other_menu.entryconfigure(0, label=self._text("about_app"))
 
         self.theme_menu.delete(0, tk.END)
@@ -2541,6 +2568,16 @@ class App(tk.Tk):
                 variable=self.color_theme_menu_var,
                 value=code,
                 command=lambda value=code: self._set_color_theme(value),
+            )
+
+        self.sound_source_menu.delete(0, tk.END)
+        self.sound_source_menu_var.set(self.sound_source)
+        for code, label in SOUND_SOURCE_NAMES[self.language].items():
+            self.sound_source_menu.add_radiobutton(
+                label=label,
+                variable=self.sound_source_menu_var,
+                value=code,
+                command=lambda value=code: self._set_sound_source(value),
             )
 
         self.language_menu_widget.delete(0, tk.END)

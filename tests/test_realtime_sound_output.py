@@ -8,20 +8,41 @@ from legacy_tk_main import App
 from sound_player import RealtimeMidiSoundOutput
 
 
+class RecordingSynthClient:
+    def __init__(self, messages: list[tuple[int, int, int]]) -> None:
+        self.messages = messages
+        self.is_open = False
+        self.sound_source = "piano"
+
+    def open(self) -> bool:
+        self.is_open = True
+        return True
+
+    def close(self) -> None:
+        self.is_open = False
+
+    def set_sound_source(self, sound_source: str) -> None:
+        self.sound_source = sound_source
+
+    def note_on(self, channel: int, note: int, velocity: int) -> None:
+        self.messages.append((0x90 | channel, note, velocity))
+
+    def note_off(self, channel: int, note: int) -> None:
+        self.messages.append((0x80 | channel, note, 0))
+
+    def set_sustain(self, channel: int, enabled: bool) -> None:
+        self.messages.append((0xB0 | channel, 64, 127 if enabled else 0))
+
+    def release_all(self, channel: int | None = None) -> None:
+        if channel is not None:
+            self.messages.append((0xB0 | channel, 123, 0))
+
+
 class RecordingRealtimeMidiSoundOutput(RealtimeMidiSoundOutput):
     def __init__(self, volume: int = 100, **kwargs):
         super().__init__(volume=volume, **kwargs)
         self.messages: list[tuple[int, int, int]] = []
-
-    def _open_midi(self) -> bool:
-        self._midi_handle = object()
-        return True
-
-    def _close_midi(self) -> None:
-        self._midi_handle = None
-
-    def _send_short_message(self, status: int, data1: int, data2: int) -> None:
-        self.messages.append((status, data1, data2))
+        self._synth = RecordingSynthClient(self.messages)
 
 
 class RealtimeMidiSoundOutputTests(unittest.TestCase):

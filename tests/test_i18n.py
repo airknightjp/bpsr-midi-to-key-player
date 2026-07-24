@@ -6,24 +6,21 @@ from i18n import COLOR_THEME_NAMES, TEXT, normalize_color_theme
 
 
 class I18nTests(unittest.TestCase):
+    def test_test_mode_labels_include_sound_and_log_in_every_language(self) -> None:
+        self.assertEqual(TEXT["en"]["dry_run"], "Test mode (sound/log only)")
+        self.assertEqual(
+            TEXT["ja"]["dry_run"],
+            "\u30c6\u30b9\u30c8\u30e2\u30fc\u30c9(\u97f3\u30fb\u30ed\u30b0\u306e\u307f)",
+        )
+        self.assertEqual(
+            TEXT["zh"]["dry_run"],
+            "\u6d4b\u8bd5\u6a21\u5f0f(\u4ec5\u58f0\u97f3\u548c\u65e5\u5fd7)",
+        )
+
     def test_log_tab_uses_short_label_in_every_language(self) -> None:
         self.assertEqual(TEXT["ja"]["playback_log"], "\u30ed\u30b0")
         self.assertEqual(TEXT["en"]["playback_log"], "Log")
         self.assertEqual(TEXT["zh"]["playback_log"], "\u65e5\u5fd7")
-
-    def test_performance_optimization_group_exists_in_every_language(self) -> None:
-        self.assertEqual(
-            TEXT["ja"]["performance_optimization_settings"],
-            "\u6f14\u594f\u88dc\u6b63",
-        )
-        self.assertEqual(
-            TEXT["en"]["performance_optimization_settings"],
-            "Performance Correction",
-        )
-        self.assertEqual(
-            TEXT["zh"]["performance_optimization_settings"],
-            "\u6f14\u594f\u6821\u6b63",
-        )
 
     def test_file_menu_and_exit_labels_exist_for_all_languages(self) -> None:
         expected = {
@@ -51,15 +48,29 @@ class I18nTests(unittest.TestCase):
                 self.assertEqual(translations["ui_scale"], labels[0])
                 self.assertEqual(translations["midi_sound_settings"], labels[1])
 
-    def test_common_settings_label_exists_for_all_languages(self) -> None:
+    def test_conversion_stop_labels_use_end_in_every_language(self) -> None:
         expected = {
-            "en": "Common Settings",
-            "ja": "\u5171\u901a\u8a2d\u5b9a",
-            "zh": "\u901a\u7528\u8bbe\u7f6e",
+            "en": "End",
+            "ja": "\u7d42\u4e86",
+            "zh": "\u7ed3\u675f",
         }
         for language, label in expected.items():
             with self.subTest(language=language):
-                self.assertEqual(TEXT[language]["common_settings_label"], label)
+                self.assertEqual(TEXT[language]["stop_keys"], label)
+                self.assertEqual(TEXT[language]["stop_midi_input"], label)
+
+    def test_audio_runtime_label_exists_for_all_languages(self) -> None:
+        expected = {
+            "en": "Qt 512 | Buffer 512",
+            "ja": "Qt 512 | \u30d0\u30c3\u30d5\u30a1 512",
+            "zh": "Qt 512 | \u7f13\u51b2\u533a 512",
+        }
+        for language, label in expected.items():
+            with self.subTest(language=language):
+                self.assertEqual(
+                    TEXT[language]["audio_runtime"].format(qt=512, buffer=512),
+                    label,
+                )
 
     def test_english_vertical_slider_labels_use_abbreviations(self) -> None:
         self.assertEqual(TEXT["en"]["playback_speed"], "SPD")
@@ -111,16 +122,23 @@ class I18nTests(unittest.TestCase):
 
     def test_performance_option_labels_use_current_names(self) -> None:
         expected = {
-            "en": ("Chord reconstruction", "Timing variation", "Chord spread"),
+            "en": (
+                "Chord reconstruction",
+                "Timing variation",
+                "Chord spread",
+                "Automatic sustain generation",
+            ),
             "ja": (
                 "\u548c\u97f3\u306e\u518d\u69cb\u6210",
                 "\u30bf\u30a4\u30df\u30f3\u30b0\u306e\u5206\u6563",
                 "\u548c\u97f3\u306e\u5206\u6563",
+                "\u30b5\u30b9\u30c6\u30a3\u30f3\u306e\u81ea\u52d5\u751f\u6210",
             ),
             "zh": (
                 "\u548c\u5f26\u91cd\u6784",
                 "\u65f6\u5e8f\u5206\u6563",
                 "\u548c\u5f26\u5206\u6563",
+                "\u81ea\u52a8\u5ef6\u97f3\u751f\u6210",
             ),
         }
 
@@ -130,6 +148,7 @@ class I18nTests(unittest.TestCase):
                 self.assertEqual(translations["chord_optimization"], labels[0])
                 self.assertEqual(translations["humanize_timing"], labels[1])
                 self.assertEqual(translations["chord_strum"], labels[2])
+                self.assertEqual(translations["auto_sustain"], labels[3])
 
     def test_optimization_progress_exists_for_all_languages(self) -> None:
         for translations in TEXT.values():

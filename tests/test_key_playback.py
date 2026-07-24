@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from auto_sustain import AUTO_SUSTAIN_EVENT_KIND
 from legacy_tk_main import App
 from midi_parser import MidiEvent
 from playback_timing import PlaybackTimeline
@@ -324,6 +325,31 @@ class KeyPlaybackTests(unittest.TestCase):
 
         self.assertEqual(output.pressed, ["q"])
 
+    def test_keyboard_player_reports_the_full_piano_note_position(self) -> None:
+        output = FakeOutput()
+        displayed: list[tuple[int, bool]] = []
+        player = MidiKeyboardPlayer(output=output, on_output_note=lambda *event: displayed.append(event))
+
+        player._handle_event(MidiEvent(time=0.0, kind="note_on", channel=0, note=21, velocity=64))
+        player._handle_event(MidiEvent(time=0.1, kind="note_off", channel=0, note=21, velocity=0))
+        player._handle_event(MidiEvent(time=0.2, kind="note_on", channel=0, note=108, velocity=64))
+        player._handle_event(MidiEvent(time=0.3, kind="note_off", channel=0, note=108, velocity=0))
+
+        self.assertEqual(
+            displayed,
+            [(21, True), (21, False), (108, True), (108, False)],
+        )
+
+    def test_keyboard_player_clears_displayed_notes_when_releasing_all(self) -> None:
+        output = FakeOutput()
+        displayed: list[tuple[int, bool]] = []
+        player = MidiKeyboardPlayer(output=output, on_output_note=lambda *event: displayed.append(event))
+        player._handle_event(MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64))
+
+        player._release_active_note_keys()
+
+        self.assertEqual(displayed, [(60, True), (60, False)])
+
     def test_key_binding_key_event_accepts_supported_keys(self) -> None:
         self.assertEqual(
             App._key_binding_from_event(SimpleNamespace(keysym="A", char="A")),
@@ -522,6 +548,32 @@ class KeyPlaybackTests(unittest.TestCase):
         player._handle_event(MidiEvent(time=0.1, kind="sustain", channel=1, value=127))
         player._handle_event(MidiEvent(time=0.2, kind="sustain", channel=0, value=0))
         player._handle_event(MidiEvent(time=0.3, kind="sustain", channel=1, value=0))
+
+        self.assertEqual(output.pressed, ["space"])
+        self.assertEqual(output.released, ["space"])
+
+    def test_auto_sustain_uses_the_same_space_key_path(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(output=output, auto_sustain=True)
+
+        player._handle_event(
+            MidiEvent(
+                time=0.1,
+                kind=AUTO_SUSTAIN_EVENT_KIND,
+                channel=0,
+                value=127,
+                track=0,
+            )
+        )
+        player._handle_event(
+            MidiEvent(
+                time=0.5,
+                kind=AUTO_SUSTAIN_EVENT_KIND,
+                channel=0,
+                value=0,
+                track=0,
+            )
+        )
 
         self.assertEqual(output.pressed, ["space"])
         self.assertEqual(output.released, ["space"])

@@ -9,6 +9,8 @@ from live_midi_input import MIM_DATA, MidiInputKeyboardBridge
 class FakeOutput:
     def __init__(self):
         self.events: list[tuple[str, str]] = []
+        self.dry_run = False
+        self.dry_run_values: list[bool] = []
 
     def press(self, key: str) -> None:
         self.events.append(("press", key))
@@ -21,6 +23,10 @@ class FakeOutput:
 
     def release_all(self) -> None:
         self.events.append(("release_all", ""))
+
+    def set_dry_run(self, enabled: bool) -> None:
+        self.dry_run = bool(enabled)
+        self.dry_run_values.append(self.dry_run)
 
 
 class LiveMidiInputTests(unittest.TestCase):
@@ -39,6 +45,56 @@ class LiveMidiInputTests(unittest.TestCase):
 
         self.assertEqual(output.events, [("press", "a"), ("release", "a")])
 
+    def test_dry_run_change_releases_active_realtime_input_immediately(self) -> None:
+        output = FakeOutput()
+        displayed: list[tuple[int, bool]] = []
+        bridge = self._running_bridge(
+            output,
+            on_output_note=lambda *event: displayed.append(event),
+        )
+        bridge._note_on(channel=0, note=60, velocity=100)
+
+        bridge.set_dry_run(True)
+
+        self.assertTrue(output.dry_run)
+        self.assertEqual(output.dry_run_values, [True])
+        self.assertEqual(output.events, [("press", "a"), ("release", "a")])
+        self.assertEqual(displayed, [(60, True), (60, False)])
+        self.assertEqual(bridge._active_notes, {})
+        self.assertEqual(bridge._active_key_owner, {})
+
+    def test_realtime_input_reports_the_full_piano_note_position(self) -> None:
+        output = FakeOutput()
+        displayed: list[tuple[int, bool]] = []
+        bridge = self._running_bridge(
+            output,
+            on_output_note=lambda *event: displayed.append(event),
+        )
+
+        bridge._note_on(channel=0, note=21, velocity=100)
+        bridge._note_off(channel=0, note=21)
+        bridge._note_on(channel=0, note=108, velocity=100)
+        bridge._note_off(channel=0, note=108)
+
+        self.assertEqual(
+            displayed,
+            [(21, True), (21, False), (108, True), (108, False)],
+        )
+
+    def test_suppressed_realtime_repeat_does_not_add_a_display_event(self) -> None:
+        output = FakeOutput()
+        displayed: list[tuple[int, bool]] = []
+        bridge = self._running_bridge(
+            output,
+            repeat_prevention=True,
+            on_output_note=lambda *event: displayed.append(event),
+        )
+
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=1.0)
+        bridge._note_on(channel=0, note=60, velocity=100, received_at=1.02)
+
+        self.assertEqual(displayed, [(60, True)])
+
     def test_custom_key_binding_is_used_for_realtime_input(self) -> None:
         output = FakeOutput()
         bridge = self._running_bridge(output, key_bindings={60: "q"})
@@ -47,6 +103,23 @@ class LiveMidiInputTests(unittest.TestCase):
         bridge._note_off(channel=0, note=60)
 
         self.assertEqual(output.events, [("press", "q"), ("release", "q")])
+
+    def test_special_key_bindings_are_used_for_sustain_and_octave_switching(self) -> None:
+        output = FakeOutput()
+        bridge = self._running_bridge(
+            output,
+            sustain_key="p",
+            octave_down_key="[",
+            octave_up_key="]",
+        )
+
+        bridge._sustain(0, 127)
+        bridge._sustain(0, 0)
+        bridge._move_to_octave_shift(1)
+
+        self.assertIn(("press", "p"), output.events)
+        self.assertIn(("release", "p"), output.events)
+        self.assertIn(("tap", "]"), output.events)
 
     def test_transpose_and_octave_shift_are_applied_to_realtime_input(self) -> None:
         output = FakeOutput()

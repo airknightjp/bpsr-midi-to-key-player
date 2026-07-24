@@ -2,26 +2,34 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from config import (
     DEFAULT_COUNTDOWN_SECONDS,
+    DEFAULT_INPUT_CONVERSION_MODE,
     DEFAULT_KEY_BINDINGS,
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
+    DEFAULT_PANEL_ORDER,
+    DEFAULT_SOUND_PLAYBACK_MODE,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
     MIN_TRANSPOSE_SEMITONES,
     normalized_key_bindings,
+    normalize_special_binding,
+    normalize_input_conversion_mode,
+    normalize_panel_order,
+    normalize_sound_playback_mode,
 )
 from i18n import normalize_color_theme, normalize_language
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
+from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
 
 
-APP_DIR_NAME = "BPSR_MIDI_to_KEY_Player"
 SETTINGS_FILE_NAME = "settings.json"
 _last_settings_error = ""
 
@@ -30,6 +38,7 @@ _last_settings_error = ""
 class AppSettings:
     countdown_seconds: int = DEFAULT_COUNTDOWN_SECONDS
     midi_sound_volume: int = 80
+    sound_source: str = DEFAULT_SOUND_SOURCE
     dry_run: bool = True
     countdown_sound: bool = False
     game_countdown_sound: bool = False
@@ -39,8 +48,10 @@ class AppSettings:
     humanize_timing: bool = False
     chord_optimization: bool = False
     chord_strum: bool = False
+    auto_sustain: bool = False
     repeat_prevention: bool = False
     playback_speed_percent: int = 100
+    sound_playback_mode: str = DEFAULT_SOUND_PLAYBACK_MODE
     language: str = "en"
     color_theme: str = "sky_blue"
     always_on_top: bool = False
@@ -55,7 +66,12 @@ class AppSettings:
     keyboard_stop_shortcut: str = DEFAULT_KEYBOARD_STOP_SHORTCUT
     shortcut_locked: bool = True
     midi_input_device: str = ""
+    input_conversion_mode: str = DEFAULT_INPUT_CONVERSION_MODE
     key_bindings: dict[int, str] | None = None
+    sustain_key: str = "space"
+    octave_down_key: str = "<"
+    octave_up_key: str = ">"
+    panel_order: tuple[str, ...] = DEFAULT_PANEL_ORDER
 
 def load_settings() -> AppSettings:
     global _last_settings_error
@@ -127,6 +143,7 @@ def load_settings() -> AppSettings:
             maximum=100,
             default=80,
         ),
+        sound_source=normalize_sound_source(data.get("sound_source")),
         dry_run=_parse_bool(data.get("dry_run"), default=True),
         countdown_sound=_parse_bool(data.get("countdown_sound"), default=False),
         game_countdown_sound=_parse_bool(data.get("game_countdown_sound"), default=False),
@@ -146,12 +163,16 @@ def load_settings() -> AppSettings:
         humanize_timing=_parse_bool(data.get("humanize_timing"), default=False),
         chord_optimization=_parse_bool(data.get("chord_optimization"), default=False),
         chord_strum=_parse_bool(data.get("chord_strum"), default=False),
+        auto_sustain=_parse_bool(data.get("auto_sustain"), default=False),
         repeat_prevention=_parse_bool(data.get("repeat_prevention"), default=False),
         playback_speed_percent=_clamp_int(
             data.get("playback_speed_percent"),
             minimum=MIN_PLAYBACK_SPEED_PERCENT,
             maximum=MAX_PLAYBACK_SPEED_PERCENT,
             default=100,
+        ),
+        sound_playback_mode=normalize_sound_playback_mode(
+            data.get("sound_playback_mode")
         ),
         language=normalize_language(data.get("language")),
         color_theme=normalize_color_theme(data.get("color_theme")),
@@ -167,7 +188,14 @@ def load_settings() -> AppSettings:
         keyboard_stop_shortcut=keyboard_shortcuts[2],
         shortcut_locked=_parse_bool(data.get("shortcut_locked"), default=True),
         midi_input_device=_parse_str(data.get("midi_input_device")),
+        input_conversion_mode=normalize_input_conversion_mode(
+            data.get("input_conversion_mode")
+        ),
         key_bindings=normalized_key_bindings(data.get("key_bindings")),
+        sustain_key=normalize_special_binding(data.get("sustain_key"), "space"),
+        octave_down_key=normalize_special_binding(data.get("octave_down_key"), "<"),
+        octave_up_key=normalize_special_binding(data.get("octave_up_key"), ">"),
+        panel_order=normalize_panel_order(data.get("panel_order")),
     )
     return settings
 
@@ -180,6 +208,7 @@ def save_settings(settings: AppSettings) -> None:
         {
             "countdown_seconds": settings.countdown_seconds,
             "midi_sound_volume": settings.midi_sound_volume,
+            "sound_source": settings.sound_source,
             "dry_run": settings.dry_run,
             "countdown_sound": settings.countdown_sound,
             "game_countdown_sound": settings.game_countdown_sound,
@@ -189,8 +218,12 @@ def save_settings(settings: AppSettings) -> None:
             "humanize_timing": settings.humanize_timing,
             "chord_optimization": settings.chord_optimization,
             "chord_strum": settings.chord_strum,
+            "auto_sustain": settings.auto_sustain,
             "repeat_prevention": settings.repeat_prevention,
             "playback_speed_percent": settings.playback_speed_percent,
+            "sound_playback_mode": normalize_sound_playback_mode(
+                settings.sound_playback_mode
+            ),
             "language": settings.language,
             "color_theme": settings.color_theme,
             "always_on_top": settings.always_on_top,
@@ -205,11 +238,18 @@ def save_settings(settings: AppSettings) -> None:
             "keyboard_stop_shortcut": settings.keyboard_stop_shortcut,
             "shortcut_locked": settings.shortcut_locked,
             "midi_input_device": settings.midi_input_device,
+            "input_conversion_mode": normalize_input_conversion_mode(
+                settings.input_conversion_mode
+            ),
             "key_bindings": {
                 str(note): key
                 for note, key in normalized_key_bindings(settings.key_bindings).items()
                 if DEFAULT_KEY_BINDINGS[note] != key
             },
+            "sustain_key": settings.sustain_key,
+            "octave_down_key": settings.octave_down_key,
+            "octave_up_key": settings.octave_up_key,
+            "panel_order": list(normalize_panel_order(settings.panel_order)),
         },
         indent=2,
         ensure_ascii=False,
@@ -236,10 +276,13 @@ def consume_settings_error() -> str:
 
 
 def _settings_path() -> Path:
-    base = os.environ.get("APPDATA")
-    if base:
-        return Path(base) / APP_DIR_NAME / SETTINGS_FILE_NAME
-    return Path.home() / f".{APP_DIR_NAME}" / SETTINGS_FILE_NAME
+    return _application_directory() / SETTINGS_FILE_NAME
+
+
+def _application_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
 
 def _temporary_settings_path(path: Path) -> Path:

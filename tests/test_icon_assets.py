@@ -16,8 +16,11 @@ class IconAssetTests(unittest.TestCase):
             {
                 "app_icon_whale.ico",
                 "app_icon_whale.png",
-                "app_icon_whale_flipped.png",
                 "check_white.svg",
+                "radio_white_dot.svg",
+                "whale_slider_frame_0.png",
+                "whale_slider_frame_1.png",
+                "whale_slider_frame_2.png",
             },
         )
 
@@ -32,13 +35,22 @@ class IconAssetTests(unittest.TestCase):
                 self.assertNotIn("app_icon_starry_concept", contents)
                 self.assertIn("app_icon_whale", contents)
 
+    def test_sky_blue_slider_uses_dedicated_whale_cutouts(self) -> None:
+        main_window = (PROJECT_ROOT / "qt_main_window.py").read_text(encoding="utf-8")
+        self.assertIn("whale_slider_frame_", main_window)
+        self.assertNotIn('"app_icon_whale_flipped.png"', main_window)
+
     def test_png_has_alpha_and_ico_contains_multiple_sizes(self) -> None:
-        png_data = (ASSETS_DIR / "app_icon_whale.png").read_bytes()
-        flipped_png_data = (ASSETS_DIR / "app_icon_whale_flipped.png").read_bytes()
-        self.assertEqual(png_data[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(flipped_png_data[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(png_data[25], 6)
-        self.assertEqual(flipped_png_data[25], 6)
+        for filename in (
+            "app_icon_whale.png",
+            "whale_slider_frame_0.png",
+            "whale_slider_frame_1.png",
+            "whale_slider_frame_2.png",
+        ):
+            with self.subTest(filename=filename):
+                png_data = (ASSETS_DIR / filename).read_bytes()
+                self.assertEqual(png_data[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertEqual(png_data[25], 6)
 
         ico_data = (ASSETS_DIR / "app_icon_whale.ico").read_bytes()
         reserved, icon_type, image_count = struct.unpack("<HHH", ico_data[:6])

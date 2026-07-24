@@ -48,7 +48,10 @@ def register_windows_fonts() -> None:
         QFontDatabase.addApplicationFont(path)
 
 
-def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
+def build_stylesheet(
+    theme_name: str,
+    scale_percent: int = 100,
+) -> str:
     palette = THEMES.get(theme_name, THEMES["sky_blue"])
     scale = max(1.0, scale_percent / 100)
     font = round(12 * scale)
@@ -61,16 +64,97 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
     slider_handle_margin = round(5 * scale)
     slider_handle_radius = round(7 * scale)
     slider_handle_border = max(1, round(2 * scale))
+    start_button_edge = max(2, round(2 * scale))
+    start_button_height = max(1, round(55 * scale))
+    start_button_content_height = max(
+        1,
+        start_button_height - start_button_edge - 1,
+    )
     ocean_rules = ""
     sky_blue_slider_rules = ""
-    checkbox_rules = ""
+    indicator_size = round(16 * scale)
+    resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    checkmark_path = (resource_root / "assets" / "check_white.svg").as_posix()
+    # Keep the radio control as an outlined ring with a center point in every
+    # theme.  The popup controls use the same foreground color as their theme.
+    radio_indicator_color = "#ffffff" if theme_name == "dark" else palette.text
+    radio_button_rules = f"""
+        QRadioButton {{ spacing: {round(6 * scale)}px; }}
+        QRadioButton::indicator {{
+            width: {indicator_size}px;
+            height: {indicator_size}px;
+            background: transparent;
+            border: {max(1, round(2 * scale))}px solid {radio_indicator_color};
+            border-radius: {round(indicator_size / 2)}px;
+        }}
+        QRadioButton::indicator:checked {{
+            background: qradialgradient(
+                cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5,
+                stop: 0 {radio_indicator_color},
+                stop: 0.24 {radio_indicator_color},
+                stop: 0.27 transparent,
+                stop: 1 transparent
+            );
+            border-color: {radio_indicator_color};
+            image: none;
+        }}
+        QRadioButton::indicator:disabled {{
+            background: transparent;
+            border-color: {palette.disabled};
+        }}
+        QRadioButton::indicator:checked:disabled {{
+            background: {palette.disabled};
+            border-color: {palette.disabled};
+        }}
+        """
+    checkbox_rules = f"""
+    QCheckBox::indicator {{
+        width: {indicator_size}px;
+        height: {indicator_size}px;
+        background: {palette.surface};
+        border: 1px solid {palette.border};
+        border-radius: {max(2, round(4 * scale))}px;
+    }}
+    QCheckBox::indicator:hover {{
+        background: {palette.surface_hover};
+        border-color: {palette.accent};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {palette.accent};
+        border: 1px solid {palette.accent_hover};
+        image: url("{checkmark_path}");
+    }}
+    QCheckBox::indicator:checked:hover {{
+        background: {palette.accent_hover};
+        border-color: {palette.accent_hover};
+    }}
+    QCheckBox::indicator:disabled {{
+        background: {palette.panel_alt};
+        border-color: {palette.disabled};
+    }}
+    QCheckBox::indicator:checked:disabled {{
+        background: {palette.disabled};
+        border-color: {palette.disabled};
+        image: url("{checkmark_path}");
+    }}
+    QCheckBox[unsupported="true"] {{
+        color: {palette.disabled};
+    }}
+    QCheckBox[unsupported="true"]::indicator {{
+        background: {palette.panel_alt};
+        border-color: {palette.disabled};
+    }}
+    QCheckBox[unsupported="true"]::indicator:checked {{
+        background: {palette.disabled};
+        border-color: {palette.disabled};
+        image: url("{checkmark_path}");
+    }}
+    QCheckBox[unsupported="true"]::indicator:hover {{
+        border-color: {palette.disabled};
+    }}
+    """
     if theme_name == "sky_blue":
-        resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-        whale_handle_path = (resource_root / "assets" / "app_icon_whale.png").as_posix()
-        whale_handle_flipped_path = (
-            resource_root / "assets" / "app_icon_whale_flipped.png"
-        ).as_posix()
-        whale_handle_size = round(16 * scale)
+        whale_handle_size = round(24 * scale)
         whale_handle_margin = max(1, round((whale_handle_size - round(5 * scale)) / 2))
         ocean_rules = f"""
         QMenuBar {{ background: rgba(246, 253, 255, 238); }}
@@ -81,43 +165,12 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
         }}
         """
         sky_blue_slider_rules = f"""
-        QSlider::handle:horizontal {{
+        QSlider[animatedWhale="true"]::handle:horizontal {{
             width: {whale_handle_size}px;
             height: {whale_handle_size}px;
             margin: -{whale_handle_margin}px 0;
             background: transparent;
             border: none;
-            image: url("{whale_handle_flipped_path}");
-        }}
-        QSlider::handle:vertical {{
-            width: {whale_handle_size}px;
-            height: {whale_handle_size}px;
-            margin: 0 -{whale_handle_margin}px;
-            background: transparent;
-            border: none;
-            image: url("{whale_handle_path}");
-        }}
-        """
-    if theme_name == "dark":
-        indicator_size = round(14 * scale)
-        resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-        checkmark_path = (resource_root / "assets" / "check_white.svg").as_posix()
-        checkbox_rules = f"""
-        QCheckBox::indicator {{
-            width: {indicator_size}px;
-            height: {indicator_size}px;
-            background: {palette.surface};
-            border: 1px solid {palette.muted};
-            border-radius: {max(2, round(3 * scale))}px;
-        }}
-        QCheckBox::indicator:checked {{
-            background: {palette.canvas};
-            border: 1px solid {palette.muted};
-            image: url("{checkmark_path}");
-        }}
-        QCheckBox::indicator:disabled {{
-            background: {palette.panel_alt};
-            border-color: {palette.disabled};
         }}
         """
     return f"""
@@ -128,6 +181,10 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
         outline: none;
     }}
     QMainWindow, QDialog, QWidget#AppRoot {{ background: {palette.canvas}; }}
+    QWidget#SettingsPanel {{
+        background: {palette.panel};
+        border-radius: {radius}px;
+    }}
     QMenuBar {{ background: {palette.panel}; border-bottom: 1px solid {palette.border}; padding: 1px; }}
     QMenuBar::item {{ padding: {pad_y}px {pad_x}px; background: transparent; }}
     QMenuBar::item:selected, QMenu::item:selected {{ background: {palette.panel_alt}; }}
@@ -150,10 +207,17 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
         background: {palette.canvas};
         border-radius: {radius}px;
     }}
+    QGroupBox[section="true"][titleless="true"] {{
+        margin-top: 0;
+        padding-top: 0;
+    }}
     QFrame[subgroup="true"] {{
         background: transparent;
         border: 1px solid {palette.border};
         border-radius: {radius}px;
+    }}
+    QFrame[subgroup="true"][frameless="true"] {{
+        border: none;
     }}
     QLabel[caption="true"] {{ color: {palette.muted}; font-size: {small}px; }}
     QPushButton, QToolButton {{
@@ -163,11 +227,52 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
         border-radius: {radius}px;
         padding: 0 {pad_x}px;
     }}
+    QToolButton#ConversionStartButton {{
+        min-height: {start_button_content_height}px;
+        max-height: {start_button_content_height}px;
+        padding: 0 {max(2, round(4 * scale))}px;
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 0, y2: 1,
+            stop: 0 {palette.surface},
+            stop: 1 {palette.panel_alt}
+        );
+        border: 1px solid {palette.border};
+        border-bottom: {start_button_edge}px solid {palette.accent};
+        border-radius: {radius}px;
+    }}
     QPushButton:hover, QToolButton:hover {{ background: {palette.surface_hover}; border-color: {palette.accent}; }}
     QPushButton:pressed, QToolButton:pressed, QPushButton[active="true"], QToolButton[active="true"] {{
         background: {palette.accent}; color: {palette.accent_text}; border-color: {palette.accent};
     }}
     QPushButton:disabled, QToolButton:disabled {{ color: {palette.disabled}; background: {palette.panel_alt}; }}
+    QToolButton#ConversionStartButton:pressed,
+    QToolButton#ConversionStartButton[active="true"] {{
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 0, y2: 1,
+            stop: 0 {palette.surface_hover},
+            stop: 1 {palette.panel_alt}
+        );
+        color: {palette.accent};
+        border: 1px solid {palette.accent};
+        border-bottom: {start_button_edge}px solid {palette.accent_hover};
+    }}
+    QToolButton#ConversionStartButton:hover,
+    QToolButton#ConversionStartButton:focus {{
+        background: {palette.surface_hover};
+        border: 1px solid {palette.accent};
+        border-bottom: {start_button_edge}px solid {palette.accent_hover};
+    }}
+    QToolButton#ConversionStartButton:pressed {{
+        background: {palette.panel_alt};
+        border: 1px solid {palette.accent_hover};
+        padding-top: {start_button_edge}px;
+        padding-bottom: 0;
+    }}
+    QToolButton#ConversionStartButton:disabled {{
+        background: {palette.panel_alt};
+        color: {palette.disabled};
+        border: 1px solid {palette.disabled};
+    }}
     QLineEdit, QComboBox, QSpinBox {{
         min-height: {control_height}px;
         background: {palette.surface};
@@ -179,6 +284,31 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
     }}
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 2px solid {palette.accent}; }}
     QComboBox::drop-down {{ width: {control_height}px; border: none; }}
+    QComboBox QAbstractItemView {{
+        background: {palette.surface};
+        color: {palette.text};
+        border: 1px solid {palette.border};
+        selection-background-color: {palette.accent};
+        selection-color: {palette.accent_text};
+        outline: none;
+    }}
+    QComboBox QAbstractItemView::item {{ padding: {pad_y}px {pad_x}px; }}
+    QComboBox QAbstractItemView::item:hover {{ background: {palette.surface_hover}; color: {palette.text}; }}
+    QAbstractItemView {{
+        background: {palette.surface};
+        color: {palette.text};
+        border: 1px solid {palette.border};
+        selection-background-color: {palette.accent};
+        selection-color: {palette.accent_text};
+        outline: none;
+    }}
+    QAbstractItemView::item {{ padding: {pad_y}px {pad_x}px; }}
+    QAbstractItemView::item:hover {{ background: {palette.surface_hover}; color: {palette.text}; }}
+    QAbstractItemView::item:selected,
+    QAbstractItemView::item:selected:hover {{
+        background: {palette.accent};
+        color: {palette.accent_text};
+    }}
     QSpinBox {{ padding-right: {round(20 * scale)}px; }}
     QSpinBox::up-button, QSpinBox::down-button {{
         subcontrol-origin: border;
@@ -191,7 +321,9 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
     QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {palette.surface_hover}; }}
     QCheckBox {{ spacing: {round(6 * scale)}px; }}
     QCheckBox[settingsItem="true"] {{ margin-left: {round(6 * scale)}px; }}
+    QCheckBox:disabled {{ color: {palette.disabled}; }}
     {checkbox_rules}
+    {radio_button_rules}
     QSlider::groove:horizontal {{ height: {round(5 * scale)}px; background: {palette.panel_alt}; border-radius: 2px; }}
     QSlider::sub-page:horizontal {{ background: {palette.accent}; border-radius: 2px; }}
     QSlider::handle:horizontal {{ width: {slider_handle_size}px; margin: -{slider_handle_margin}px 0; background: {palette.surface}; border: {slider_handle_border}px solid {palette.accent}; border-radius: {slider_handle_radius}px; }}
@@ -217,24 +349,49 @@ def build_stylesheet(theme_name: str, scale_percent: int = 100) -> str:
         font-weight: 600;
     }}
     QTableWidget#TrackChannelTable {{
-        border: 1px solid {palette.border};
-        border-bottom-color: {palette.surface};
+        background: transparent;
+        border: none;
         font-size: {small}px;
-        border-top-left-radius: {radius}px;
-        border-top-right-radius: {radius}px;
-        border-bottom-left-radius: {radius}px;
-        border-bottom-right-radius: {radius}px;
     }}
-    QTableWidget#TrackChannelTable QHeaderView::section {{
-        font-size: {small}px;
-        padding: {pad_y}px {max(1, round(scale))}px;
-        border-top-left-radius: {max(0, radius - 1)}px;
-        border-top-right-radius: {max(0, radius - 1)}px;
+    QTableWidget#TrackChannelTable::item {{ background: transparent; border: none; padding: 0; }}
+    QToolButton#TrackChannelButton {{
+        min-width: 0;
+        min-height: 0;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        padding: 0;
+        font-size: {max(1, round(9 * scale))}px;
     }}
-    QTableWidget#TrackChannelTable::item {{ border: none; padding: 1px; }}
-    QTableWidget#TrackChannelTable::item:selected {{ background: {palette.accent}; color: {palette.accent_text}; }}
+    QToolButton#TrackChannelButton:hover,
+    QToolButton#TrackChannelButton:pressed,
+    QToolButton#TrackChannelButton:checked {{
+        background: transparent;
+        border: none;
+    }}
     QToolButton#RefreshButton {{ padding: 0; background: transparent; }}
     QToolButton#RefreshButton:hover {{ background: {palette.surface_hover}; }}
+    QToolButton#PlayerTransportButton {{
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        background: transparent;
+        border: none;
+        border-radius: {round(14 * scale)}px;
+    }}
+    QToolButton#PlayerTransportButton:hover,
+    QToolButton#PlayerTransportButton:focus {{
+        background: {palette.surface_hover};
+        border: none;
+    }}
+    QToolButton#PlayerTransportButton:pressed {{
+        background: {palette.panel_alt};
+        border: none;
+    }}
+    QToolButton#PlayerTransportButton:disabled {{
+        background: transparent;
+        border: none;
+    }}
     QScrollBar:vertical {{ background: {palette.panel_alt}; width: {round(10 * scale)}px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {palette.border}; min-height: {round(24 * scale)}px; border-radius: {round(5 * scale)}px; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}

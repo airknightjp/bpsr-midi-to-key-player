@@ -28,21 +28,32 @@ if (-not (Test-Path ".build_deps\PyInstaller")) {
     & $Python -m pip install --target .build_deps pyinstaller
 }
 
-if (-not (Test-Path ".build_deps\PySide6")) {
+if (
+    -not (Test-Path ".build_deps\PySide6") -or
+    -not (Test-Path ".build_deps\numpy")
+) {
     & $Python -m pip install --target .build_deps -r requirements.txt
 }
 
 $env:PYTHONPATH = (Resolve-Path ".build_deps").Path
 
-$OutputExe = "dist\BPSR_MIDI_to_KEY_Player.exe"
-if (Test-Path $OutputExe) {
-    Remove-Item -LiteralPath $OutputExe -Force
+$OutputDir = "dist\BPSR_MIDI_to_KEY_Player"
+$OutputExe = Join-Path $OutputDir "BPSR_MIDI_to_KEY_Player.exe"
+$OutputReadme = Join-Path $OutputDir "readme.txt"
+$LegacySingleFileExe = "dist\BPSR_MIDI_to_KEY_Player.exe"
+if (Test-Path $OutputDir) {
+    Remove-Item -LiteralPath $OutputDir -Recurse -Force
+}
+if (Test-Path $LegacySingleFileExe) {
+    Remove-Item -LiteralPath $LegacySingleFileExe -Force
 }
 
 $ArgsList = @(
     "--noconfirm",
     "--clean",
-    "--onefile",
+    "--onedir",
+    "--contents-directory",
+    "_internal",
     "--windowed",
     "--exclude-module",
     "tkinter",
@@ -53,9 +64,15 @@ $ArgsList = @(
     "--add-data",
     "assets\app_icon_whale.png;assets",
     "--add-data",
-    "assets\app_icon_whale_flipped.png;assets",
+    "assets\whale_slider_frame_0.png;assets",
+    "--add-data",
+    "assets\whale_slider_frame_1.png;assets",
+    "--add-data",
+    "assets\whale_slider_frame_2.png;assets",
     "--add-data",
     "assets\check_white.svg;assets",
+    "--add-data",
+    "assets\radio_white_dot.svg;assets",
     "--name",
     "BPSR_MIDI_to_KEY_Player",
     "main.py"
@@ -67,5 +84,11 @@ if (-not (Test-Path $OutputExe)) {
     throw "Build failed: $OutputExe was not created."
 }
 
+Copy-Item -LiteralPath "readme.txt" -Destination $OutputReadme -Force
+if (-not (Test-Path $OutputReadme)) {
+    throw "Build failed: $OutputReadme was not created."
+}
+
 Write-Host ""
-Write-Host "Built: $OutputExe"
+Write-Host "Built folder: $OutputDir"
+Write-Host "Launch: $OutputExe"

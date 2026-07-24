@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import ctypes
 import random
 import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
 
+from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, RealtimeAutoSustain, plan_auto_sustain
 from chord_optimization import ChordOptimizationPlan
 from chord_optimization_planner import ChordOptimizationPlanner, ChordOptimizationRequest
 from config import (
@@ -20,16 +20,19 @@ from config import (
 from midi_parser import MidiEvent
 from playback_timing import PlaybackClock, PlaybackTimeline, prepare_playback_events
 from repeat_guard import RapidRepeatGuard
+from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
+from software_synth import SoftwareSynthClient
 
 
 StateCallback = Callable[[str], None]
 LogCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
+OutputNoteCallback = Callable[[int, bool], None]
+AudioRuntimeChangedCallback = Callable[[int, int, str], None]
 ChannelProvider = Callable[[], set[int]]
 SourceProvider = Callable[[], set[tuple[int, int]]]
-MIDI_MAPPER = 0xFFFFFFFF
-MMSYSERR_NOERROR = 0
+POSITION_REPORT_INTERVAL_SECONDS = 1.0 / 30.0
 
 
 class MidiSoundPlayer:
@@ -39,6 +42,8 @@ class MidiSoundPlayer:
         on_state: StateCallback | None = None,
         on_position: PositionCallback | None = None,
         on_optimization_progress: OptimizationProgressCallback | None = None,
+        on_output_note: OutputNoteCallback | None = None,
+        on_output_remap: OutputNoteCallback | None = None,
         enabled_channels: ChannelProvider | None = None,
         enabled_sources: SourceProvider | None = None,
         volume: int = 100,
@@ -48,13 +53,18 @@ class MidiSoundPlayer:
         humanize_timing: bool = False,
         chord_optimization: bool = False,
         chord_strum: bool = False,
+        auto_sustain: bool = False,
         repeat_prevention: bool = False,
         playback_speed_percent: int = 100,
+        sound_source: str = DEFAULT_SOUND_SOURCE,
+        on_audio_runtime_changed: AudioRuntimeChangedCallback | None = None,
     ):
         self.log = log or (lambda _message: None)
         self.on_state = on_state or (lambda _state: None)
         self.on_position = on_position or (lambda _position: None)
         self.on_optimization_progress = on_optimization_progress or (lambda _progress: None)
+        self.on_output_note = on_output_note or (lambda _note, _pressed: None)
+        self.on_output_remap = on_output_remap or self.on_output_note
         self.enabled_channels = enabled_channels or (lambda: set(range(16)))
         self.enabled_sources = enabled_sources
         self._volume = self._clamp_volume(volume)
@@ -70,8 +80,14 @@ class MidiSoundPlayer:
         self.humanize_timing = humanize_timing
         self.chord_optimization = chord_optimization
         self.chord_strum = chord_strum
+        self.auto_sustain = auto_sustain
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
         self.playback_speed_percent = playback_speed_percent
+        self.sound_source = normalize_sound_source(sound_source)
+        self._synth = SoftwareSynthClient(
+            self.sound_source,
+            on_runtime_changed=on_audio_runtime_changed,
+        )
         self._random = random.Random()
         self._clock: PlaybackClock | None = None
         self._thread: threading.Thread | None = None
@@ -80,12 +96,16 @@ class MidiSoundPlayer:
         self._state_lock = threading.RLock()
         self._pending_seek: float | None = None
         self._pending_switch: tuple[list[MidiEvent], float] | None = None
+        self._position_generation = 0
+        self._next_position_report_at = 0.0
         self._release_requested = threading.Event()
-        self._midi_handle = ctypes.c_void_p()
+        self._remap_active_notes_requested = threading.Event()
         self._active_notes: set[tuple[int, int]] = set()
         self._active_note_owner: dict[tuple[int, int], int] = {}
         self._active_note_velocity: dict[tuple[int, int], int] = {}
         self._sustain_channels: set[int] = set()
+        self._manual_sustain_sources: set[tuple[int, int]] = set()
+        self._auto_sustain_sources: set[tuple[int, int]] = set()
         self._suppressed_note_offs: dict[tuple[int, int, int], int] = defaultdict(int)
         self._chord_optimization_plan: ChordOptimizationPlan | None = None
         self._chord_optimization_plan_auto_fit: bool | None = None
@@ -107,11 +127,32 @@ class MidiSoundPlayer:
     def is_playing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
+        with self._state_lock:
+            if (
+                not self.chord_optimization
+                or self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
+                or self._chord_optimization_plan_transpose != self.transpose_semitones
+                or self._chord_optimization_plan_octave != self.note_octave_shift
+            ):
+                return None
+            return self._chord_optimization_plan
+
+    def current_position(self) -> float | None:
+        with self._state_lock:
+            clock = self._clock
+        return clock.position() if clock is not None else None
+
     def play(self, events: list[MidiEvent], start_time: float = 0.0) -> None:
         if self.is_playing:
             raise RuntimeError("MIDI sound is already playing")
+        if not self._open_audio():
+            detail = self._synth.last_error
+            message = "Software synthesizer audio output could not be opened"
+            raise RuntimeError(f"{message}: {detail}" if detail else message)
         self._stop_event.clear()
         self._release_requested.clear()
+        self._remap_active_notes_requested.clear()
         self._repeat_guard.reset()
         with self._state_lock:
             self._current_events = events
@@ -119,6 +160,7 @@ class MidiSoundPlayer:
         with self._lock:
             self._pending_seek = None
             self._pending_switch = None
+            self._position_generation += 1
         self._thread = threading.Thread(
             target=self._run,
             args=(events, max(0.0, start_time)),
@@ -130,6 +172,11 @@ class MidiSoundPlayer:
         with self._state_lock:
             self._volume = self._clamp_volume(volume)
 
+    def set_sound_source(self, sound_source: str) -> None:
+        with self._state_lock:
+            self.sound_source = normalize_sound_source(sound_source)
+            self._synth.set_sound_source(self.sound_source)
+
     def set_auto_fit_note_range(self, enabled: bool) -> None:
         with self._state_lock:
             enabled = bool(enabled)
@@ -137,6 +184,7 @@ class MidiSoundPlayer:
                 return
             self.auto_fit_note_range = enabled
             self._mark_chord_optimization_dirty_locked()
+            self._remap_active_notes_requested.set()
             self._release_requested.set()
         self._schedule_chord_optimization()
 
@@ -192,6 +240,16 @@ class MidiSoundPlayer:
         with self._state_lock:
             return self.chord_strum
 
+    def set_auto_sustain(self, enabled: bool) -> None:
+        with self._state_lock:
+            self.auto_sustain = bool(enabled)
+            if not enabled:
+                self._clear_auto_sustain_locked()
+
+    def _auto_sustain_enabled(self) -> bool:
+        with self._state_lock:
+            return self.auto_sustain
+
     def set_repeat_prevention(self, enabled: bool) -> None:
         self._repeat_guard.set_enabled(enabled)
 
@@ -210,30 +268,44 @@ class MidiSoundPlayer:
         position = max(0.0, position)
         with self._lock:
             self._pending_seek = position
-        self.on_position(position)
+            self._position_generation += 1
+            position_generation = self._position_generation
+        self._report_position(position, position_generation)
 
     def switch(self, events: list[MidiEvent], start_time: float = 0.0) -> None:
         start_time = max(0.0, start_time)
         with self._lock:
             self._pending_seek = None
             self._pending_switch = (events, start_time)
-        self.on_position(start_time)
+            self._position_generation += 1
+            position_generation = self._position_generation
+        self._report_position(start_time, position_generation)
 
     def release_all(self) -> None:
         if self.is_playing and threading.current_thread() is not self._thread:
+            self._remap_active_notes_requested.clear()
             self._release_requested.set()
             return
         self._release_all_now()
 
-    def _release_all_now(self) -> None:
+    def _release_all_now(
+        self,
+        output_callback: OutputNoteCallback | None = None,
+    ) -> None:
         with self._state_lock:
             affected_channels = set(self._sustain_channels)
             affected_channels.update(channel for channel, _note in self._active_notes)
             for channel in list(self._sustain_channels):
                 self._send_control_change(channel, 64, 0)
             self._sustain_channels.clear()
+            self._manual_sustain_sources.clear()
+            self._auto_sustain_sources.clear()
             for channel, note in list(self._active_notes):
-                self._send_note_off(channel, note)
+                self._send_note_off(
+                    channel,
+                    note,
+                    output_callback=output_callback,
+                )
             for channel in affected_channels:
                 self._send_control_change(channel, 123, 0)
             self._active_notes.clear()
@@ -251,14 +323,12 @@ class MidiSoundPlayer:
         self._optimization_planner.wait(timeout=0.2)
 
     def _run(self, events: list[MidiEvent], start_time: float) -> None:
-        if not self._open_midi():
-            self.log("MIDI sound playback failed: could not open MIDI output")
-            self.on_state("sound stopped")
-            return
-
         failure: Exception | None = None
         try:
-            self.log(f"MIDI sound playback started (volume {self._volume}%)")
+            self.log(
+                f"MIDI sound playback started "
+                f"(volume {self._volume}%, source {self.sound_source})"
+            )
             self.on_state("sound playing")
             current_events = events
             current_start_time = start_time
@@ -285,9 +355,9 @@ class MidiSoundPlayer:
                 if failure is None:
                     self.log(f"MIDI sound cleanup failed: {exc}")
             try:
-                self._close_midi()
+                self._close_audio()
             except Exception as exc:
-                self.log(f"MIDI output close failed: {exc}")
+                self.log(f"Software synthesizer close failed: {exc}")
             with self._state_lock:
                 self._clock = None
                 self._current_events = None
@@ -298,6 +368,8 @@ class MidiSoundPlayer:
                 self.on_state("sound ended")
 
     def _play_from(self, events: list[MidiEvent], start_time: float) -> float:
+        with self._lock:
+            position_generation = self._position_generation
         self._refresh_chord_optimization_plan(events, force=True)
         if self._stop_event.is_set():
             return start_time
@@ -307,9 +379,11 @@ class MidiSoundPlayer:
         with self._state_lock:
             self._clock = clock
         last_position = start_time
+        self._next_position_report_at = 0.0
         timeline = PlaybackTimeline(start_time, self._random)
+        planned_events = plan_auto_sustain(events)
         for scheduled in prepare_playback_events(
-            events,
+            planned_events,
             self._random,
             self._chord_optimization_timing_offset,
         ):
@@ -349,18 +423,41 @@ class MidiSoundPlayer:
                 delay = clock.delay_until(scheduled_time)
                 if delay <= 0:
                     break
-                self.on_position(clock.position())
-                self._stop_event.wait(min(delay, 0.01))
+                self._report_position_if_due(
+                    clock.position(),
+                    position_generation,
+                )
+                time.sleep(min(delay, 0.01))
 
             if self._stop_event.is_set():
                 return last_position
             timeline.mark_emitted(scheduled_time)
             last_position = event.time
             self._refresh_chord_optimization_plan(events)
-            self.on_position(clock.position())
+            self._report_position_if_due(
+                clock.position(),
+                position_generation,
+            )
             self._handle_event(event)
 
         return last_position
+
+    def _report_position(self, position: float, generation: int) -> None:
+        with self._lock:
+            if generation != self._position_generation:
+                return
+            self.on_position(position)
+
+    def _report_position_if_due(
+        self,
+        position: float,
+        generation: int,
+    ) -> None:
+        now = time.perf_counter()
+        if now < self._next_position_report_at:
+            return
+        self._next_position_report_at = now + POSITION_REPORT_INTERVAL_SECONDS
+        self._report_position(position, generation)
 
     def _handle_event(
         self,
@@ -388,8 +485,13 @@ class MidiSoundPlayer:
                     if playable_note is not None:
                         self._send_note_off(event.channel, playable_note)
                 elif event.kind == "sustain" and event.value is not None and event.value < 64:
-                    self._send_control_change(event.channel, 64, 0)
-                    self._sustain_channels.discard(event.channel)
+                    self._set_sustain_source(event.track, event.channel, False, automatic=False)
+                elif (
+                    event.kind == AUTO_SUSTAIN_EVENT_KIND
+                    and event.value is not None
+                    and event.value < 64
+                ):
+                    self._set_sustain_source(event.track, event.channel, False, automatic=True)
                 return
 
             if event.kind == "note_on" and event.note is not None:
@@ -404,19 +506,26 @@ class MidiSoundPlayer:
                     ] += 1
                     return
                 velocity = int((event.velocity or 64) * self._volume / 100)
-                if velocity <= 0:
-                    return
                 self._send_note_on(event.channel, playable_note, velocity, owner_note=event.note)
             elif event.kind == "note_off" and event.note is not None:
                 playable_note = self._playable_event_note(event)
                 if playable_note is not None:
                     self._send_note_off(event.channel, playable_note, owner_note=event.note)
             elif event.kind == "sustain" and event.value is not None:
-                self._send_control_change(event.channel, 64, event.value)
-                if event.value >= 64:
-                    self._sustain_channels.add(event.channel)
-                else:
-                    self._sustain_channels.discard(event.channel)
+                self._set_sustain_source(
+                    event.track,
+                    event.channel,
+                    event.value >= 64,
+                    automatic=False,
+                )
+            elif event.kind == AUTO_SUSTAIN_EVENT_KIND and event.value is not None:
+                if self.auto_sustain:
+                    self._set_sustain_source(
+                        event.track,
+                        event.channel,
+                        event.value >= 64,
+                        automatic=True,
+                    )
 
     def _event_is_enabled(self, event: MidiEvent) -> bool:
         if event.channel is None:
@@ -567,67 +676,160 @@ class MidiSoundPlayer:
             and self._optimization_generation == generation
         )
 
-    def _send_note_on(self, channel: int, note: int, velocity: int, owner_note: int | None = None) -> None:
+    def _send_note_on(
+        self,
+        channel: int,
+        note: int,
+        velocity: int,
+        owner_note: int | None = None,
+        output_callback: OutputNoteCallback | None = None,
+    ) -> None:
         active_note = (channel, note)
-        if active_note in self._active_notes:
-            self._send_short_message(0x80 | channel, note, 0)
-            time.sleep(0.01)
-        self._send_short_message(0x90 | channel, note, velocity)
+        previous_velocity = self._active_note_velocity.get(active_note, 0)
+        if active_note in self._active_notes and previous_velocity > 0:
+            self._synth.note_off(channel, note)
+        if velocity > 0:
+            self._synth.note_on(channel, note, velocity)
         self._active_notes.add(active_note)
         self._active_note_velocity[active_note] = velocity
         if owner_note is not None:
             self._active_note_owner[active_note] = owner_note
+        self._emit_output_note(note, True, output_callback)
 
-    def _send_note_off(self, channel: int, note: int, owner_note: int | None = None) -> None:
+    def _send_note_off(
+        self,
+        channel: int,
+        note: int,
+        owner_note: int | None = None,
+        output_callback: OutputNoteCallback | None = None,
+    ) -> None:
         active_note = (channel, note)
+        note_was_active = active_note in self._active_notes
         current_owner = self._active_note_owner.get(active_note)
         if owner_note is not None and current_owner is not None and current_owner != owner_note:
             velocity = self._active_note_velocity.get(active_note, 64)
-            self._send_short_message(0x80 | channel, note, 0)
-            time.sleep(0.01)
-            self._send_short_message(0x90 | channel, note, velocity)
+            if velocity > 0:
+                self._synth.note_off(channel, note)
+                self._synth.note_on(channel, note, velocity)
             return
         self._active_note_owner.pop(active_note, None)
-        self._active_note_velocity.pop(active_note, None)
-        self._send_short_message(0x80 | channel, note, 0)
+        velocity = self._active_note_velocity.pop(active_note, 0)
+        if note_was_active and velocity > 0:
+            self._synth.note_off(channel, note)
         self._active_notes.discard(active_note)
+        if note_was_active and not any(
+            active == note for _channel, active in self._active_notes
+        ):
+            self._emit_output_note(note, False, output_callback)
+
+    def _emit_output_note(
+        self,
+        note: int,
+        pressed: bool,
+        output_callback: OutputNoteCallback | None = None,
+    ) -> None:
+        try:
+            (output_callback or self.on_output_note)(note, pressed)
+        except Exception as exc:
+            self.log(f"Output keyboard display update failed: {exc}")
 
     def _send_control_change(self, channel: int, control: int, value: int) -> None:
-        self._send_short_message(0xB0 | channel, control, value)
+        if control == 64:
+            self._synth.set_sustain(channel, value >= 64)
+        elif control == 123:
+            self._synth.release_all(channel)
 
-    def _send_short_message(self, status: int, data1: int, data2: int) -> None:
-        if not self._midi_handle:
-            return
-        message = status | (data1 << 8) | (data2 << 16)
-        result = ctypes.windll.winmm.midiOutShortMsg(self._midi_handle, message)
-        if result != MMSYSERR_NOERROR:
-            raise RuntimeError(f"MIDI output send failed ({result})")
-
-    def _open_midi(self) -> bool:
-        result = ctypes.windll.winmm.midiOutOpen(
-            ctypes.byref(self._midi_handle),
-            MIDI_MAPPER,
-            0,
-            0,
-            0,
+    def _set_sustain_source(
+        self,
+        track: int | None,
+        channel: int,
+        enabled: bool,
+        *,
+        automatic: bool,
+    ) -> None:
+        source = (track if track is not None else -1, channel)
+        target = self._auto_sustain_sources if automatic else self._manual_sustain_sources
+        was_active = channel in self._sustain_channels
+        if enabled:
+            target.add(source)
+        else:
+            target.discard(source)
+        is_active = any(
+            item_channel == channel
+            for _track, item_channel in self._manual_sustain_sources | self._auto_sustain_sources
         )
-        return result == MMSYSERR_NOERROR
+        if is_active:
+            self._sustain_channels.add(channel)
+        else:
+            self._sustain_channels.discard(channel)
+        if is_active != was_active:
+            self._send_control_change(channel, 64, 127 if is_active else 0)
 
-    def _close_midi(self) -> None:
-        if self._midi_handle:
-            handle = self._midi_handle
-            self._midi_handle = ctypes.c_void_p()
-            reset_result = ctypes.windll.winmm.midiOutReset(handle)
-            close_result = ctypes.windll.winmm.midiOutClose(handle)
-            if reset_result != MMSYSERR_NOERROR:
-                raise RuntimeError(f"MIDI output reset failed ({reset_result})")
-            if close_result != MMSYSERR_NOERROR:
-                raise RuntimeError(f"MIDI output close failed ({close_result})")
+    def _clear_auto_sustain_locked(self) -> None:
+        affected_channels = {channel for _track, channel in self._auto_sustain_sources}
+        self._auto_sustain_sources.clear()
+        for channel in affected_channels:
+            still_active = any(
+                source_channel == channel
+                for _track, source_channel in self._manual_sustain_sources
+            )
+            if not still_active and channel in self._sustain_channels:
+                self._sustain_channels.discard(channel)
+                self._send_control_change(channel, 64, 0)
+
+    def _open_audio(self) -> bool:
+        return self._synth.open()
+
+    def _close_audio(self) -> None:
+        self._synth.close()
 
     def _consume_release_request(self) -> None:
         if self._release_requested.is_set():
             self._release_requested.clear()
-            self._release_all_now()
+            if self._remap_active_notes_requested.is_set():
+                self._remap_active_notes_requested.clear()
+                self._remap_active_notes_now()
+            else:
+                self._release_all_now()
+
+    def _remap_active_notes_now(self) -> None:
+        with self._state_lock:
+            active_notes = [
+                (
+                    channel,
+                    self._active_note_owner.get((channel, note), note),
+                    self._active_note_velocity.get((channel, note), 0),
+                )
+                for channel, note in sorted(self._active_notes)
+            ]
+            manual_sustain = set(self._manual_sustain_sources)
+            auto_sustain = set(self._auto_sustain_sources)
+            self._release_all_now(output_callback=self.on_output_remap)
+            for track, channel in sorted(manual_sustain):
+                self._set_sustain_source(
+                    track,
+                    channel,
+                    True,
+                    automatic=False,
+                )
+            for track, channel in sorted(auto_sustain):
+                self._set_sustain_source(
+                    track,
+                    channel,
+                    True,
+                    automatic=True,
+                )
+            for channel, owner_note, velocity in active_notes:
+                playable_note = self._playable_note(owner_note)
+                if playable_note is None:
+                    continue
+                self._send_note_on(
+                    channel,
+                    playable_note,
+                    velocity,
+                    owner_note=owner_note,
+                    output_callback=self.on_output_remap,
+                )
 
     def _pop_pending_seek(self) -> float | None:
         with self._lock:
@@ -657,7 +859,10 @@ class RealtimeMidiSoundOutput:
         log: LogCallback | None = None,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
+        auto_sustain: bool = False,
         repeat_prevention: bool = False,
+        sound_source: str = DEFAULT_SOUND_SOURCE,
+        on_audio_runtime_changed: AudioRuntimeChangedCallback | None = None,
     ):
         self.log = log or (lambda _message: None)
         self._volume = self._clamp_volume(volume)
@@ -669,13 +874,24 @@ class RealtimeMidiSoundOutput:
             MIN_OCTAVE_SHIFT,
             min(MAX_OCTAVE_SHIFT, int(octave_shift)),
         )
+        self.auto_sustain = bool(auto_sustain)
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
+        self.sound_source = normalize_sound_source(sound_source)
+        self._synth = SoftwareSynthClient(
+            self.sound_source,
+            on_runtime_changed=on_audio_runtime_changed,
+        )
         self._enabled = False
-        self._midi_handle = ctypes.c_void_p()
         self._active_notes: set[tuple[int, int]] = set()
         self._sustain_channels: set[int] = set()
+        self._manual_sustain_channels: set[int] = set()
+        self._auto_sustain_channels: set[int] = set()
         self._suppressed_note_offs: dict[tuple[int, int], int] = defaultdict(int)
         self._lock = threading.RLock()
+        self._auto_sustain_controller = RealtimeAutoSustain(
+            self._set_auto_sustain,
+            enabled=self.auto_sustain,
+        )
 
     @property
     def is_enabled(self) -> bool:
@@ -686,9 +902,11 @@ class RealtimeMidiSoundOutput:
         with self._lock:
             enabled = bool(enabled)
             if enabled:
-                if not self._midi_handle and not self._open_midi():
+                if not self._synth.is_open and not self._open_audio():
                     self._enabled = False
-                    self.log("Realtime MIDI sound failed: could not open MIDI output")
+                    detail = self._synth.last_error
+                    message = "Realtime MIDI sound failed: could not open software synthesizer"
+                    self.log(f"{message}: {detail}" if detail else message)
                     return False
                 self._reset_repeat_state()
                 self._enabled = True
@@ -702,9 +920,19 @@ class RealtimeMidiSoundOutput:
         with self._lock:
             self._volume = self._clamp_volume(volume)
 
+    def set_sound_source(self, sound_source: str) -> None:
+        with self._lock:
+            self.sound_source = normalize_sound_source(sound_source)
+            self._synth.set_sound_source(self.sound_source)
+
     def set_repeat_prevention(self, enabled: bool) -> None:
         with self._lock:
             self._repeat_guard.set_enabled(enabled)
+
+    def set_auto_sustain(self, enabled: bool) -> None:
+        with self._lock:
+            self.auto_sustain = bool(enabled)
+        self._auto_sustain_controller.set_enabled(enabled)
 
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
         transpose_semitones = max(
@@ -718,7 +946,7 @@ class RealtimeMidiSoundOutput:
                 and self.note_octave_shift == octave_shift
             ):
                 return
-            if self._midi_handle:
+            if self._synth.is_open:
                 self._release_all_now()
             self._reset_repeat_state()
             self.transpose_semitones = transpose_semitones
@@ -733,7 +961,7 @@ class RealtimeMidiSoundOutput:
         received_at: float | None = None,
     ) -> None:
         with self._lock:
-            if not self._enabled or not self._midi_handle:
+            if not self._enabled or not self._synth.is_open:
                 return
             try:
                 if event_type == 0x90 and data2 > 0:
@@ -750,6 +978,7 @@ class RealtimeMidiSoundOutput:
                     ):
                         self._suppressed_note_offs[(channel, data1)] += 1
                         return
+                    self._auto_sustain_controller.note_on(channel, data1, received_at)
                     velocity = int(data2 * self._volume / 100)
                     if velocity > 0:
                         self._send_note_on(channel, note, velocity)
@@ -762,6 +991,7 @@ class RealtimeMidiSoundOutput:
                         else:
                             self._suppressed_note_offs[owner] = suppressed_count - 1
                         return
+                    self._auto_sustain_controller.note_off(channel, data1, received_at)
                     note = shift_midi_note(
                         data1,
                         self.transpose_semitones,
@@ -770,11 +1000,8 @@ class RealtimeMidiSoundOutput:
                     if note is not None:
                         self._send_note_off(channel, note)
                 elif event_type == 0xB0 and data1 == 64:
-                    self._send_control_change(channel, 64, data2)
-                    if data2 >= 64:
-                        self._sustain_channels.add(channel)
-                    else:
-                        self._sustain_channels.discard(channel)
+                    self._auto_sustain_controller.manual_sustain(channel)
+                    self._set_realtime_sustain(channel, data2 >= 64, automatic=False)
             except Exception as exc:
                 self.log(f"Realtime MIDI sound failed: {exc}")
                 self._enabled = False
@@ -788,19 +1015,49 @@ class RealtimeMidiSoundOutput:
     def _send_note_on(self, channel: int, note: int, velocity: int) -> None:
         active_note = (channel, note)
         if active_note in self._active_notes:
-            self._send_short_message(0x80 | channel, note, 0)
-            time.sleep(0.01)
-        self._send_short_message(0x90 | channel, note, velocity)
+            self._synth.note_off(channel, note)
+        self._synth.note_on(channel, note, velocity)
         self._active_notes.add(active_note)
 
     def _send_note_off(self, channel: int, note: int) -> None:
-        self._send_short_message(0x80 | channel, note, 0)
+        self._synth.note_off(channel, note)
         self._active_notes.discard((channel, note))
 
     def _send_control_change(self, channel: int, control: int, value: int) -> None:
-        self._send_short_message(0xB0 | channel, control, value)
+        if control == 64:
+            self._synth.set_sustain(channel, value >= 64)
+        elif control == 123:
+            self._synth.release_all(channel)
+
+    def _set_auto_sustain(self, channel: int, enabled: bool) -> None:
+        with self._lock:
+            if not self._enabled or not self._synth.is_open:
+                return
+            self._set_realtime_sustain(channel, enabled, automatic=True)
+
+    def _set_realtime_sustain(
+        self,
+        channel: int,
+        enabled: bool,
+        *,
+        automatic: bool,
+    ) -> None:
+        target = self._auto_sustain_channels if automatic else self._manual_sustain_channels
+        was_active = channel in self._sustain_channels
+        if enabled:
+            target.add(channel)
+        else:
+            target.discard(channel)
+        is_active = channel in self._auto_sustain_channels or channel in self._manual_sustain_channels
+        if is_active:
+            self._sustain_channels.add(channel)
+        else:
+            self._sustain_channels.discard(channel)
+        if is_active != was_active:
+            self._send_control_change(channel, 64, 127 if is_active else 0)
 
     def _release_all_now(self) -> None:
+        self._auto_sustain_controller.reset()
         affected_channels = set(self._sustain_channels)
         affected_channels.update(channel for channel, _note in self._active_notes)
         for channel in list(self._sustain_channels):
@@ -810,56 +1067,36 @@ class RealtimeMidiSoundOutput:
         for channel in affected_channels:
             self._send_control_change(channel, 123, 0)
         self._sustain_channels.clear()
+        self._manual_sustain_channels.clear()
+        self._auto_sustain_channels.clear()
         self._active_notes.clear()
 
     def _release_and_close(self) -> None:
         try:
-            if self._midi_handle:
+            if self._synth.is_open:
                 self._release_all_now()
         except Exception as exc:
             self.log(f"Realtime MIDI sound cleanup failed: {exc}")
         finally:
             self._active_notes.clear()
             self._sustain_channels.clear()
+            self._manual_sustain_channels.clear()
+            self._auto_sustain_channels.clear()
             self._reset_repeat_state()
             try:
-                self._close_midi()
+                self._close_audio()
             except Exception as exc:
-                self.log(f"Realtime MIDI output close failed: {exc}")
+                self.log(f"Realtime software synthesizer close failed: {exc}")
 
     def _reset_repeat_state(self) -> None:
         self._repeat_guard.reset()
         self._suppressed_note_offs.clear()
 
-    def _send_short_message(self, status: int, data1: int, data2: int) -> None:
-        if not self._midi_handle:
-            return
-        message = status | (data1 << 8) | (data2 << 16)
-        result = ctypes.windll.winmm.midiOutShortMsg(self._midi_handle, message)
-        if result != MMSYSERR_NOERROR:
-            raise RuntimeError(f"MIDI output send failed ({result})")
+    def _open_audio(self) -> bool:
+        return self._synth.open()
 
-    def _open_midi(self) -> bool:
-        result = ctypes.windll.winmm.midiOutOpen(
-            ctypes.byref(self._midi_handle),
-            MIDI_MAPPER,
-            0,
-            0,
-            0,
-        )
-        return result == MMSYSERR_NOERROR
-
-    def _close_midi(self) -> None:
-        if not self._midi_handle:
-            return
-        handle = self._midi_handle
-        self._midi_handle = ctypes.c_void_p()
-        reset_result = ctypes.windll.winmm.midiOutReset(handle)
-        close_result = ctypes.windll.winmm.midiOutClose(handle)
-        if reset_result != MMSYSERR_NOERROR:
-            raise RuntimeError(f"MIDI output reset failed ({reset_result})")
-        if close_result != MMSYSERR_NOERROR:
-            raise RuntimeError(f"MIDI output close failed ({close_result})")
+    def _close_audio(self) -> None:
+        self._synth.close()
 
     @staticmethod
     def _clamp_volume(volume: int) -> int:

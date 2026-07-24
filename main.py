@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from app_controller import AppController
 from qt_main_window import MidiMainWindow
 from single_instance import SingleInstance
+from software_synth import shutdown_software_synth
 
 
 APP_WINDOW_TITLE = "BPSR MIDI to KEY Player"
@@ -29,22 +29,14 @@ def main() -> int:
     window.resize(controller.state.window_width, controller.state.window_height)
     window.show()
     controller.start()
-
-    activation_timer = QTimer()
-    activation_timer.setInterval(100)
-    activation_timer.timeout.connect(
-        lambda: window._restore_from_tray()
-        if single_instance.consume_activation_request()
-        else None
-    )
-    activation_timer.start()
+    single_instance.start_activation_listener(window.activation_requested.emit)
 
     try:
         return application.exec()
     finally:
-        activation_timer.stop()
-        controller.shutdown()
         single_instance.close()
+        controller.shutdown()
+        shutdown_software_synth()
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -110,6 +110,14 @@ class KeyboardOutput:
         self._pressed_at: dict[str, float] = {}
         self._last_released_at: dict[str, float] = {}
 
+    def set_dry_run(self, enabled: bool) -> None:
+        with self._lock:
+            enabled = bool(enabled)
+            if self.dry_run == enabled:
+                return
+            self.release_all()
+            self.dry_run = enabled
+
     def press(self, key: str) -> None:
         with self._lock:
             if key in self._pressed:

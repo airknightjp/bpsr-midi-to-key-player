@@ -6,19 +6,36 @@ import time
 import winsound
 from dataclasses import replace
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
+from audio_buffer import normalize_audio_buffer_frames, normalize_qt_audio_frames
 from app_state import AppState, MidiListRow, TrackChannelItem
+from chord_optimization import ChordOptimizationPlan
 from config import (
+    INPUT_CONVERSION_MIDI_FILE,
+    INPUT_CONVERSION_REALTIME,
     DEFAULT_KEY_BINDINGS,
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
+    OCTAVE_DOWN_KEY,
+    OCTAVE_UP_KEY,
+    SUSTAIN_KEY,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
     MIN_TRANSPOSE_SEMITONES,
+    PIANO_NOTE_MAX,
+    PIANO_NOTE_MIN,
+    SOUND_PLAYBACK_MODE_CONTINUOUS,
+    SOUND_PLAYBACK_MODE_OFF,
+    SOUND_PLAYBACK_MODE_REPEAT_ONE,
+    SOUND_PLAYBACK_MODES,
     normalized_key_bindings,
+    normalize_special_binding,
+    normalize_input_conversion_mode,
+    normalize_panel_order,
+    normalize_sound_playback_mode,
 )
 from global_hotkeys import GlobalHotkeyManager, shortcut_to_hotkey_spec
 from i18n import TEXT, normalize_color_theme, normalize_language
@@ -27,11 +44,15 @@ from live_midi_input import MidiInputKeyboardBridge, list_midi_input_devices
 from midi_parser import MidiEvent, MidiSummary, parse_midi
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 from player import MidiKeyboardPlayer
+from rhythm_scoring import RhythmHit, RhythmScorer
 from settings import AppSettings, consume_settings_error, load_settings, save_settings
+from sound_sources import normalize_sound_source
 from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
 
 
 GAME_COUNTDOWN_KEY_HOLD_SECONDS = 0.12
+OUTPUT_NOTE_MIN_VISIBLE_SECONDS = 0.075
+RHYTHM_HIT_EVENT_HISTORY_LIMIT = 128
 UI_SCALE_PERCENT_OPTIONS = (100, 110, 125, 150, 175, 200)
 
 
@@ -43,6 +64,12 @@ class ControllerView(Protocol):
     def clear_log(self) -> None: ...
 
     def show_message(self, level: str, title: str, message: str) -> None: ...
+
+    def schedule_settings_save(self, delay_ms: int) -> None: ...
+
+    def schedule_output_note_release(self, delay_ms: int) -> None: ...
+
+    def schedule_rhythm_score_update(self, delay_ms: int | None) -> None: ...
 
 
 class NullView:
@@ -58,6 +85,15 @@ class NullView:
     def show_message(self, _level: str, _title: str, _message: str) -> None:
         pass
 
+    def schedule_settings_save(self, _delay_ms: int) -> None:
+        pass
+
+    def schedule_output_note_release(self, _delay_ms: int) -> None:
+        pass
+
+    def schedule_rhythm_score_update(self, _delay_ms: int | None) -> None:
+        pass
+
 
 class AppController:
     """UI-independent application state and orchestration layer."""
@@ -71,7 +107,11 @@ class AppController:
             status=TEXT[self.settings.language]["waiting"],
             countdown_seconds=self.settings.countdown_seconds,
             midi_sound_volume=self.settings.midi_sound_volume,
+            sound_source=self.settings.sound_source,
             playback_speed_percent=self.settings.playback_speed_percent,
+            sound_playback_mode=normalize_sound_playback_mode(
+                self.settings.sound_playback_mode
+            ),
             dry_run=self.settings.dry_run,
             countdown_sound=self.settings.countdown_sound,
             game_countdown_sound=self.settings.game_countdown_sound,
@@ -81,7 +121,11 @@ class AppController:
             humanize_timing=self.settings.humanize_timing,
             chord_optimization=self.settings.chord_optimization,
             chord_strum=self.settings.chord_strum,
+            auto_sustain=self.settings.auto_sustain,
             repeat_prevention=self.settings.repeat_prevention,
+            sustain_key=self.settings.sustain_key,
+            octave_down_key=self.settings.octave_down_key,
+            octave_up_key=self.settings.octave_up_key,
             keyboard_play_shortcut=self.settings.keyboard_play_shortcut,
             keyboard_pause_shortcut=self.settings.keyboard_pause_shortcut,
             keyboard_stop_shortcut=self.settings.keyboard_stop_shortcut,
@@ -93,6 +137,10 @@ class AppController:
             window_width=max(1, self.settings.window_width),
             window_height=max(1, self.settings.window_height),
             midi_input_device=self.settings.midi_input_device,
+            input_conversion_mode=normalize_input_conversion_mode(
+                self.settings.input_conversion_mode
+            ),
+            panel_order=normalize_panel_order(self.settings.panel_order),
         )
         self.view: ControllerView = NullView()
         self.events: list[MidiEvent] = []
@@ -109,14 +157,24 @@ class AppController:
         self.realtime_sound_output: RealtimeMidiSoundOutput | None = None
         self.worker_queue: queue.Queue[tuple[object, ...]] = queue.Queue()
         self.metadata_queue: queue.Queue[tuple[int, Path, str, str]] = queue.Queue()
+        self._event_notifier: Callable[[], None] | None = None
+        self._event_notification_lock = threading.Lock()
+        self._event_notification_pending = False
         self.metadata_cancel = threading.Event()
         self.metadata_scan_id = 0
         self.playback_id = 0
-        self.ignore_player_position_until = 0.0
+        self.position_generation = 0
+        self.midi_input_id = 0
+        self._active_output_notes_by_source: dict[tuple[str, int], set[int]] = {}
+        self._output_note_visible_until: dict[int, float] = {}
+        self._output_note_release_due: dict[int, float] = {}
+        self._realtime_note_visible_until: dict[int, float] = {}
+        self._realtime_note_release_due: dict[int, float] = {}
+        self._rhythm_scorer = RhythmScorer()
+        self._rhythm_hit_serial = 0
         self.seeking_keys = False
         self.global_hotkeys: GlobalHotkeyManager | None = None
         self.hotkey_failure_signature: tuple[str, ...] = ()
-        self.save_due_at: float | None = None
         self.settings_save_error = ""
         self.exiting = False
 
@@ -126,6 +184,63 @@ class AppController:
             self._log(self.settings_load_error)
         self.refresh_midi_input_devices(notify=False)
         self._notify()
+
+    def set_event_notifier(self, notifier: Callable[[], None] | None) -> None:
+        callback: Callable[[], None] | None = None
+        with self._event_notification_lock:
+            self._event_notifier = notifier
+            if notifier is None:
+                self._event_notification_pending = False
+            elif (
+                not self._event_notification_pending
+                and (not self.worker_queue.empty() or not self.metadata_queue.empty())
+            ):
+                self._event_notification_pending = True
+                callback = notifier
+        if callback is not None:
+            self._emit_event_notification(callback)
+
+    def _queue_worker_message(self, message: tuple[object, ...]) -> None:
+        self.worker_queue.put(message)
+        self._request_event_dispatch()
+
+    def _queue_metadata_result(self, result: tuple[int, Path, str, str]) -> None:
+        self.metadata_queue.put(result)
+        self._request_event_dispatch()
+
+    def _request_event_dispatch(self) -> None:
+        callback: Callable[[], None] | None = None
+        with self._event_notification_lock:
+            if (
+                not self.exiting
+                and not self._event_notification_pending
+                and self._event_notifier is not None
+            ):
+                self._event_notification_pending = True
+                callback = self._event_notifier
+        if callback is not None:
+            self._emit_event_notification(callback)
+
+    def _complete_event_dispatch(self) -> None:
+        callback: Callable[[], None] | None = None
+        with self._event_notification_lock:
+            self._event_notification_pending = False
+            if (
+                not self.exiting
+                and self._event_notifier is not None
+                and (not self.worker_queue.empty() or not self.metadata_queue.empty())
+            ):
+                self._event_notification_pending = True
+                callback = self._event_notifier
+        if callback is not None:
+            self._emit_event_notification(callback)
+
+    def _emit_event_notification(self, callback: Callable[[], None]) -> None:
+        try:
+            callback()
+        except Exception:
+            with self._event_notification_lock:
+                self._event_notification_pending = False
 
     def start(self) -> None:
         self._bind_global_hotkeys()
@@ -213,16 +328,26 @@ class AppController:
             return
         selected = self.midi_files[index]
         switch_sound = self._sound_playback_is_active()
+        preserve_sound_pause = self.state.sound_paused
         if switch_sound and self.summary is not None and selected == self.summary.path:
             self.state.selected_midi_index = index
             self._notify()
             return
+        if preserve_sound_pause:
+            self.state.current_mode = None
         if not self._load_midi_file(selected, stop_playback=not switch_sound):
+            if preserve_sound_pause:
+                self.state.current_mode = "sound_paused"
+                self._notify()
             return
         self.state.selected_midi_index = index
         self._update_row_metadata(selected, self.summary)
         if switch_sound and self.sound_player:
+            self._next_position_generation()
             self.sound_player.switch(self.events, start_time=0.0)
+        elif preserve_sound_pause:
+            self.state.current_mode = "sound_paused"
+            self.state.status = "sound paused"
         self._notify()
 
     def _load_midi_file(self, path: Path, *, stop_playback: bool) -> bool:
@@ -233,6 +358,7 @@ class AppController:
         except Exception as exc:
             self._message("error", "load_failed_title", str(exc))
             return False
+        self._reset_rhythm_score()
         self.events = events
         self.summary = summary
         self.state.duration = summary.duration
@@ -255,6 +381,20 @@ class AppController:
         elif self.state.current_mode is None and not self.state.midi_input_running:
             self.play_keyboard()
 
+    def toggle_input_conversion(self) -> None:
+        if self.state.midi_input_running:
+            self.stop_midi_input()
+        elif self.state.keyboard_playing or self.state.keyboard_paused:
+            self.stop_playback()
+        elif self.state.input_conversion_mode == INPUT_CONVERSION_REALTIME:
+            self.start_midi_input()
+        else:
+            if self.state.sound_paused:
+                self.stop_playback()
+                self.play_keyboard(start_time=0.0)
+            else:
+                self.play_keyboard()
+
     def toggle_keyboard_pause(self) -> None:
         if self.state.keyboard_playing:
             player = self.player
@@ -264,10 +404,11 @@ class AppController:
                 if current_position is not None:
                     position = current_position
                 self._next_playback_id()
-                self.ignore_player_position_until = time.perf_counter() + 0.8
                 player.stop()
                 player.wait_until_stopped(timeout=2.0)
             self.player = None
+            self._cancel_rhythm_scoring_pending()
+            self._clear_active_output_notes()
             self.state.current_mode = "keys_paused"
             self.state.position = max(0.0, min(self.state.duration, position))
             self.state.status = "paused"
@@ -275,15 +416,87 @@ class AppController:
         elif self.state.keyboard_paused:
             position = self.state.position
             self.state.current_mode = None
-            self.play_keyboard(start_time=position, countdown=False)
+            self.play_keyboard(
+                start_time=position,
+                countdown=False,
+                reset_rhythm_score=False,
+            )
 
     def toggle_sound_playback(self) -> None:
-        if self.state.sound_playing:
+        if self.state.sound_playing or self.state.sound_paused:
             self.stop_playback()
         elif self._midi_sound_can_start():
             self.play_sound()
 
-    def play_keyboard(self, *, start_time: float | None = None, countdown: bool = True) -> None:
+    def toggle_sound_pause(self) -> None:
+        if self.state.sound_playing:
+            self.pause_sound()
+        elif self.state.sound_paused:
+            self.resume_sound()
+        elif self._midi_sound_can_start():
+            self.play_sound()
+
+    def pause_sound(self) -> None:
+        if not self.state.sound_playing:
+            return
+        player = self.sound_player
+        position = self.state.position
+        if player:
+            current_position = player.current_position()
+            if current_position is not None:
+                position = current_position
+            self._next_playback_id()
+            self._next_position_generation()
+            player.stop()
+            player.wait_until_stopped(timeout=2.0)
+        self.sound_player = None
+        self._cancel_rhythm_scoring_pending()
+        self._clear_active_output_notes("sound")
+        self.state.current_mode = "sound_paused"
+        self.state.position = max(0.0, min(self.state.duration, position))
+        self.state.status = "sound paused"
+        self._notify()
+
+    def resume_sound(self) -> None:
+        if not self.state.sound_paused:
+            return
+        position = self.state.position
+        self.state.current_mode = None
+        self.play_sound(
+            start_time=position,
+            reset_rhythm_score=False,
+        )
+
+    def select_previous_midi(self) -> None:
+        self._select_adjacent_midi(-1)
+
+    def select_next_midi(self) -> None:
+        self._select_adjacent_midi(1)
+
+    def _select_adjacent_midi(self, offset: int) -> None:
+        target = self.state.selected_midi_index + int(offset)
+        if not 0 <= target < len(self.midi_files):
+            return
+        self.select_midi(target)
+
+    def cycle_sound_playback_mode(self) -> None:
+        current = normalize_sound_playback_mode(
+            self.state.sound_playback_mode
+        )
+        current_index = SOUND_PLAYBACK_MODES.index(current)
+        self.state.sound_playback_mode = SOUND_PLAYBACK_MODES[
+            (current_index + 1) % len(SOUND_PLAYBACK_MODES)
+        ]
+        self.request_save()
+        self._notify()
+
+    def play_keyboard(
+        self,
+        *,
+        start_time: float | None = None,
+        countdown: bool = True,
+        reset_rhythm_score: bool = True,
+    ) -> None:
         if self.state.current_mode is not None or self.state.midi_input_running:
             return
         if not self.events:
@@ -297,11 +510,14 @@ class AppController:
         output = KeyboardOutput(dry_run=self.state.dry_run)
         self.player = MidiKeyboardPlayer(
             output=output,
-            log=lambda message: self.worker_queue.put(("log", message)),
-            on_state=lambda status, pid=playback_id: self.worker_queue.put(("key_state", pid, status)),
-            on_position=lambda value, pid=playback_id: self.worker_queue.put(("position", pid, value)),
-            on_optimization_progress=lambda progress, pid=playback_id: self.worker_queue.put(
+            log=lambda message: self._queue_worker_message(("log", message)),
+            on_state=lambda status, pid=playback_id: self._queue_worker_message(("key_state", pid, status)),
+            on_position=lambda value, pid=playback_id: self._queue_position_message(pid, value),
+            on_optimization_progress=lambda progress, pid=playback_id: self._queue_worker_message(
                 ("optimization", pid, progress)
+            ),
+            on_output_note=lambda note, pressed, pid=playback_id: self._queue_worker_message(
+                ("key_output_note", pid, note, pressed)
             ),
             enabled_channels=self.enabled_channels,
             enabled_sources=self.enabled_sources,
@@ -311,11 +527,19 @@ class AppController:
             humanize_timing=self.state.humanize_timing,
             chord_optimization=self.state.chord_optimization,
             chord_strum=self.state.chord_strum,
+            auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
             playback_speed_percent=self.state.playback_speed_percent,
             key_bindings=self.current_key_bindings(),
+            sustain_key=self.state.sustain_key,
+            octave_down_key=self.state.octave_down_key,
+            octave_up_key=self.state.octave_up_key,
         )
         try:
+            if reset_rhythm_score:
+                self._reset_rhythm_score()
+            self._clear_active_output_notes()
+            self.state.input_conversion_mode = INPUT_CONVERSION_MIDI_FILE
             self.state.current_mode = "keys"
             mode = self.text("dry_run_mode") if self.state.dry_run else self.text("real_keyboard_output")
             self._log(self.text("key_playback_started").format(mode=mode))
@@ -332,7 +556,12 @@ class AppController:
             self._notify()
             self._message("warning", "already_playing_title", str(exc))
 
-    def play_sound(self) -> None:
+    def play_sound(
+        self,
+        *,
+        start_time: float | None = None,
+        reset_rhythm_score: bool = True,
+    ) -> None:
         if not self._midi_sound_can_start():
             return
         if self.summary is None:
@@ -341,41 +570,58 @@ class AppController:
         if not self._has_enabled_events():
             self._message("info", "no_events_title", self.text("no_events_enabled"))
             return
-        self._suspend_realtime_sound_for_midi_playback()
         playback_id = self._next_playback_id()
         self.sound_player = MidiSoundPlayer(
-            log=lambda message: self.worker_queue.put(("log", message)),
-            on_state=lambda status, pid=playback_id: self.worker_queue.put(("sound_state", pid, status)),
-            on_position=lambda value, pid=playback_id: self.worker_queue.put(("position", pid, value)),
-            on_optimization_progress=lambda progress, pid=playback_id: self.worker_queue.put(
+            log=lambda message: self._queue_worker_message(("log", message)),
+            on_state=lambda status, pid=playback_id: self._queue_worker_message(("sound_state", pid, status)),
+            on_position=lambda value, pid=playback_id: self._queue_position_message(pid, value),
+            on_optimization_progress=lambda progress, pid=playback_id: self._queue_worker_message(
                 ("optimization", pid, progress)
+            ),
+            on_output_note=lambda note, pressed, pid=playback_id: self._queue_worker_message(
+                ("sound_output_note", pid, note, pressed, time.monotonic())
+            ),
+            on_output_remap=lambda note, pressed, pid=playback_id: self._queue_worker_message(
+                ("sound_output_remap", pid, note, pressed)
             ),
             enabled_channels=self.enabled_channels,
             enabled_sources=self.enabled_sources,
             volume=self.state.midi_sound_volume,
+            sound_source=self.state.sound_source,
+            on_audio_runtime_changed=lambda qt_frames, buffer_frames, reason: self._queue_worker_message(
+                ("audio_runtime", qt_frames, buffer_frames, reason)
+            ),
             auto_fit_note_range=self.state.auto_fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
             chord_optimization=self.state.chord_optimization,
             chord_strum=self.state.chord_strum,
+            auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
             playback_speed_percent=self.state.playback_speed_percent,
         )
         try:
+            if reset_rhythm_score:
+                self._reset_rhythm_score()
+            self._clear_active_output_notes("sound")
             self.state.current_mode = "sound"
             self._notify()
-            self.sound_player.play(self.events, start_time=self._play_start_position())
+            position = (
+                self._play_start_position()
+                if start_time is None
+                else max(0.0, min(self.state.duration, start_time))
+            )
+            self.sound_player.play(self.events, start_time=position)
         except RuntimeError as exc:
             self.sound_player = None
             self.state.current_mode = None
-            self._restore_realtime_sound_after_midi_playback()
             self._notify()
             self._message("warning", "already_playing_title", str(exc))
 
     def stop_playback(self) -> None:
         self._next_playback_id()
-        self.ignore_player_position_until = time.perf_counter() + 1.0
+        self._next_position_generation()
         player = self.player
         sound_player = self.sound_player
         stopped_mode = self.state.current_mode
@@ -388,12 +634,16 @@ class AppController:
         self.player = None
         self.sound_player = None
         self.state.current_mode = None
+        self._cancel_rhythm_scoring_pending()
+        if stopped_mode in {"keys", "keys_paused"}:
+            self._clear_active_output_notes()
+        elif stopped_mode in {"sound", "sound_paused"}:
+            self._clear_active_output_notes("sound")
         self.seeking_keys = False
         self.state.position = 0.0
-        if stopped_mode == "sound":
+        if stopped_mode in {"sound", "sound_paused"}:
             self.state.status = "sound stopped"
             self._log(self.text("sound_playback_stopped"))
-            self._restore_realtime_sound_after_midi_playback()
         elif stopped_mode in {"keys", "keys_paused"}:
             self.state.status = "stopped"
         self._notify()
@@ -411,47 +661,68 @@ class AppController:
         if device_id is None:
             self._message("info", "no_midi_title", self.text("no_midi_input_devices"))
             return
+        input_id = self._next_midi_input_id()
         self._close_realtime_sound_output()
         output = KeyboardOutput(dry_run=self.state.dry_run)
         self.realtime_sound_output = RealtimeMidiSoundOutput(
             volume=self.state.midi_sound_volume,
-            log=lambda message: self.worker_queue.put(("log", message)),
+            sound_source=self.state.sound_source,
+            on_audio_runtime_changed=lambda qt_frames, buffer_frames, reason: self._queue_worker_message(
+                ("audio_runtime", qt_frames, buffer_frames, reason)
+            ),
+            log=lambda message: self._queue_worker_message(("log", message)),
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
+            auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
         )
         self.realtime_sound_output.set_enabled(self.state.dry_run)
         bridge = MidiInputKeyboardBridge(
             device_id=device_id,
             output=output,
-            log=lambda message: self.worker_queue.put(("log", message)),
-            on_state=lambda status: self.worker_queue.put(("midi_input_state", status)),
+            log=lambda message: self._queue_worker_message(("log", message)),
+            on_state=lambda status: self._queue_worker_message(("midi_input_state", status)),
             on_midi_message=self.realtime_sound_output.process_message,
+            on_output_note=lambda note, pressed, iid=input_id: self._queue_worker_message(
+                ("midi_output_note", iid, note, pressed, time.monotonic())
+            ),
             auto_fit_note_range=self.state.auto_fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
+            auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
+            sustain_key=self.state.sustain_key,
+            octave_down_key=self.state.octave_down_key,
+            octave_up_key=self.state.octave_up_key,
             key_bindings=self.current_key_bindings(),
         )
         try:
             bridge.start()
         except Exception as exc:
             bridge.stop()
+            self._next_midi_input_id()
             self._close_realtime_sound_output()
             self._message("warning", "load_failed_title", str(exc))
             return
         self.midi_input_bridge = bridge
+        self.state.input_conversion_mode = INPUT_CONVERSION_REALTIME
         self.state.midi_input_running = True
+        if self.state.sound_playing:
+            self._reset_rhythm_score()
+        self._clear_active_output_notes("midi")
         self.request_save()
         self._notify()
 
     def stop_midi_input(self) -> None:
+        self._next_midi_input_id()
         bridge = self.midi_input_bridge
         self.midi_input_bridge = None
         if bridge:
             bridge.stop()
         self._close_realtime_sound_output()
         self.state.midi_input_running = False
+        self._cancel_rhythm_scoring_pending()
+        self._clear_active_output_notes("midi")
         self._notify()
 
     def refresh_midi_input_devices(self, *, notify: bool = True) -> None:
@@ -478,6 +749,7 @@ class AppController:
             "humanize_timing",
             "chord_optimization",
             "chord_strum",
+            "auto_sustain",
             "repeat_prevention",
             "shortcut_locked",
             "always_on_top",
@@ -492,6 +764,8 @@ class AppController:
             self.state.playback_speed_percent = self._clamp_int(
                 value, MIN_PLAYBACK_SPEED_PERCENT, MAX_PLAYBACK_SPEED_PERCENT, 100
             )
+        elif name == "sound_playback_mode":
+            self.state.sound_playback_mode = normalize_sound_playback_mode(value)
         elif name == "transpose_semitones":
             self.state.transpose_semitones = self._clamp_int(
                 value, MIN_TRANSPOSE_SEMITONES, MAX_TRANSPOSE_SEMITONES, 0
@@ -508,8 +782,12 @@ class AppController:
                 self.state.status = self.text("waiting")
         elif name == "color_theme":
             self.state.color_theme = normalize_color_theme(value)
+        elif name == "sound_source":
+            self.state.sound_source = normalize_sound_source(value)
         elif name == "midi_input_device":
             self.state.midi_input_device = str(value)
+        elif name == "input_conversion_mode":
+            self.state.input_conversion_mode = normalize_input_conversion_mode(value)
         elif name == "keyboard_play_shortcut":
             self.state.keyboard_play_shortcut = (
                 str(value).strip() or DEFAULT_KEYBOARD_PLAY_SHORTCUT
@@ -537,6 +815,14 @@ class AppController:
         self.state.section_visibility[section] = bool(visible)
         self._notify()
 
+    def set_panel_order(self, panel_order: object) -> None:
+        normalized = normalize_panel_order(panel_order)
+        if normalized == self.state.panel_order:
+            return
+        self.state.panel_order = normalized
+        self.request_save()
+        self._notify()
+
     def set_window_geometry(self, width: int, height: int) -> None:
         self.state.window_width = max(1, int(width))
         self.state.window_height = max(1, int(height))
@@ -550,8 +836,57 @@ class AppController:
     def reset_key_bindings(self) -> None:
         self._apply_key_bindings(DEFAULT_KEY_BINDINGS)
 
+    def current_special_key_bindings(self) -> dict[str, str]:
+        return {
+            "sustain": self.state.sustain_key,
+            "octave_down": self.state.octave_down_key,
+            "octave_up": self.state.octave_up_key,
+        }
+
+    def set_special_key_binding(self, name: str, key: str) -> None:
+        defaults = {
+            "sustain": SUSTAIN_KEY,
+            "octave_down": OCTAVE_DOWN_KEY,
+            "octave_up": OCTAVE_UP_KEY,
+        }
+        if name not in defaults:
+            raise ValueError(f"Unsupported special binding: {name}")
+        setattr(
+            self.state,
+            f"{name}_key",
+            normalize_special_binding(key, defaults[name]),
+        )
+        self._apply_live_option("special_key_bindings")
+        self.request_save()
+        self._notify()
+
+    def reset_special_key_bindings(self) -> None:
+        for name, key in (
+            ("sustain", SUSTAIN_KEY),
+            ("octave_down", OCTAVE_DOWN_KEY),
+            ("octave_up", OCTAVE_UP_KEY),
+        ):
+            setattr(self.state, f"{name}_key", key)
+        self._apply_live_option("special_key_bindings")
+        self.request_save()
+        self._notify()
+
     def current_key_bindings(self) -> dict[int, str]:
         return normalized_key_bindings(self.key_bindings)
+
+    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
+        if self.state.sound_playing and self.sound_player:
+            return self.sound_player.current_chord_optimization_plan()
+        if (self.state.keyboard_playing or self.state.keyboard_paused) and self.player:
+            return self.player.current_chord_optimization_plan()
+        return None
+
+    def piano_roll_playback_running(self) -> bool:
+        if self.state.sound_playing and self.sound_player:
+            return self.sound_player.current_position() is not None
+        if self.state.keyboard_playing and self.player:
+            return self.player.current_position() is not None
+        return False
 
     def toggle_track_channel(self, track: int, channel: int) -> None:
         source = (track, channel)
@@ -570,12 +905,26 @@ class AppController:
         self._apply_track_channel_change()
         self._notify()
 
-    def enable_all_track_channels(self) -> None:
-        sources = [(item.track, item.channel) for item in self.state.track_channels]
-        if not sources:
+    def toggle_track(self, track: int) -> None:
+        track_sources = {
+            (item.track, item.channel)
+            for item in self.state.track_channels
+            if item.track == track
+        }
+        if not track_sources:
             return
-        self._set_enabled_sources(sources)
-        self.state.track_channels = [replace(item, enabled=True) for item in self.state.track_channels]
+        with self._source_lock:
+            enabled = set(self.enabled_sources_snapshot)
+            if track_sources.issubset(enabled):
+                enabled.difference_update(track_sources)
+            else:
+                enabled.update(track_sources)
+            self.enabled_sources_snapshot = frozenset(enabled)
+            self.enabled_channels_snapshot = frozenset(item[1] for item in enabled)
+        self.state.track_channels = [
+            replace(item, enabled=(item.track, item.channel) in self.enabled_sources_snapshot)
+            for item in self.state.track_channels
+        ]
         self._apply_track_channel_change()
         self._notify()
 
@@ -597,9 +946,10 @@ class AppController:
 
     def seek(self, position: float) -> None:
         value = max(0.0, min(self.state.duration, float(position)))
+        self._next_position_generation()
         self.state.position = value
-        self.ignore_player_position_until = time.perf_counter() + 0.8
         if self.state.sound_playing and self.sound_player and self.sound_player.is_playing:
+            self._reset_rhythm_score()
             self.sound_player.seek(value)
         elif self.state.keyboard_playing and self.player and self.player.is_playing:
             old_player = self.player
@@ -616,74 +966,224 @@ class AppController:
                 self.seeking_keys = False
         self._notify()
 
-    def poll(self) -> None:
-        self._drain_metadata_queue()
-        changed = False
-        while True:
-            try:
-                message = self.worker_queue.get_nowait()
-            except queue.Empty:
-                break
-            kind = str(message[0])
-            if kind == "log":
-                self._log(str(message[1]))
-                continue
-            if kind == "hotkey":
-                if message[1] == "play":
-                    self.toggle_keyboard_playback()
-                elif message[1] == "pause_resume":
-                    self.toggle_keyboard_pause()
-                elif message[1] == "stop" and (
-                    self.state.keyboard_playing or self.state.keyboard_paused
-                ):
-                    self.stop_playback()
-                continue
-            if kind in {"key_state", "sound_state", "position", "optimization"}:
-                if int(message[1]) != self.playback_id:
+    def process_pending_events(self) -> None:
+        try:
+            changed = self._drain_metadata_queue()
+            released_output_notes: set[int] = set()
+            completed_sound_mode: str | None = None
+            while True:
+                try:
+                    message = self.worker_queue.get_nowait()
+                except queue.Empty:
+                    break
+                kind = str(message[0])
+                if kind == "log":
+                    self._log(str(message[1]))
                     continue
-            if kind == "key_state":
-                status = str(message[2])
-                self.state.status = status
-                if status == "stopped" and not self.seeking_keys and self.state.keyboard_playing:
-                    self.state.current_mode = None
-                changed = True
-            elif kind == "sound_state":
-                status = str(message[2])
-                self.state.status = status
-                if status in {"sound ended", "sound stopped"} and self.state.sound_playing:
-                    if status == "sound ended":
-                        self.state.position = self.state.duration
-                    self.state.current_mode = None
-                    self._restore_realtime_sound_after_midi_playback()
-                changed = True
-            elif kind == "midi_input_state":
-                status = str(message[1])
-                self.state.status = status
-                if status == "midi input failed":
-                    self.stop_midi_input()
-                changed = True
-            elif kind == "position":
-                if time.perf_counter() >= self.ignore_player_position_until:
-                    self.state.position = max(0.0, min(self.state.duration, float(message[2])))
+                if kind == "audio_runtime":
+                    qt_frames = normalize_qt_audio_frames(message[1])
+                    buffer_frames = normalize_audio_buffer_frames(message[2])
+                    if (
+                        qt_frames != self.state.audio_qt_frames
+                        or buffer_frames != self.state.audio_buffer_frames
+                    ):
+                        self.state.audio_qt_frames = qt_frames
+                        self.state.audio_buffer_frames = buffer_frames
+                        reason = str(message[3])
+                        if reason:
+                            self._log(reason)
+                        changed = True
+                    continue
+                if kind == "hotkey":
+                    if message[1] == "play":
+                        self.toggle_keyboard_playback()
+                    elif message[1] == "pause_resume":
+                        self.toggle_keyboard_pause()
+                    elif message[1] == "stop" and (
+                        self.state.keyboard_playing or self.state.keyboard_paused
+                    ):
+                        self.stop_playback()
+                    continue
+                if kind in {
+                    "key_state",
+                    "sound_state",
+                    "position",
+                    "optimization",
+                    "key_output_note",
+                    "sound_output_note",
+                    "sound_output_remap",
+                }:
+                    if int(message[1]) != self.playback_id:
+                        continue
+                if kind == "midi_output_note" and int(message[1]) != self.midi_input_id:
+                    continue
+                if kind == "key_state":
+                    status = str(message[2])
+                    self.state.status = status
+                    if status == "stopped" and not self.seeking_keys and self.state.keyboard_playing:
+                        self.state.current_mode = None
+                        self._cancel_rhythm_scoring_pending()
+                        self._clear_active_output_notes()
                     changed = True
-            elif kind == "optimization":
-                progress = message[2]
-                if progress is None:
-                    self.state.status = "playing" if self.state.keyboard_playing else "sound playing"
-                else:
-                    percent = self._clamp_int(progress, 0, 100, 0)
-                    self.state.status = self.text("optimization_progress").format(percent=percent)
-                changed = True
-        if changed:
-            self._notify()
-        if self.save_due_at is not None and time.monotonic() >= self.save_due_at:
-            self.flush_settings()
+                elif kind == "sound_state":
+                    status = str(message[2])
+                    self.state.status = status
+                    if status in {"sound ended", "sound stopped"} and self.state.sound_playing:
+                        if status == "sound ended":
+                            self.state.position = self.state.duration
+                            completed_sound_mode = normalize_sound_playback_mode(
+                                self.state.sound_playback_mode
+                            )
+                        self.state.current_mode = None
+                        self._cancel_rhythm_scoring_pending()
+                        self._clear_active_output_notes("sound")
+                    changed = True
+                elif kind == "midi_input_state":
+                    status = str(message[1])
+                    self.state.status = status
+                    if status == "midi input failed":
+                        self.stop_midi_input()
+                    changed = True
+                elif kind == "position":
+                    if int(message[2]) != self.position_generation:
+                        continue
+                    self.state.position = max(
+                        0.0,
+                        min(self.state.duration, float(message[3])),
+                    )
+                    changed = True
+                elif kind == "optimization":
+                    progress = message[2]
+                    if progress is None:
+                        self.state.status = "playing" if self.state.keyboard_playing else "sound playing"
+                    else:
+                        percent = self._clamp_int(progress, 0, 100, 0)
+                        self.state.status = self.text("optimization_progress").format(percent=percent)
+                    changed = True
+                elif kind in {
+                    "key_output_note",
+                    "sound_output_note",
+                    "sound_output_remap",
+                    "midi_output_note",
+                }:
+                    source_kind = {
+                        "key_output_note": "key",
+                        "sound_output_note": "sound",
+                        "sound_output_remap": "sound",
+                        "midi_output_note": "midi",
+                    }[kind]
+                    note = int(message[2])
+                    pressed = bool(message[3])
+                    event_at = (
+                        float(message[4])
+                        if len(message) >= 5
+                        else time.monotonic()
+                    )
+                    rhythm_hit: RhythmHit | None = None
+                    released = not pressed
+                    if kind == "key_output_note" and self.state.keyboard_playing:
+                        rhythm_hit = (
+                            self._rhythm_scorer.record_automatic_perfect(
+                                note,
+                                released=released,
+                                timestamp=event_at,
+                            )
+                        )
+                    elif (
+                        kind == "sound_output_note"
+                        and self.state.sound_playing
+                    ):
+                        if self.state.midi_input_running:
+                            rhythm_hit = self._rhythm_scorer.record_expected(
+                                note,
+                                event_at,
+                                released=released,
+                            )
+                        elif self.state.sound_playing:
+                            rhythm_hit = (
+                                self._rhythm_scorer.record_automatic_perfect(
+                                    note,
+                                    released=released,
+                                    timestamp=event_at,
+                                )
+                            )
+                    elif (
+                        source_kind == "midi"
+                        and self._rhythm_scoring_is_active()
+                    ):
+                        rhythm_hit = self._rhythm_scorer.record_input(
+                            note,
+                            event_at,
+                            released=released,
+                        )
+                    if rhythm_hit is not None:
+                        changed = (
+                            self._record_rhythm_hit_event(rhythm_hit)
+                            or changed
+                        )
+                    if (
+                        rhythm_hit is not None
+                        or self._rhythm_scoring_is_active()
+                    ):
+                        changed = (
+                            self._sync_rhythm_score_state()
+                            or changed
+                        )
+                    changed = self._set_output_note_state(
+                        (source_kind, int(message[1])),
+                        note,
+                        pressed,
+                        retrigger=pressed and note in released_output_notes,
+                    ) or changed
+                    if pressed:
+                        released_output_notes.discard(note)
+                    else:
+                        released_output_notes.add(note)
+            if completed_sound_mode is not None:
+                changed = (
+                    self._continue_sound_after_end(completed_sound_mode)
+                    or changed
+                )
+            if self._rhythm_scoring_is_active():
+                self._rhythm_scorer.expire(time.monotonic())
+                changed = self._sync_rhythm_score_state() or changed
+            changed = self._record_pending_rhythm_miss_events() or changed
+            self._schedule_rhythm_score_update()
+            changed = self._expire_output_note_releases() or changed
+            if changed:
+                self._notify()
+        finally:
+            self._complete_event_dispatch()
+
+    def _continue_sound_after_end(self, mode: str) -> bool:
+        previous_player = self.sound_player
+        if previous_player:
+            previous_player.wait_until_stopped(timeout=0.5)
+        self.sound_player = None
+        if mode == SOUND_PLAYBACK_MODE_OFF:
+            return False
+        if mode == SOUND_PLAYBACK_MODE_REPEAT_ONE:
+            self.state.position = 0.0
+            self.play_sound(start_time=0.0)
+            return self.state.sound_playing
+        if mode != SOUND_PLAYBACK_MODE_CONTINUOUS or not self.midi_files:
+            return False
+        current_index = self.state.selected_midi_index
+        next_index = (
+            current_index + 1
+            if 0 <= current_index < len(self.midi_files) - 1
+            else 0
+        )
+        self.select_midi(next_index)
+        if self.state.selected_midi_index != next_index:
+            return False
+        self.play_sound(start_time=0.0)
+        return self.state.sound_playing
 
     def request_save(self) -> None:
-        self.save_due_at = time.monotonic() + 0.3
+        self.view.schedule_settings_save(300)
 
     def flush_settings(self) -> None:
-        self.save_due_at = None
         try:
             save_settings(self.current_settings())
         except Exception as exc:
@@ -692,7 +1192,7 @@ class AppController:
                 self._log(message)
             self.settings_save_error = message
             if not self.exiting:
-                self.save_due_at = time.monotonic() + 2.0
+                self.view.schedule_settings_save(2000)
         else:
             self.settings_save_error = ""
 
@@ -700,6 +1200,7 @@ class AppController:
         return AppSettings(
             countdown_seconds=self.state.countdown_seconds,
             midi_sound_volume=self.state.midi_sound_volume,
+            sound_source=self.state.sound_source,
             dry_run=self.state.dry_run,
             countdown_sound=self.state.countdown_sound,
             game_countdown_sound=self.state.game_countdown_sound,
@@ -709,8 +1210,10 @@ class AppController:
             humanize_timing=self.state.humanize_timing,
             chord_optimization=self.state.chord_optimization,
             chord_strum=self.state.chord_strum,
+            auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
             playback_speed_percent=self.state.playback_speed_percent,
+            sound_playback_mode=self.state.sound_playback_mode,
             language=self.state.language,
             color_theme=self.state.color_theme,
             always_on_top=self.state.always_on_top,
@@ -725,13 +1228,19 @@ class AppController:
             keyboard_stop_shortcut=self.state.keyboard_stop_shortcut,
             shortcut_locked=self.state.shortcut_locked,
             midi_input_device=self.state.midi_input_device,
+            input_conversion_mode=self.state.input_conversion_mode,
             key_bindings=self.current_key_bindings(),
+            sustain_key=self.state.sustain_key,
+            octave_down_key=self.state.octave_down_key,
+            octave_up_key=self.state.octave_up_key,
+            panel_order=normalize_panel_order(self.state.panel_order),
         )
 
     def shutdown(self) -> None:
         if self.exiting:
             return
         self.exiting = True
+        self.set_event_notifier(None)
         self.metadata_cancel.set()
         self._unbind_global_hotkeys()
         self.stop_midi_input()
@@ -739,11 +1248,22 @@ class AppController:
         self.flush_settings()
 
     def _apply_live_option(self, name: str) -> None:
-        if name == "midi_sound_volume":
+        if name == "dry_run":
+            if self.player:
+                self.player.set_dry_run(self.state.dry_run)
+            if self.midi_input_bridge:
+                self.midi_input_bridge.set_dry_run(self.state.dry_run)
+            if self.realtime_sound_output:
+                self.realtime_sound_output.set_enabled(self.state.dry_run)
+        elif name == "midi_sound_volume":
             if self.sound_player:
                 self.sound_player.set_volume(self.state.midi_sound_volume)
             if self.realtime_sound_output:
                 self.realtime_sound_output.set_volume(self.state.midi_sound_volume)
+        elif name == "sound_source":
+            for target in (self.sound_player, self.realtime_sound_output):
+                if target:
+                    target.set_sound_source(self.state.sound_source)
         elif name == "playback_speed_percent":
             if self.player:
                 self.player.set_playback_speed(self.state.playback_speed_percent)
@@ -764,6 +1284,23 @@ class AppController:
                 self.player.set_chord_strum(self.state.chord_strum)
             if self.sound_player:
                 self.sound_player.set_chord_strum(self.state.chord_strum)
+        elif name == "auto_sustain":
+            for target in (
+                self.player,
+                self.sound_player,
+                self.midi_input_bridge,
+                self.realtime_sound_output,
+            ):
+                if target:
+                    target.set_auto_sustain(self.state.auto_sustain)
+        elif name == "special_key_bindings":
+            for target in (self.player, self.midi_input_bridge):
+                if target:
+                    target.set_special_key_bindings(
+                        self.state.sustain_key,
+                        self.state.octave_down_key,
+                        self.state.octave_up_key,
+                    )
         elif name == "repeat_prevention":
             for target in (self.player, self.sound_player, self.midi_input_bridge, self.realtime_sound_output):
                 if target:
@@ -825,7 +1362,12 @@ class AppController:
         return bool(self.state.sound_playing and self.sound_player and self.sound_player.is_playing)
 
     def _playback_mode_is_active(self) -> bool:
-        return self.state.current_mode in {"keys", "keys_paused", "sound"}
+        return self.state.current_mode in {
+            "keys",
+            "keys_paused",
+            "sound",
+            "sound_paused",
+        }
 
     def _midi_sound_can_start(self) -> bool:
         return self.state.current_mode in (None, "midi_input")
@@ -842,41 +1384,34 @@ class AppController:
         if output:
             output.close()
 
-    def _suspend_realtime_sound_for_midi_playback(self) -> None:
-        if self.realtime_sound_output:
-            self.realtime_sound_output.set_enabled(False)
-
-    def _restore_realtime_sound_after_midi_playback(self) -> None:
-        if self.state.midi_input_running and self.realtime_sound_output:
-            self.realtime_sound_output.set_enabled(self.state.dry_run)
-
     def _countdown_tick_enabled(self) -> bool:
         return self.state.countdown_sound or self.state.game_countdown_sound
 
     def _play_countdown_tick(self, remaining: int) -> None:
-        self.worker_queue.put(("log", f"Countdown: {remaining}"))
+        self._queue_worker_message(("log", f"Countdown: {remaining}"))
         if self.state.countdown_sound:
             try:
                 winsound.Beep(1200 if remaining == 1 else 880, 90)
             except RuntimeError as exc:
-                self.worker_queue.put(("log", f"Countdown sound failed: {exc}"))
+                self._queue_worker_message(("log", f"Countdown sound failed: {exc}"))
         if self.state.game_countdown_sound:
             key = self.current_key_bindings()[48]
             output = KeyboardOutput(dry_run=self.state.dry_run)
             threading.Thread(
                 target=self._tap_countdown_game_key,
-                args=(output, key),
+                args=(output, key, self.playback_id),
                 daemon=True,
             ).start()
-            self.worker_queue.put(("log", f"Countdown game key: {key}"))
+            self._queue_worker_message(("log", f"Countdown game key: {key}"))
 
-    @staticmethod
-    def _tap_countdown_game_key(output: KeyboardOutput, key: str) -> None:
+    def _tap_countdown_game_key(self, output: KeyboardOutput, key: str, playback_id: int) -> None:
         output.press(key)
+        self._queue_worker_message(("key_output_note", playback_id, 48, True))
         try:
             time.sleep(GAME_COUNTDOWN_KEY_HOLD_SECONDS)
         finally:
             output.release(key)
+            self._queue_worker_message(("key_output_note", playback_id, 48, False))
 
     def _start_metadata_scan(self, paths: list[Path]) -> None:
         self.metadata_cancel.set()
@@ -895,11 +1430,11 @@ class AppController:
                     duration = self.format_time(summary.duration)
                 except Exception:
                     note_range, duration = "--", "--:--"
-                self.metadata_queue.put((scan_id, path, note_range, duration))
+                self._queue_metadata_result((scan_id, path, note_range, duration))
 
         threading.Thread(target=scan, daemon=True).start()
 
-    def _drain_metadata_queue(self) -> None:
+    def _drain_metadata_queue(self) -> bool:
         changed = False
         while True:
             try:
@@ -910,22 +1445,33 @@ class AppController:
                 continue
             for index, row in enumerate(self.state.midi_rows):
                 if row.path == path:
-                    self.state.midi_rows[index] = replace(row, note_range=note_range, duration=duration)
+                    rows = list(self.state.midi_rows)
+                    rows[index] = replace(
+                        row,
+                        note_range=note_range,
+                        duration=duration,
+                    )
+                    self.state.midi_rows = rows
                     changed = True
                     break
-        if changed:
-            self._notify()
+        return changed
 
     def _update_row_metadata(self, path: Path, summary: MidiSummary | None) -> None:
         if summary is None:
             return
         for index, row in enumerate(self.state.midi_rows):
             if row.path == path:
-                self.state.midi_rows[index] = replace(
+                note_range = self.format_note_range(summary.note_range)
+                duration = self.format_time(summary.duration)
+                if row.note_range == note_range and row.duration == duration:
+                    return
+                rows = list(self.state.midi_rows)
+                rows[index] = replace(
                     row,
-                    note_range=self.format_note_range(summary.note_range),
-                    duration=self.format_time(summary.duration),
+                    note_range=note_range,
+                    duration=duration,
                 )
+                self.state.midi_rows = rows
                 return
 
     def _find_midi_index(self, path: Path) -> int:
@@ -963,7 +1509,10 @@ class AppController:
             errors.append("Start, pause/resume, and end shortcuts must be different")
         else:
             specs.append(stop_spec)
-        manager = GlobalHotkeyManager(specs, lambda action: self.worker_queue.put(("hotkey", action)))
+        manager = GlobalHotkeyManager(
+            specs,
+            lambda action: self._queue_worker_message(("hotkey", action)),
+        )
         manager.start()
         self.global_hotkeys = manager
         failures = errors + [
@@ -988,6 +1537,345 @@ class AppController:
     def _next_playback_id(self) -> int:
         self.playback_id += 1
         return self.playback_id
+
+    def _next_position_generation(self) -> int:
+        self.position_generation += 1
+        return self.position_generation
+
+    def _queue_position_message(self, playback_id: int, position: float) -> None:
+        self._queue_worker_message(
+            (
+                "position",
+                playback_id,
+                self.position_generation,
+                position,
+            )
+        )
+
+    def _next_midi_input_id(self) -> int:
+        self.midi_input_id += 1
+        return self.midi_input_id
+
+    def _rhythm_scoring_is_active(self) -> bool:
+        return self.state.sound_playing and self.state.midi_input_running
+
+    def _reset_rhythm_score(self) -> bool:
+        changed = self._rhythm_scorer.reset()
+        self.view.schedule_rhythm_score_update(None)
+        if self.state.rhythm_hit_events:
+            self.state.rhythm_hit_events = ()
+            changed = True
+        return self._sync_rhythm_score_state() or changed
+
+    def _cancel_rhythm_scoring_pending(self) -> None:
+        self._rhythm_scorer.cancel_pending()
+        self.view.schedule_rhythm_score_update(None)
+
+    def _record_rhythm_hit_event(self, hit: RhythmHit) -> bool:
+        return self._record_rhythm_judgment_event(
+            hit.note,
+            hit.judgment,
+            released=hit.released,
+        )
+
+    def _record_rhythm_judgment_event(
+        self,
+        note: int,
+        judgment: str,
+        *,
+        released: bool = False,
+    ) -> bool:
+        self._rhythm_hit_serial += 1
+        event = (
+            self._rhythm_hit_serial,
+            int(note),
+            str(judgment).upper(),
+            bool(released),
+        )
+        self.state.rhythm_hit_events = (
+            *self.state.rhythm_hit_events,
+            event,
+        )[-RHYTHM_HIT_EVENT_HISTORY_LIMIT:]
+        return True
+
+    def _record_pending_rhythm_miss_events(self) -> bool:
+        missed_events = self._rhythm_scorer.take_missed_events()
+        for note, released in missed_events:
+            self._record_rhythm_judgment_event(
+                note,
+                "MISS",
+                released=released,
+            )
+        return bool(missed_events)
+
+    def _sync_rhythm_score_state(self) -> bool:
+        next_score = self._rhythm_scorer.score
+        next_combo = self._rhythm_scorer.combo
+        next_judgment = self._rhythm_scorer.judgment
+        next_multiplier_tenths = self._rhythm_scorer.multiplier_tenths
+        if (
+            self.state.rhythm_score == next_score
+            and self.state.rhythm_combo == next_combo
+            and self.state.rhythm_judgment == next_judgment
+            and self.state.rhythm_multiplier_tenths == next_multiplier_tenths
+        ):
+            return False
+        self.state.rhythm_score = next_score
+        self.state.rhythm_combo = next_combo
+        self.state.rhythm_judgment = next_judgment
+        self.state.rhythm_multiplier_tenths = next_multiplier_tenths
+        return True
+
+    def _set_output_note_state(
+        self,
+        source: tuple[str, int],
+        note: int,
+        pressed: bool,
+        *,
+        retrigger: bool = False,
+    ) -> bool:
+        if not PIANO_NOTE_MIN <= note <= PIANO_NOTE_MAX:
+            return False
+        now = time.monotonic()
+        active = set(self.state.active_output_notes)
+        source_notes = self._active_output_notes_by_source.setdefault(source, set())
+        realtime_changed = False
+        realtime_was_active = note in self.state.realtime_output_notes
+        if source[0] == "midi" and pressed:
+            self.state.realtime_note_trigger_serial += 1
+            trigger_events = dict(self.state.realtime_note_trigger_events)
+            trigger_events[note] = self.state.realtime_note_trigger_serial
+            self.state.realtime_note_trigger_events = tuple(
+                sorted(trigger_events.items())
+            )
+            realtime_changed = True
+        if pressed:
+            source_notes.add(note)
+            realtime_changed = self._sync_realtime_output_notes() or realtime_changed
+            if source[0] == "midi":
+                realtime_changed = self._set_realtime_visible_note_state(
+                    note,
+                    True,
+                    now,
+                    retrigger=realtime_was_active or retrigger,
+                ) or realtime_changed
+            self._output_note_release_due.pop(note, None)
+            self._output_note_visible_until[note] = now + OUTPUT_NOTE_MIN_VISIBLE_SECONDS
+            was_active = note in active
+            active.add(note)
+            if was_active or retrigger:
+                self.state.output_note_retrigger_serial += 1
+                retrigger_events = dict(self.state.output_note_retrigger_events)
+                retrigger_events[note] = self.state.output_note_retrigger_serial
+                self.state.output_note_retrigger_events = tuple(
+                    sorted(retrigger_events.items())
+                )
+        else:
+            source_notes.discard(note)
+            if not source_notes:
+                self._active_output_notes_by_source.pop(source, None)
+            realtime_changed = self._sync_realtime_output_notes() or realtime_changed
+            if source[0] == "midi":
+                realtime_changed = self._set_realtime_visible_note_state(
+                    note,
+                    False,
+                    now,
+                ) or realtime_changed
+            if any(note in notes for notes in self._active_output_notes_by_source.values()):
+                return realtime_changed
+            if note not in active:
+                self._output_note_visible_until.pop(note, None)
+                self._output_note_release_due.pop(note, None)
+                return realtime_changed
+            visible_until = self._output_note_visible_until.get(note, now)
+            if now < visible_until:
+                self._output_note_release_due[note] = visible_until
+                self._schedule_output_note_release()
+                return realtime_changed
+            active.discard(note)
+            self._output_note_visible_until.pop(note, None)
+            self._output_note_release_due.pop(note, None)
+        self.state.active_output_notes = frozenset(active)
+        return True
+
+    def _set_realtime_visible_note_state(
+        self,
+        note: int,
+        pressed: bool,
+        now: float,
+        *,
+        retrigger: bool = False,
+    ) -> bool:
+        visible = set(self.state.realtime_visible_output_notes)
+        changed = False
+        if pressed:
+            was_visible = note in visible
+            visible.add(note)
+            self._realtime_note_release_due.pop(note, None)
+            self._realtime_note_visible_until[note] = (
+                now + OUTPUT_NOTE_MIN_VISIBLE_SECONDS
+            )
+            if was_visible or retrigger:
+                self.state.realtime_output_retrigger_serial += 1
+                events = dict(self.state.realtime_output_retrigger_events)
+                events[note] = self.state.realtime_output_retrigger_serial
+                self.state.realtime_output_retrigger_events = tuple(
+                    sorted(events.items())
+                )
+                changed = True
+        elif note in self.state.realtime_output_notes:
+            return False
+        elif note not in visible:
+            self._realtime_note_visible_until.pop(note, None)
+            self._realtime_note_release_due.pop(note, None)
+            return False
+        else:
+            visible_until = self._realtime_note_visible_until.get(note, now)
+            if now < visible_until:
+                self._realtime_note_release_due[note] = visible_until
+                self._schedule_output_note_release()
+                return False
+            visible.discard(note)
+            self._realtime_note_visible_until.pop(note, None)
+            self._realtime_note_release_due.pop(note, None)
+        next_notes = frozenset(visible)
+        if self.state.realtime_visible_output_notes != next_notes:
+            self.state.realtime_visible_output_notes = next_notes
+            changed = True
+        return changed
+
+    def _sync_realtime_output_notes(self) -> bool:
+        realtime_sources = [
+            notes
+            for source, notes in self._active_output_notes_by_source.items()
+            if source[0] == "midi"
+        ]
+        next_notes = frozenset().union(*realtime_sources) if realtime_sources else frozenset()
+        if self.state.realtime_output_notes == next_notes:
+            return False
+        self.state.realtime_output_notes = next_notes
+        return True
+
+    def _expire_output_note_releases(self) -> bool:
+        if not self._output_note_release_due and not self._realtime_note_release_due:
+            return False
+        now = time.monotonic()
+        expired_output = [
+            note
+            for note, release_at in self._output_note_release_due.items()
+            if now >= release_at
+        ]
+        expired_realtime = [
+            note
+            for note, release_at in self._realtime_note_release_due.items()
+            if now >= release_at
+        ]
+        if not expired_output and not expired_realtime:
+            self._schedule_output_note_release()
+            return False
+        changed = False
+        active = set(self.state.active_output_notes)
+        for note in expired_output:
+            active.discard(note)
+            self._output_note_release_due.pop(note, None)
+            self._output_note_visible_until.pop(note, None)
+        next_active = frozenset(active)
+        if self.state.active_output_notes != next_active:
+            self.state.active_output_notes = next_active
+            changed = True
+        realtime_visible = set(self.state.realtime_visible_output_notes)
+        for note in expired_realtime:
+            realtime_visible.discard(note)
+            self._realtime_note_release_due.pop(note, None)
+            self._realtime_note_visible_until.pop(note, None)
+        next_realtime_visible = frozenset(realtime_visible)
+        if self.state.realtime_visible_output_notes != next_realtime_visible:
+            self.state.realtime_visible_output_notes = next_realtime_visible
+            changed = True
+        self._schedule_output_note_release()
+        return changed
+
+    def process_output_note_releases(self) -> None:
+        if self._expire_output_note_releases():
+            self._notify()
+
+    def process_rhythm_score_update(self) -> None:
+        changed = self._rhythm_scorer.expire(time.monotonic())
+        changed = self._sync_rhythm_score_state() or changed
+        changed = self._record_pending_rhythm_miss_events() or changed
+        self._schedule_rhythm_score_update()
+        if changed:
+            self._notify()
+
+    def _schedule_rhythm_score_update(self) -> None:
+        delay_ms = self._rhythm_scorer.next_update_delay_ms(time.monotonic())
+        self.view.schedule_rhythm_score_update(delay_ms)
+
+    def _schedule_output_note_release(self) -> None:
+        release_times = (
+            *self._output_note_release_due.values(),
+            *self._realtime_note_release_due.values(),
+        )
+        if not release_times:
+            return
+        remaining = min(release_times) - time.monotonic()
+        delay_ms = max(1, int(remaining * 1000 + 0.999))
+        self.view.schedule_output_note_release(delay_ms)
+
+    def _clear_active_output_notes(self, source_kind: str | None = None) -> bool:
+        had_retrigger = bool(self.state.output_note_retrigger_events)
+        self.state.output_note_retrigger_events = ()
+        had_realtime_events = bool(self.state.realtime_note_trigger_events)
+        had_realtime_retrigger = (
+            bool(self.state.realtime_output_retrigger_events)
+            if source_kind is None or source_kind == "midi"
+            else False
+        )
+        if source_kind is None or source_kind == "midi":
+            self.state.realtime_note_trigger_events = ()
+            self.state.realtime_output_retrigger_events = ()
+        if source_kind is None:
+            self._active_output_notes_by_source.clear()
+            remaining: set[int] = set()
+        else:
+            for source in [
+                item for item in self._active_output_notes_by_source if item[0] == source_kind
+            ]:
+                self._active_output_notes_by_source.pop(source, None)
+            remaining = (
+                set().union(*self._active_output_notes_by_source.values())
+                if self._active_output_notes_by_source
+                else set()
+            )
+        realtime_changed = self._sync_realtime_output_notes()
+        if source_kind is None or source_kind == "midi":
+            realtime_changed = (
+                bool(self.state.realtime_visible_output_notes)
+                or realtime_changed
+            )
+            self.state.realtime_visible_output_notes = frozenset()
+            self._realtime_note_visible_until.clear()
+            self._realtime_note_release_due.clear()
+        self._output_note_visible_until = {
+            note: visible_until
+            for note, visible_until in self._output_note_visible_until.items()
+            if note in remaining
+        }
+        self._output_note_release_due = {
+            note: release_at
+            for note, release_at in self._output_note_release_due.items()
+            if note in remaining
+        }
+        next_notes = frozenset(remaining)
+        if self.state.active_output_notes == next_notes:
+            return (
+                had_retrigger
+                or had_realtime_events
+                or had_realtime_retrigger
+                or realtime_changed
+            )
+        self.state.active_output_notes = next_notes
+        return True
 
     def _notify(self) -> None:
         self.view.render(self.state)

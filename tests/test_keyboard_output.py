@@ -8,6 +8,35 @@ from keyboard_output import KeyboardOutput, TAP_GAP_SECONDS, TAP_HOLD_SECONDS
 
 
 class KeyboardOutputTests(unittest.TestCase):
+    def test_dry_run_change_releases_current_mode_before_switching(self) -> None:
+        class RecordingKeyboardOutput(KeyboardOutput):
+            def __init__(self):
+                super().__init__(dry_run=False)
+                self.sent: list[tuple[int, bool]] = []
+
+            def _send_scancode(self, scancode: int, key_up: bool) -> None:
+                if not self.dry_run:
+                    self.sent.append((scancode, key_up))
+
+        output = RecordingKeyboardOutput()
+
+        with patch("keyboard_output.time.sleep"):
+            output.press("a")
+            output.set_dry_run(True)
+            output.press("b")
+            output.set_dry_run(False)
+            output.press("c")
+
+        self.assertEqual(
+            output.sent,
+            [
+                (0x1E, False),
+                (0x1E, True),
+                (0x2E, False),
+            ],
+        )
+        self.assertEqual(output._pressed, {"c"})
+
     def test_angle_bracket_keys_are_supported(self) -> None:
         output = KeyboardOutput(dry_run=True)
 

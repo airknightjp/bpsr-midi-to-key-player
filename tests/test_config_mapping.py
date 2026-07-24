@@ -12,6 +12,7 @@ class ConfigMappingTests(unittest.TestCase):
         self.assertIsNotNone(mapping)
         self.assertEqual(mapping.key, "n")
         self.assertEqual(mapping.octave_shift, -1)
+        self.assertEqual(mapping.output_note, 57)
 
     def test_high_octave_targets_up_shift(self) -> None:
         mapping = midi_note_to_key(84)
@@ -19,6 +20,7 @@ class ConfigMappingTests(unittest.TestCase):
         self.assertIsNotNone(mapping)
         self.assertEqual(mapping.key, "z")
         self.assertEqual(mapping.octave_shift, 1)
+        self.assertEqual(mapping.output_note, 48)
 
     def test_c8_is_supported_in_high_octave(self) -> None:
         mapping = midi_note_to_key(108)
@@ -33,6 +35,7 @@ class ConfigMappingTests(unittest.TestCase):
         self.assertIsNotNone(mapping)
         self.assertEqual(mapping.key, "a")
         self.assertEqual(mapping.octave_shift, 0)
+        self.assertEqual(mapping.output_note, 60)
 
     def test_fit_note_to_base_range_moves_by_octaves(self) -> None:
         self.assertEqual(fit_note_to_base_range(47), 59)

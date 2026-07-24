@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import threading
 from ctypes import wintypes
+from typing import Callable
 
 
 ERROR_ALREADY_EXISTS = 183
 WAIT_OBJECT_0 = 0
+INFINITE = 0xFFFFFFFF
 EVENT_MODIFY_STATE = 0x0002
 SYNCHRONIZE = 0x00100000
 SW_RESTORE = 9
@@ -26,6 +29,8 @@ class SingleInstance:
         self._mutex: int | None = None
         self._kernel32 = None
         self._user32 = None
+        self._activation_stop = threading.Event()
+        self._activation_thread: threading.Thread | None = None
         self.is_primary = True
         if sys.platform != "win32":
             return
@@ -66,6 +71,33 @@ class SingleInstance:
     def bring_existing_window_to_front(self) -> None:
         self._show_existing_window()
 
+    def start_activation_listener(self, callback: Callable[[], None]) -> None:
+        if (
+            self._kernel32 is None
+            or self._event is None
+            or not self.is_primary
+            or self._activation_thread is not None
+        ):
+            return
+        self._activation_stop.clear()
+
+        def listen() -> None:
+            while not self._activation_stop.is_set():
+                result = self._kernel32.WaitForSingleObject(self._event, INFINITE)
+                if self._activation_stop.is_set() or result != WAIT_OBJECT_0:
+                    return
+                try:
+                    callback()
+                except Exception:
+                    return
+
+        self._activation_thread = threading.Thread(
+            target=listen,
+            name="single-instance-activation",
+            daemon=True,
+        )
+        self._activation_thread.start()
+
     def consume_activation_request(self) -> bool:
         if self._kernel32 is None or self._event is None:
             return False
@@ -75,6 +107,13 @@ class SingleInstance:
         )
 
     def close(self) -> None:
+        self._activation_stop.set()
+        if self._kernel32 is not None and self._event is not None:
+            self._kernel32.SetEvent(self._event)
+        thread = self._activation_thread
+        self._activation_thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
         if self._kernel32 is not None:
             for handle_name in ("_mutex", "_event"):
                 handle = getattr(self, handle_name)

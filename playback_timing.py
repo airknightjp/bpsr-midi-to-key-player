@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from auto_sustain import AUTO_SUSTAIN_EVENT_KIND
 from midi_parser import MidiEvent
 
 
@@ -133,7 +134,11 @@ class PlaybackTimeline:
                 0.0,
             )
 
-        jitter = self._group_jitter if humanize_timing else 0.0
+        jitter = (
+            self._group_jitter
+            if humanize_timing and event.kind != AUTO_SUSTAIN_EVENT_KIND
+            else 0.0
+        )
         if chord_strum:
             strum_offset = (
                 scheduled.strum_offset

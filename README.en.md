@@ -8,6 +8,12 @@ BPSR MIDI to KEY Player is a Windows desktop tool that converts MIDI files and U
 
 It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ordinary keyboard keys and sent to the currently focused application. The app also supports MIDI sound playback, track/channel selection, realtime input conversion, note range adjustment, custom key bindings, global shortcuts, themes, and task tray storage.
 
+## Distribution
+
+This application is distributed as an installation-free extracted folder. Extract the entire release ZIP to any location, then launch `BPSR_MIDI_to_KEY_Player.exe` inside the `BPSR_MIDI_to_KEY_Player` folder.
+
+The `_internal` folder contains files required by the application. Do not move the EXE by itself or delete files from the extracted folder.
+
 ## Features
 
 - Load folders containing `.mid` and `.midi` files.
@@ -21,11 +27,12 @@ It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ord
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
-- Configure timing variation, chord spread, and chord reconstruction under Performance Correction.
+- Configure timing variation, chord spread, chord reconstruction, and automatic sustain generation under Performance Correction.
 - Configure rapid-repeat prevention under Common Settings.
 - Display used track/channel combinations under a `TC` header in `11` format.
 - Toggle each track/channel combination, with immediate changes during playback.
 - Convert sustain pedal CC64 to the Space key.
+- Select the software-synth output buffer. The default for new settings is 2048 frames.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Log countdown ticks and in-game countdown key presses.
@@ -79,6 +86,15 @@ When `Chord spread` is also enabled, exactly simultaneous chords lead with the t
 
 `Timing variation` remains a separate small timing variation applied to the chord as a group. Rapid-repeat prevention evaluates the converted physical key after chord reconstruction.
 
+## Automatic Sustain Generation
+
+When `Automatic sustain generation` is enabled, the pedal is depressed after an attack and is released or re-pedalled only where the following harmony requires it.
+
+- Semitone conflicts, low-register overlap, retained-note count, hold duration, and total range are checked to prevent muddy playback.
+- Short staccato notes and percussion on MIDI channel 10 are not pedalled.
+- If source MIDI or realtime input supplies CC64 on a channel, those explicit pedal events take priority.
+- The feature applies to MIDI-file key conversion, MIDI sound playback, realtime input conversion, and realtime preview sound.
+
 ## Key Bindings
 
 Use `Settings > Key Bindings` to change the output keys for the C3-B5 three-octave range.
@@ -91,14 +107,14 @@ Use `Settings > Key Bindings` to change the output keys for the C3-B5 three-octa
 
 ## Usage
 
-1. Launch `BPSR_MIDI_to_KEY_Player.exe`.
+1. Extract the entire release ZIP, then launch `BPSR_MIDI_to_KEY_Player.exe` inside the `BPSR_MIDI_to_KEY_Player` folder.
 2. Select `File > Select MIDI Folder` and choose a folder containing MIDI files.
 3. Select a MIDI file from the MIDI list.
 4. Double-click a MIDI file if you only want to play its MIDI sound.
 5. Use `MIDI Input Conversion > Start Playback` to play the selected MIDI as keyboard input.
 6. Use `Realtime Input Conversion > Start Listening` to convert a USB MIDI keyboard in realtime.
 7. During countdown, focus the target application that should receive keyboard input.
-8. Enable `Test mode (log only)` when you want to check the conversion log without sending real keys.
+8. Enable `Test mode (sound/log only)` when you want to check conversion sound and logs without sending real keys.
 
 Keyboard output is sent to whichever application is focused at that moment.
 
@@ -117,10 +133,10 @@ The app uses the Windows `SendInput` API for keyboard output. If the target appl
 
 ## Settings File
 
-Settings are saved under the current Windows user profile:
+Settings are saved in the extracted application folder:
 
 ```text
-%APPDATA%\BPSR_MIDI_to_KEY_Player\settings.json
+BPSR_MIDI_to_KEY_Player\settings.json
 ```
 
 Settings are saved atomically to reduce the chance of broken settings after an interrupted write.
