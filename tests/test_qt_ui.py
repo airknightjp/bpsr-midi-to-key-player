@@ -1754,6 +1754,30 @@ class QtUiTests(unittest.TestCase):
                     )
                     QApplication.sendEvent(button, QEvent(QEvent.Type.Leave))
 
+    def test_player_transport_buttons_keep_initial_size_without_hover_scaling(
+        self,
+    ) -> None:
+        self.window.show()
+        self.application.processEvents()
+        expected_button_size = QSize(24, 28)
+        buttons = (
+            self.window.previous_track_button,
+            self.window.sound_play_pause_button,
+            self.window.next_track_button,
+            self.window.sound_playback_mode_button,
+        )
+
+        for button in buttons:
+            with self.subTest(button=button.accessibleName()):
+                self.assertEqual(button.size(), expected_button_size)
+                icon_size = button.iconSize()
+                QApplication.sendEvent(button, QEvent(QEvent.Type.Enter))
+                self.application.processEvents()
+                self.assertEqual(button.size(), expected_button_size)
+                self.assertEqual(button.iconSize(), icon_size)
+                QApplication.sendEvent(button, QEvent(QEvent.Type.Leave))
+                self.assertEqual(button.iconSize(), icon_size)
+
     def test_dragging_round_knobs_up_increases_and_down_decreases_values(self) -> None:
         self.window.show()
         self.application.processEvents()

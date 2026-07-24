@@ -333,6 +333,7 @@ class InteractiveIconButton(QToolButton):
         self._background_source: QWidget | None = None
         self._background_color = QColor(Qt.GlobalColor.transparent)
         self._background_radius = 0.0
+        self._interaction_scaling_enabled = True
 
     @property
     def background_color(self) -> QColor:
@@ -351,6 +352,10 @@ class InteractiveIconButton(QToolButton):
 
     def set_base_icon_size(self, size: QSize) -> None:
         self._base_icon_size = QSize(size)
+        self._refresh_icon_size()
+
+    def set_interaction_scaling_enabled(self, enabled: bool) -> None:
+        self._interaction_scaling_enabled = bool(enabled)
         self._refresh_icon_size()
 
     def enterEvent(self, event) -> None:  # type: ignore[no-untyped-def]
@@ -400,7 +405,9 @@ class InteractiveIconButton(QToolButton):
         super().paintEvent(event)
 
     def _refresh_icon_size(self, *, force_focus: bool = False) -> None:
-        if self._pressed:
+        if not self._interaction_scaling_enabled:
+            factor = 1.0
+        elif self._pressed:
             factor = self.PRESSED_SCALE
         elif self._hovered or force_focus or self.hasFocus():
             factor = self.HOVER_SCALE

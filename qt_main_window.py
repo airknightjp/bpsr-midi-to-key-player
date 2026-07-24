@@ -874,6 +874,7 @@ class MidiMainWindow(QMainWindow):
         button.setObjectName("PlayerTransportButton")
         button.setText("")
         button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.set_interaction_scaling_enabled(False)
         button.clicked.connect(callback)
         return button
 
@@ -1299,14 +1300,15 @@ class MidiMainWindow(QMainWindow):
         self.transport_layout.setSpacing(px(1))
         self.position_slider.setFixedHeight(px(24))
         self.time_label.setFixedWidth(px(80))
-        transport_button_size = px(28)
+        transport_button_width = px(24)
+        transport_button_height = px(28)
         for button in (
             self.previous_track_button,
             self.sound_play_pause_button,
             self.next_track_button,
             self.sound_playback_mode_button,
         ):
-            button.setFixedSize(transport_button_size, transport_button_size)
+            button.setFixedSize(transport_button_width, transport_button_height)
         self.volume_control.apply_scale(scale)
         self.speed_control.apply_scale(scale)
         self.audio_runtime_label.setFixedWidth(px(158))
@@ -1504,12 +1506,12 @@ class MidiMainWindow(QMainWindow):
             self.volume_control.width()
             + self.slider_pane.width()
             + gap
-            + self.previous_track_button.sizeHint().width()
+            + self.previous_track_button.minimumWidth()
         )
         right_content_width = (
-            self.next_track_button.sizeHint().width()
+            self.next_track_button.minimumWidth()
             + gap
-            + self.sound_playback_mode_button.sizeHint().width()
+            + self.sound_playback_mode_button.minimumWidth()
             + gap
             + self.transform_controls.width()
         )
