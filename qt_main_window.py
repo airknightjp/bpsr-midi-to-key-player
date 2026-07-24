@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
@@ -73,13 +74,14 @@ from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 from update_service import (
     AvailableUpdate,
     UpdateService,
+    automatic_update_check_due,
     automatic_update_supported,
     launch_update_installer,
     read_pending_update_error,
 )
 
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 KEYBOARD_PANEL_HEIGHT = 71
@@ -2211,10 +2213,25 @@ class MidiMainWindow(QMainWindow):
         self.show_startup_release_notes()
         self.start_update_check()
 
-    def start_update_check(self, manual: bool = False) -> None:
-        if manual:
-            self._manual_update_check = True
-        self.update_service.check_for_updates(APP_VERSION)
+    def start_update_check(
+        self,
+        manual: bool = False,
+        current_time: int | None = None,
+    ) -> bool:
+        checked_at = int(time.time()) if current_time is None else int(current_time)
+        if (
+            not manual
+            and not automatic_update_check_due(
+                self.controller.last_update_check_at,
+                checked_at,
+            )
+        ):
+            return False
+        if not self.update_service.check_for_updates(APP_VERSION):
+            return False
+        self._manual_update_check = manual
+        self.controller.record_update_check(checked_at)
+        return True
 
     def check_for_updates_manually(self) -> None:
         self.start_update_check(manual=True)

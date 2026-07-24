@@ -155,6 +155,7 @@ class AppController:
         self.summary: MidiSummary | None = None
         self.midi_files: list[Path] = []
         self.last_midi_folder = self.settings.last_midi_folder
+        self.last_update_check_at = self.settings.last_update_check_at
         self.minimum_stable_qt_frames = (
             self.settings.minimum_stable_qt_frames
         )
@@ -1252,6 +1253,10 @@ class AppController:
     def request_save(self) -> None:
         self._settings_dirty = True
 
+    def record_update_check(self, checked_at: int) -> bool:
+        self.last_update_check_at = max(0, int(checked_at))
+        return self.save_settings_now()
+
     def save_settings_now(self) -> bool:
         try:
             save_settings(self.current_settings())
@@ -1314,6 +1319,7 @@ class AppController:
             section_visibility=normalize_section_visibility(
                 self.state.section_visibility
             ),
+            last_update_check_at=self.last_update_check_at,
             automatic_audio_buffer_frames=self.state.audio_buffer_frames,
             minimum_stable_qt_frames=self.minimum_stable_qt_frames,
             qt_audio_environment=self.qt_audio_environment,

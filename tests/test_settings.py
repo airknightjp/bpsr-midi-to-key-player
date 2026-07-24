@@ -36,6 +36,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.input_conversion_mode, "midi_file")
         self.assertEqual(settings.sound_playback_mode, "off")
         self.assertFalse(settings.hide_release_notes_on_startup)
+        self.assertEqual(settings.last_update_check_at, 0)
         self.assertEqual(
             settings.panel_order,
             (
@@ -103,6 +104,7 @@ class SettingsTests(unittest.TestCase):
                     automatic_audio_buffer_frames=2_048,
                     minimum_stable_qt_frames=512,
                     qt_audio_environment="device|48000|2|Float",
+                    last_update_check_at=1_789_123_456,
                     panel_order=(
                         "player",
                         "keyboard",
@@ -175,6 +177,7 @@ class SettingsTests(unittest.TestCase):
             loaded.qt_audio_environment,
             "device|48000|2|Float",
         )
+        self.assertEqual(loaded.last_update_check_at, 1_789_123_456)
 
     def test_invalid_qt_value_and_legacy_retest_date_are_discarded(self) -> None:
         with isolated_settings_directory() as settings_dir:

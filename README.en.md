@@ -51,6 +51,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
+- Check, download, verify, install, and restart updates through GitHub Releases.
 - Show version, copyright, and GitHub link from `Other > About BPSR MIDI to KEY Player`.
 
 ## Menus
@@ -60,8 +61,20 @@ The `_internal` folder contains files required by the application. Do not move t
 - `File > Exit`: Fully exit the app.
 - `View`: Change scale, opacity, always-on-top, and panel visibility.
 - `Settings`: Change theme, language, key bindings, and tray behavior.
+- `Other > Check for Updates`: Check GitHub Releases for the latest version.
 - `Other > Release Notes`: Show the changes in the current version.
 - `Other > About BPSR MIDI to KEY Player`: Show version information and the GitHub link.
+
+## Software Updates
+
+- At startup, the app checks GitHub Releases and notifies you only when an update is available.
+- Automatic checks run at most once per hour. The last check time is stored in `settings.json`.
+- Manual checks from `Other > Check for Updates` are always available.
+- A confirmation is shown before updating, followed by one progress window for download, verification, installation, and restart.
+- The release ZIP size, SHA-256 digest, archive structure, and path safety are verified before installation.
+- The local `settings.json` is preserved. After a successful update, the app restarts automatically and returns to the foreground.
+- If an update fails, the previous application files are restored and the error is reported on the next launch.
+- No GitHub credentials or access tokens are included in the application.
 
 ## Software Synth and Audio Output
 
@@ -176,7 +189,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.3.1
+v1.4.0
 
 ## Copyright
 

@@ -84,6 +84,7 @@ class AppSettings:
     section_visibility: dict[str, bool] = field(
         default_factory=lambda: dict(DEFAULT_SECTION_VISIBILITY)
     )
+    last_update_check_at: int = 0
     automatic_audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
     minimum_stable_qt_frames: int | None = None
     qt_audio_environment: str = ""
@@ -218,6 +219,9 @@ def load_settings() -> AppSettings:
         section_visibility=normalize_section_visibility(
             data.get("section_visibility")
         ),
+        last_update_check_at=_parse_nonnegative_int(
+            data.get("last_update_check_at")
+        ),
         automatic_audio_buffer_frames=normalize_audio_buffer_frames(
             data.get("automatic_audio_buffer_frames")
         ),
@@ -285,6 +289,9 @@ def save_settings(settings: AppSettings) -> None:
             "section_visibility": normalize_section_visibility(
                 settings.section_visibility
             ),
+            "last_update_check_at": _parse_nonnegative_int(
+                settings.last_update_check_at
+            ),
             "automatic_audio_buffer_frames": normalize_audio_buffer_frames(
                 settings.automatic_audio_buffer_frames
             ),
@@ -329,6 +336,15 @@ def _parse_optional_qt_frames(value: object) -> int | None:
     if frames not in QT_AUDIO_FRAME_OPTIONS:
         return None
     return frames
+
+
+def _parse_nonnegative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _settings_path() -> Path:

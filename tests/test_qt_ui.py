@@ -194,7 +194,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.3.1")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.4.0")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         legacy_source = (project_root / "legacy_tk_main.py").read_text(
@@ -1923,6 +1923,76 @@ class QtUiTests(unittest.TestCase):
 
         check.assert_called_once_with(qt_main_window.APP_VERSION)
         self.assertTrue(self.window._manual_update_check)
+
+    def test_startup_update_check_is_skipped_within_one_hour(self) -> None:
+        checked_at = 1_789_123_456
+        self.controller.last_update_check_at = checked_at
+        self.save_settings_mock.reset_mock()
+
+        with patch.object(
+            self.window.update_service,
+            "check_for_updates",
+            return_value=True,
+        ) as check:
+            started = self.window.start_update_check(
+                current_time=checked_at + 3_599
+            )
+
+        self.assertFalse(started)
+        check.assert_not_called()
+        self.save_settings_mock.assert_not_called()
+
+    def test_startup_update_check_after_one_hour_saves_timestamp(self) -> None:
+        checked_at = 1_789_123_456
+        self.controller.last_update_check_at = checked_at
+        self.save_settings_mock.reset_mock()
+
+        with patch.object(
+            self.window.update_service,
+            "check_for_updates",
+            return_value=True,
+        ) as check:
+            started = self.window.start_update_check(
+                current_time=checked_at + 3_600
+            )
+
+        self.assertTrue(started)
+        check.assert_called_once_with(qt_main_window.APP_VERSION)
+        self.assertEqual(
+            self.controller.last_update_check_at,
+            checked_at + 3_600,
+        )
+        self.assertEqual(
+            self.controller.current_settings().last_update_check_at,
+            checked_at + 3_600,
+        )
+        self.save_settings_mock.assert_called_once()
+
+    def test_manual_update_check_bypasses_interval_and_saves_timestamp(
+        self,
+    ) -> None:
+        checked_at = 1_789_123_456
+        self.controller.last_update_check_at = checked_at
+        self.save_settings_mock.reset_mock()
+
+        with patch.object(
+            self.window.update_service,
+            "check_for_updates",
+            return_value=True,
+        ) as check:
+            started = self.window.start_update_check(
+                manual=True,
+                current_time=checked_at + 60,
+            )
+
+        self.assertTrue(started)
+        check.assert_called_once_with(qt_main_window.APP_VERSION)
+        self.assertTrue(self.window._manual_update_check)
+        self.assertEqual(
+            self.controller.last_update_check_at,
+            checked_at + 60,
+        )
+        self.save_settings_mock.assert_called_once()
 
     def test_release_notes_checkbox_saves_immediately_when_checked(self) -> None:
         dialogs: list[QDialog] = []

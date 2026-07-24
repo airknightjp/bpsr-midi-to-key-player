@@ -68,7 +68,27 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.3.1
+    "en": """v1.4.0
+
+This release adds secure in-app updates through GitHub Releases.
+
+[Main changes]
+
+- The app checks GitHub Releases for a newer version at startup and displays
+  a notification only when an update is available.
+- Added Other > Check for Updates for manual update checks.
+- Automatic checks are limited to once per hour. The last check time is saved
+  in settings.json, while manual checks remain available at any time.
+- Added confirmation before updating and a single progress window for the
+  download, verification, installation, and restart process.
+- Release ZIP size, SHA-256 digest, archive structure, and paths are validated
+  before replacing application files.
+- Local settings are preserved during updates. After a successful update, the
+  app restarts automatically and is brought to the foreground.
+- Failed updates restore the previous application files and report the error
+  on the next launch.
+
+[v1.3.1]
 
 This emergency release fixes MIDI input conversion shortcuts and player
 control feedback.
@@ -143,7 +163,28 @@ performance visualization and scoring, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.3.1
+    "ja": """v1.4.0
+
+本バージョンでは、GitHub Releasesを利用した安全なアプリ内更新機能を
+追加しました。
+
+【主な変更】
+
+- 起動時にGitHub Releasesの最新バージョンを確認し、
+  更新がある場合だけ通知するようにしました。
+- 「その他 > 更新を確認」から、いつでも手動で更新を確認できます。
+- 自動確認は1時間に1回までに制限し、最終確認時刻をsettings.jsonへ
+  保存します。手動確認はこの制限に関係なく実行できます。
+- 更新前の確認画面と、ダウンロード、検証、適用、再起動の進捗を
+  1つのウィンドウで確認できる更新画面を追加しました。
+- 配布ZIPのファイルサイズ、SHA-256、構成、パスの安全性を検証してから
+  アプリのファイルを置き換えます。
+- ローカル設定を保持したまま更新し、完了後はアプリを自動再起動して
+  前面へ表示します。
+- 更新に失敗した場合は以前のアプリファイルへ復旧し、
+  次回起動時にエラー内容を通知します。
+
+【v1.3.1】
 
 本バージョンは、MIDI入力変換のショートカット制御と
 プレイヤー操作表示の不具合を修正する緊急リリースです。
@@ -227,7 +268,22 @@ performance visualization and scoring, and automatic sustain generation.
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.3.1
+    "zh": """v1.4.0
+
+本版本新增了通过GitHub Releases进行安全应用内更新的功能。
+
+【主要变更】
+
+- 启动时检查GitHub Releases中的最新版本，仅在有可用更新时通知。
+- 可通过“其他 > 检查更新”随时手动检查更新。
+- 自动检查限制为每小时一次，并将上次检查时间保存到settings.json。
+  手动检查不受此限制。
+- 更新前显示确认窗口，并在一个进度窗口中显示下载、验证、安装和重启状态。
+- 替换应用文件前会验证发布ZIP的文件大小、SHA-256、目录结构和路径安全性。
+- 更新时保留本地设置，成功后自动重启应用并将窗口显示到前台。
+- 更新失败时恢复之前的应用文件，并在下次启动时显示错误信息。
+
+【v1.3.1】
 
 本版本是紧急修复版本，修正了MIDI输入转换快捷键控制和
 播放器操作显示的问题。

@@ -7,6 +7,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -24,6 +25,7 @@ PRODUCT_DIRECTORY_NAME = "BPSR_MIDI_to_KEY_Player"
 EXECUTABLE_NAME = "BPSR_MIDI_to_KEY_Player.exe"
 UPDATE_ERROR_FILE_NAME = ".bpsr_update_error.txt"
 CHECK_TIMEOUT_MS = 8_000
+UPDATE_CHECK_INTERVAL_SECONDS = 60 * 60
 _VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 _SHA256_PATTERN = re.compile(r"^sha256:([0-9a-fA-F]{64})$")
 _MANAGED_ENTRIES = (EXECUTABLE_NAME, "_internal", "readme.txt")
@@ -43,6 +45,21 @@ class AvailableUpdate:
     tag_name: str
     release_url: str
     asset: ReleaseAsset
+
+
+def automatic_update_check_due(
+    last_check_at: object,
+    current_time: int | None = None,
+) -> bool:
+    try:
+        previous = int(last_check_at)
+    except (TypeError, ValueError):
+        return True
+    if previous <= 0:
+        return True
+    now = int(time.time()) if current_time is None else int(current_time)
+    elapsed = now - previous
+    return elapsed < 0 or elapsed >= UPDATE_CHECK_INTERVAL_SECONDS
 
 
 def parse_version(value: object) -> tuple[int, int, int] | None:

@@ -14,7 +14,9 @@ from update_service import (
     PRODUCT_DIRECTORY_NAME,
     ReleaseAsset,
     UPDATE_ERROR_FILE_NAME,
+    UPDATE_CHECK_INTERVAL_SECONDS,
     _POWERSHELL_UPDATER,
+    automatic_update_check_due,
     is_newer_version,
     launch_update_installer,
     parse_latest_release,
@@ -86,6 +88,24 @@ def available_update(version: str = "1.3.2") -> AvailableUpdate:
 
 
 class UpdateServiceTests(unittest.TestCase):
+    def test_automatic_update_check_is_due_once_per_hour(self) -> None:
+        checked_at = 1_789_123_456
+
+        self.assertFalse(
+            automatic_update_check_due(
+                checked_at,
+                checked_at + UPDATE_CHECK_INTERVAL_SECONDS - 1,
+            )
+        )
+        self.assertTrue(
+            automatic_update_check_due(
+                checked_at,
+                checked_at + UPDATE_CHECK_INTERVAL_SECONDS,
+            )
+        )
+        self.assertTrue(automatic_update_check_due(0, checked_at))
+        self.assertTrue(automatic_update_check_due("invalid", checked_at))
+
     def test_semantic_version_comparison(self) -> None:
         self.assertTrue(is_newer_version("v1.3.2", "1.3.1"))
         self.assertTrue(is_newer_version("2.0.0", "v1.99.99"))
