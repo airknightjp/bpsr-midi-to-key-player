@@ -191,7 +191,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.3.0")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.3.1")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         legacy_source = (project_root / "legacy_tk_main.py").read_text(
@@ -582,6 +582,30 @@ class QtUiTests(unittest.TestCase):
         self.assertNotEqual(
             self.window.conversion_start_button.icon().cacheKey(),
             idle_icon,
+        )
+        self.assertTrue(self.window.conversion_start_button.property("active"))
+
+    def test_conversion_start_button_shows_pause_icon_while_interrupted(
+        self,
+    ) -> None:
+        self.controller.state.current_mode = "keys"
+        self.controller._notify()
+        active_icon = self.window.conversion_start_button.icon().cacheKey()
+        self.assertEqual(
+            self.window._render_signatures["conversion_button_icon"][0],
+            "stop",
+        )
+
+        self.controller.state.current_mode = "keys_paused"
+        self.controller._notify()
+
+        self.assertEqual(
+            self.window._render_signatures["conversion_button_icon"][0],
+            "pause",
+        )
+        self.assertNotEqual(
+            self.window.conversion_start_button.icon().cacheKey(),
+            active_icon,
         )
         self.assertTrue(self.window.conversion_start_button.property("active"))
 
@@ -1689,6 +1713,46 @@ class QtUiTests(unittest.TestCase):
             play_icon.bits().tobytes(),
             pause_icon.bits().tobytes(),
         )
+
+    def test_player_transport_hover_background_stays_round_on_first_render(
+        self,
+    ) -> None:
+        self.controller.state.midi_rows = [
+            MidiListRow(Path("first.mid"), "first.mid"),
+            MidiListRow(Path("second.mid"), "second.mid"),
+            MidiListRow(Path("third.mid"), "third.mid"),
+        ]
+        self.controller.state.selected_midi_index = 1
+        self.controller._notify()
+        self.window.show()
+        buttons = (
+            self.window.previous_track_button,
+            self.window.sound_play_pause_button,
+            self.window.next_track_button,
+            self.window.sound_playback_mode_button,
+        )
+        for theme_name in THEMES:
+            self.controller.set_option("color_theme", theme_name)
+            self.application.processEvents()
+            for button in buttons:
+                with self.subTest(
+                    theme=theme_name,
+                    button=button.accessibleName(),
+                ):
+                    self.assertTrue(button.isEnabled())
+                    QApplication.sendEvent(button, QEvent(QEvent.Type.Enter))
+                    self.application.processEvents()
+                    image = button.grab().toImage()
+
+                    self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+                    self.assertGreater(
+                        image.pixelColor(
+                            button.width() // 2,
+                            button.height() // 2,
+                        ).alpha(),
+                        0,
+                    )
+                    QApplication.sendEvent(button, QEvent(QEvent.Type.Leave))
 
     def test_dragging_round_knobs_up_increases_and_down_decreases_values(self) -> None:
         self.window.show()

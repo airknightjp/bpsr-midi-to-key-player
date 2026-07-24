@@ -68,7 +68,25 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.3.0
+    "en": """v1.3.1
+
+This emergency release fixes MIDI input conversion shortcuts and player
+control feedback.
+
+[Fixes in v1.3.1]
+
+- Global Start, Pause, and End shortcuts now affect MIDI input conversion only.
+  Realtime input conversion and MIDI sound playback are not interrupted.
+- Start no longer stops an active MIDI input conversion. When conversion is
+  paused, Start restarts it from the beginning.
+- MIDI input conversion shortcuts are blocked only while MIDI sound playback
+  is active and remain available while sound playback is paused.
+- The shared Start button now shows a pause icon while MIDI input conversion is
+  paused, making the interrupted state visible.
+- Fixed square hover backgrounds appearing on player controls immediately
+  after the first launch.
+
+[v1.3.0]
 
 This release adds an in-app software synthesizer, automatic audio tuning,
 performance visualization and scoring, and automatic sustain generation.
@@ -125,7 +143,26 @@ performance visualization and scoring, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.3.0
+    "ja": """v1.3.1
+
+本バージョンは、MIDI入力変換のショートカット制御と
+プレイヤー操作表示の不具合を修正する緊急リリースです。
+
+【v1.3.1の修正】
+
+- グローバル開始／中断／終了ショートカットの対象を
+  MIDI入力変換だけに限定しました。リアルタイム入力変換と
+  MIDI音源再生には影響しません。
+- 実行中に開始ショートカットを押しても停止しないようにしました。
+  中断中に開始した場合は、先頭からMIDI入力変換を再開します。
+- MIDI音源再生中だけMIDI入力変換ショートカットを無効にし、
+  MIDI音源の一時停止中は使用できるようにしました。
+- MIDI入力変換の中断中は、共通の開始ボタンへ中断アイコンを表示し、
+  中断状態を視覚的に確認できるようにしました。
+- 初回起動直後にプレイヤー操作へマウスを重ねると、
+  四角い背景が表示される問題を修正しました。
+
+【v1.3.0】
 
 本バージョンでは、アプリ内ソフトウェア音源、音声出力の自動最適化、
 演奏の可視化・採点機能、サスティンの自動生成を追加しました。
@@ -190,7 +227,23 @@ performance visualization and scoring, and automatic sustain generation.
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.3.0
+    "zh": """v1.3.1
+
+本版本是紧急修复版本，修正了MIDI输入转换快捷键控制和
+播放器操作显示的问题。
+
+【v1.3.1修复】
+
+- 全局开始、暂停和结束快捷键现在仅作用于MIDI输入转换，
+  不会中断实时输入转换或MIDI音源播放。
+- MIDI输入转换运行时再次按开始键不会停止；暂停后按开始键会从头开始。
+- 仅在MIDI音源正在播放时禁用MIDI输入转换快捷键，
+  MIDI音源暂停时仍可使用。
+- MIDI输入转换暂停时，共用开始按钮会显示暂停图标，
+  便于确认当前处于暂停状态。
+- 修复首次启动后将鼠标移到播放器控制按钮上时出现方形背景的问题。
+
+【v1.3.0】
 
 本版本新增了应用内软件合成器、音频输出自动优化、
 演奏可视化与评分，以及自动延音生成功能。

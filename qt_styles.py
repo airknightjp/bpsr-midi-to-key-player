@@ -383,14 +383,17 @@ def build_stylesheet(
     QToolButton#PlayerTransportButton:focus {{
         background: {palette.surface_hover};
         border: none;
+        border-radius: {round(14 * scale)}px;
     }}
     QToolButton#PlayerTransportButton:pressed {{
         background: {palette.panel_alt};
         border: none;
+        border-radius: {round(14 * scale)}px;
     }}
     QToolButton#PlayerTransportButton:disabled {{
         background: transparent;
         border: none;
+        border-radius: {round(14 * scale)}px;
     }}
     QScrollBar:vertical {{ background: {palette.panel_alt}; width: {round(10 * scale)}px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {palette.border}; min-height: {round(24 * scale)}px; border-radius: {round(5 * scale)}px; }}

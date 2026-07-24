@@ -40,7 +40,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Log countdown ticks and in-game countdown key presses.
-- Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported.
+- Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported. These shortcuts control MIDI input conversion only and do not affect realtime input conversion or MIDI sound playback.
 - Lock shortcut settings to avoid accidental changes.
 - Edit the C3-B5 bindings and the Sustain, Octave down, and Octave up keys from `Settings > Key Bindings`.
 - Highlight duplicate key bindings in red.
@@ -176,7 +176,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.3.0
+v1.3.1
 
 ## Copyright
 

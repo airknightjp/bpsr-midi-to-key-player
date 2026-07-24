@@ -71,7 +71,7 @@ from qt_components import (
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 KEYBOARD_PANEL_HEIGHT = 71
@@ -1819,8 +1819,14 @@ class MidiMainWindow(QMainWindow):
                 else palette.disabled
             )
         icon_size = max(24, round(40 * state.ui_scale_percent / 100))
+        if state.keyboard_paused:
+            icon_action = "pause"
+        elif conversion_active:
+            icon_action = "stop"
+        else:
+            icon_action = "play"
         icon_signature = (
-            "stop" if conversion_active else "play",
+            icon_action,
             icon_color,
             icon_size,
         )

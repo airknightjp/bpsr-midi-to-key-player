@@ -361,6 +361,184 @@ class AppControllerTests(unittest.TestCase):
         self.assertIsNone(controller.state.current_mode)
         self.assertEqual(controller.state.position, 0.0)
 
+    def test_start_hotkey_restarts_midi_conversion_while_sound_is_paused(
+        self,
+    ) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.current_mode = "sound_paused"
+        controller.state.position = 18.5
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with (
+            patch.object(
+                controller,
+                "stop_playback",
+                wraps=controller.stop_playback,
+            ) as stop_playback,
+            patch.object(controller, "play_keyboard") as play_keyboard,
+        ):
+            controller.process_pending_events()
+
+        stop_playback.assert_called_once_with()
+        play_keyboard.assert_called_once_with(start_time=0.0)
+        self.assertIsNone(controller.state.current_mode)
+        self.assertEqual(controller.state.position, 0.0)
+
+    def test_start_hotkey_starts_idle_midi_file_conversion(self) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with patch.object(controller, "play_keyboard") as play_keyboard:
+            controller.process_pending_events()
+
+        play_keyboard.assert_called_once_with()
+
+    def test_start_hotkey_does_not_stop_running_midi_conversion(self) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.current_mode = "keys"
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with (
+            patch.object(controller, "stop_playback") as stop_playback,
+            patch.object(controller, "play_keyboard") as play_keyboard,
+        ):
+            controller.process_pending_events()
+
+        stop_playback.assert_not_called()
+        play_keyboard.assert_not_called()
+        self.assertTrue(controller.state.keyboard_playing)
+
+    def test_start_hotkey_restarts_paused_midi_conversion_from_zero(self) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.current_mode = "keys_paused"
+        controller.state.position = 18.5
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with (
+            patch.object(
+                controller,
+                "stop_playback",
+                wraps=controller.stop_playback,
+            ) as stop_playback,
+            patch.object(controller, "play_keyboard") as play_keyboard,
+        ):
+            controller.process_pending_events()
+
+        stop_playback.assert_called_once_with()
+        play_keyboard.assert_called_once_with(start_time=0.0)
+        self.assertIsNone(controller.state.current_mode)
+        self.assertEqual(controller.state.position, 0.0)
+
+    def test_input_shortcuts_do_not_affect_realtime_input(self) -> None:
+        for action in ("play", "pause_resume", "stop"):
+            with self.subTest(action=action):
+                controller = self.make_controller(
+                    input_conversion_mode="realtime"
+                )
+                controller.state.midi_input_running = True
+                controller.worker_queue.put(("hotkey", action))
+
+                with (
+                    patch.object(controller, "start_midi_input") as start_input,
+                    patch.object(controller, "stop_midi_input") as stop_input,
+                    patch.object(controller, "stop_playback") as stop_playback,
+                    patch.object(controller, "play_keyboard") as play_keyboard,
+                ):
+                    controller.process_pending_events()
+
+                start_input.assert_not_called()
+                stop_input.assert_not_called()
+                stop_playback.assert_not_called()
+                play_keyboard.assert_not_called()
+                self.assertTrue(controller.state.midi_input_running)
+
+    def test_input_shortcuts_do_not_affect_active_midi_sound_playback(
+        self,
+    ) -> None:
+        for action in ("play", "pause_resume", "stop"):
+            with self.subTest(action=action):
+                controller = self.make_controller(
+                    input_conversion_mode="midi_file"
+                )
+                controller.state.current_mode = "sound"
+                controller.worker_queue.put(("hotkey", action))
+
+                with (
+                    patch.object(controller, "stop_playback") as stop_playback,
+                    patch.object(controller, "play_keyboard") as play_keyboard,
+                ):
+                    controller.process_pending_events()
+
+                stop_playback.assert_not_called()
+                play_keyboard.assert_not_called()
+                self.assertTrue(controller.state.sound_playing)
+
+    def test_pause_and_end_hotkeys_do_not_affect_paused_midi_sound(
+        self,
+    ) -> None:
+        for action in ("pause_resume", "stop"):
+            with self.subTest(action=action):
+                controller = self.make_controller(
+                    input_conversion_mode="midi_file"
+                )
+                controller.state.current_mode = "sound_paused"
+                controller.state.position = 18.5
+                controller.worker_queue.put(("hotkey", action))
+
+                with (
+                    patch.object(controller, "stop_playback") as stop_playback,
+                    patch.object(controller, "play_keyboard") as play_keyboard,
+                ):
+                    controller.process_pending_events()
+
+                stop_playback.assert_not_called()
+                play_keyboard.assert_not_called()
+                self.assertTrue(controller.state.sound_paused)
+                self.assertEqual(controller.state.position, 18.5)
+
+    def test_pause_hotkey_pauses_and_resumes_midi_file_conversion(
+        self,
+    ) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        player = FakePlayer()
+        controller.player = player
+        controller.state.current_mode = "keys"
+        controller.state.duration = 60.0
+        controller.worker_queue.put(("hotkey", "pause_resume"))
+
+        controller.process_pending_events()
+
+        self.assertTrue(player.stopped)
+        self.assertTrue(controller.state.keyboard_paused)
+        self.assertEqual(controller.state.position, 12.5)
+
+        controller.worker_queue.put(("hotkey", "pause_resume"))
+        with patch.object(controller, "play_keyboard") as play_keyboard:
+            controller.process_pending_events()
+
+        play_keyboard.assert_called_once_with(
+            start_time=12.5,
+            countdown=False,
+            reset_rhythm_score=False,
+        )
+
+    def test_end_hotkey_stops_only_midi_file_conversion(self) -> None:
+        for mode in ("keys", "keys_paused"):
+            with self.subTest(mode=mode):
+                controller = self.make_controller(
+                    input_conversion_mode="midi_file"
+                )
+                controller.state.current_mode = mode
+                controller.worker_queue.put(("hotkey", "stop"))
+
+                with patch.object(
+                    controller,
+                    "stop_playback",
+                ) as stop_playback:
+                    controller.process_pending_events()
+
+                stop_playback.assert_called_once_with()
+
     def test_common_input_conversion_toggle_stops_the_running_mode(self) -> None:
         controller = self.make_controller()
         controller.state.midi_input_running = True

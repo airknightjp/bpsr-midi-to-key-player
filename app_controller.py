@@ -388,11 +388,23 @@ class AppController:
         )
         return True
 
-    def toggle_keyboard_playback(self) -> None:
+    def start_keyboard_conversion_from_shortcut(self) -> None:
+        if (
+            self.state.input_conversion_mode != INPUT_CONVERSION_MIDI_FILE
+            or self.state.midi_input_running
+            or self.state.sound_playing
+            or self.state.keyboard_playing
+        ):
+            return
+        if self.state.keyboard_paused or self.state.sound_paused:
+            self.stop_playback()
+            self.play_keyboard(start_time=0.0)
+        elif self.state.current_mode is None:
+            self.play_keyboard()
+
+    def stop_keyboard_conversion_from_shortcut(self) -> None:
         if self.state.keyboard_playing or self.state.keyboard_paused:
             self.stop_playback()
-        elif self.state.current_mode is None and not self.state.midi_input_running:
-            self.play_keyboard()
 
     def toggle_input_conversion(self) -> None:
         if self.state.midi_input_running:
@@ -1052,13 +1064,11 @@ class AppController:
                     continue
                 if kind == "hotkey":
                     if message[1] == "play":
-                        self.toggle_keyboard_playback()
+                        self.start_keyboard_conversion_from_shortcut()
                     elif message[1] == "pause_resume":
                         self.toggle_keyboard_pause()
-                    elif message[1] == "stop" and (
-                        self.state.keyboard_playing or self.state.keyboard_paused
-                    ):
-                        self.stop_playback()
+                    elif message[1] == "stop":
+                        self.stop_keyboard_conversion_from_shortcut()
                     continue
                 if kind in {
                     "key_state",
