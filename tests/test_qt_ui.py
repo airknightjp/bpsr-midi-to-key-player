@@ -161,6 +161,79 @@ class QtUiTests(unittest.TestCase):
         score_render.assert_not_called()
         hit_render.assert_not_called()
 
+    def test_position_change_does_not_recalculate_output_note_range(self) -> None:
+        self.controller.events = [
+            MidiEvent(
+                0.0,
+                "note_on",
+                channel=0,
+                note=60,
+                velocity=90,
+                track=0,
+            ),
+            MidiEvent(
+                1.0,
+                "note_on",
+                channel=0,
+                note=72,
+                velocity=90,
+                track=0,
+            ),
+        ]
+        self.controller.state.track_channels = (
+            TrackChannelItem(track=0, channel=0, enabled=True),
+        )
+
+        with (
+            patch(
+                "qt_main_window.build_output_note_range",
+                wraps=qt_main_window.build_output_note_range,
+            ) as range_builder,
+            patch.object(
+                self.controller,
+                "current_chord_optimization_plan",
+                wraps=self.controller.current_chord_optimization_plan,
+            ) as optimization_plan,
+        ):
+            self.controller._notify()
+            self.controller.state.position = 0.5
+            self.controller._notify()
+
+        range_builder.assert_called_once()
+        optimization_plan.assert_not_called()
+
+    def test_disabled_source_recalculates_output_note_range(self) -> None:
+        self.controller.events = [
+            MidiEvent(
+                0.0,
+                "note_on",
+                channel=0,
+                note=60,
+                velocity=90,
+                track=0,
+            ),
+            MidiEvent(
+                1.0,
+                "note_on",
+                channel=1,
+                note=84,
+                velocity=90,
+                track=1,
+            ),
+        ]
+        self.controller._set_enabled_sources(((0, 0), (1, 1)))
+        self.controller.state.track_channels = [
+            TrackChannelItem(track=0, channel=0, enabled=True),
+            TrackChannelItem(track=1, channel=1, enabled=True),
+        ]
+        self.controller._notify()
+
+        self.assertEqual(self.window.output_keyboard.used_note_range, (60, 84))
+
+        self.controller.toggle_track_channel(1, 1)
+
+        self.assertEqual(self.window.output_keyboard.used_note_range, (60, 60))
+
     def test_worker_events_are_dispatched_without_a_poll_timer(self) -> None:
         self.assertFalse(hasattr(self.window, "_poll_timer"))
         worker = threading.Thread(

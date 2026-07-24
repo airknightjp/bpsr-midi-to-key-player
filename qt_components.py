@@ -850,6 +850,43 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor("#00a7d6")
         self._accent_border = QColor("#0093bd")
         self._accent_text = QColor("#ffffff")
+        self._unused_surface = self._surface.darker(118)
+        self._unused_black = self._black.lighter(145)
+        self._unused_text = QColor(self._text)
+        self._unused_text.setAlpha(120)
+        self._white_notes = tuple(
+            note
+            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if note % 12 in self.WHITE_PITCH_CLASSES
+        )
+        white_indexes = {
+            note: index for index, note in enumerate(self._white_notes)
+        }
+        self._black_note_positions = tuple(
+            (note, white_indexes[note - 1] + 1)
+            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if (
+                note % 12 in self.BLACK_BOUNDARIES
+                and note - 1 in white_indexes
+            )
+        )
+        self._label_specs = tuple(
+            (
+                index,
+                note,
+                (
+                    f"A{note // 12 - 1}"
+                    if note == self.NOTE_MIN
+                    else f"C{note // 12 - 1}"
+                ),
+            )
+            for index, note in enumerate(self._white_notes)
+            if note == self.NOTE_MIN or note % 12 == 0
+        )
+        self._white_key_fills: tuple[QColor, ...] = ()
+        self._black_key_fills: tuple[QColor, ...] = ()
+        self._label_colors: tuple[QColor, ...] = ()
+        self._refresh_note_range_colors()
         self._last_retrigger_serials: dict[int, int] = {}
         self._retrigger_release_until: dict[int, float] = {}
         self._retrigger_timer = QTimer(self)
@@ -919,12 +956,27 @@ class PianoKeyboardWidget(QWidget):
                 normalized = None
         if normalized != self._used_note_range:
             self._used_note_range = normalized
+            self._refresh_note_range_colors()
             self.update()
 
     def _note_is_used(self, note: int) -> bool:
         return (
             self._used_note_range is None
             or self._used_note_range[0] <= note <= self._used_note_range[1]
+        )
+
+    def _refresh_note_range_colors(self) -> None:
+        self._white_key_fills = tuple(
+            self._surface if self._note_is_used(note) else self._unused_surface
+            for note in self._white_notes
+        )
+        self._black_key_fills = tuple(
+            self._black if self._note_is_used(note) else self._unused_black
+            for note, _position in self._black_note_positions
+        )
+        self._label_colors = tuple(
+            self._text if self._note_is_used(note) else self._unused_text
+            for _index, note, _text in self._label_specs
         )
 
     def set_retrigger_events(self, events: object) -> None:
@@ -984,6 +1036,11 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor(accent)
         self._accent_border = QColor(accent_border)
         self._accent_text = QColor(accent_text)
+        self._unused_surface = self._surface.darker(118)
+        self._unused_black = self._black.lighter(145)
+        self._unused_text = QColor(self._text)
+        self._unused_text.setAlpha(120)
+        self._refresh_note_range_colors()
         self.update()
 
     def apply_scale(self, scale: float) -> None:
@@ -1001,11 +1058,7 @@ class PianoKeyboardWidget(QWidget):
         width = max(1.0, float(self.width() - 1))
         height = max(1.0, float(self.height() - 1))
         painter.fillRect(self.rect(), self._surface)
-        white_notes = [
-            note
-            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
-            if note % 12 in self.WHITE_PITCH_CLASSES
-        ]
+        white_notes = self._white_notes
         white_width = width / len(white_notes)
         border_pen = QPen(self._border, 1.0)
         label_font = painter.font()
@@ -1013,14 +1066,14 @@ class PianoKeyboardWidget(QWidget):
             max(7, min(12, round(min(height * 0.16, white_width * 0.9))))
         )
 
-        for index, note in enumerate(white_notes):
+        for index, (note, fill) in enumerate(
+            zip(white_notes, self._white_key_fills, strict=True)
+        ):
             key_rect = QRectF(index * white_width + 0.5, 0.5, white_width, height)
             active = (
                 note in self._active_notes
                 and note not in self._retrigger_release_until
             )
-            used = self._note_is_used(note)
-            fill = self._surface if used else self._surface.darker(118)
             painter.fillRect(key_rect, self._accent if active else fill)
             painter.setPen(
                 QPen(self._accent_border, 1.0)
@@ -1029,55 +1082,53 @@ class PianoKeyboardWidget(QWidget):
             )
             painter.drawRect(key_rect)
 
-        for index, note in enumerate(white_notes):
-            if note == self.NOTE_MIN or note % 12 == 0:
-                painter.setFont(label_font)
-                label_color = QColor(self._text)
-                if not self._note_is_used(note):
-                    label_color.setAlpha(120)
-                painter.setPen(label_color)
-                key_center = (index + 0.5) * white_width
-                label_text = (
-                    f"A{note // 12 - 1}"
-                    if note == self.NOTE_MIN
-                    else f"C{note // 12 - 1}"
-                )
-                label_width = min(
-                    width,
-                    max(1.0, float(painter.fontMetrics().horizontalAdvance(label_text) + 2)),
-                )
-                label_left = max(
-                    0.5,
-                    min(width - label_width, key_center - label_width / 2),
-                )
-                label_rect = QRectF(
-                    label_left,
-                    0.5,
-                    label_width,
-                    height,
-                )
-                painter.drawText(
-                    label_rect.adjusted(0, 0, 0, -2),
-                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-                    label_text,
-                )
+        for (index, _note, label_text), label_color in zip(
+            self._label_specs,
+            self._label_colors,
+            strict=True,
+        ):
+            painter.setFont(label_font)
+            painter.setPen(label_color)
+            key_center = (index + 0.5) * white_width
+            label_width = min(
+                width,
+                max(
+                    1.0,
+                    float(
+                        painter.fontMetrics().horizontalAdvance(label_text)
+                        + 2
+                    ),
+                ),
+            )
+            label_left = max(
+                0.5,
+                min(width - label_width, key_center - label_width / 2),
+            )
+            label_rect = QRectF(
+                label_left,
+                0.5,
+                label_width,
+                height,
+            )
+            painter.drawText(
+                label_rect.adjusted(0, 0, 0, -2),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                label_text,
+            )
 
         black_width = white_width * 0.62
         black_height = height * 0.60
-        for note in range(self.NOTE_MIN, self.NOTE_MAX + 1):
-            if note % 12 not in self.BLACK_BOUNDARIES:
-                continue
-            previous_white = note - 1
-            if previous_white not in white_notes:
-                continue
-            center_x = (white_notes.index(previous_white) + 1) * white_width
+        for (note, position), fill in zip(
+            self._black_note_positions,
+            self._black_key_fills,
+            strict=True,
+        ):
+            center_x = position * white_width
             key_rect = QRectF(center_x - black_width / 2, 0.5, black_width, black_height)
             active = (
                 note in self._active_notes
                 and note not in self._retrigger_release_until
             )
-            used = self._note_is_used(note)
-            fill = self._black if used else self._black.lighter(145)
             painter.fillRect(key_rect, self._accent if active else fill)
             painter.setPen(QPen(self._accent_border if active else self._border, 1.0))
             painter.drawRect(key_rect)

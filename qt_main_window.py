@@ -1033,7 +1033,11 @@ class MidiMainWindow(QMainWindow):
             if self._signature_changed("settings", settings_signature):
                 self._render_settings(state)
 
-            optimization_plan = self.controller.current_chord_optimization_plan()
+            optimization_plan = (
+                self.controller.current_chord_optimization_plan()
+                if state.chord_optimization
+                else None
+            )
             applied_optimization_plan = (
                 optimization_plan
                 if state.chord_optimization
@@ -1046,10 +1050,7 @@ class MidiMainWindow(QMainWindow):
                 output_range_signature = (
                     id(self.controller.events),
                     len(self.controller.events),
-                    tuple(
-                        (item.track, item.channel, item.enabled)
-                        for item in state.track_channels
-                    ),
+                    state.track_channels,
                     state.auto_fit_note_range,
                     state.transpose_semitones,
                     state.octave_shift,
@@ -1091,10 +1092,7 @@ class MidiMainWindow(QMainWindow):
                 piano_roll_sequence_signature = (
                     id(self.controller.events),
                     len(self.controller.events),
-                    tuple(
-                        (item.track, item.channel, item.enabled)
-                        for item in state.track_channels
-                    ),
+                    state.track_channels,
                     state.auto_fit_note_range,
                     state.transpose_semitones,
                     state.octave_shift,
