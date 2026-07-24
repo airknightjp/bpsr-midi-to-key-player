@@ -9,6 +9,7 @@ from config import (
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
+    DEFAULT_MIDI_COLUMN_WIDTHS,
     DEFAULT_PANEL_ORDER,
     DEFAULT_SECTION_VISIBILITY,
     DEFAULT_SOUND_PLAYBACK_MODE,
@@ -92,6 +93,7 @@ class AppState:
     ui_scale_percent: int = 100
     window_width: int = 900
     window_height: int = 560
+    midi_column_widths: tuple[int, int, int, int] = DEFAULT_MIDI_COLUMN_WIDTHS
     section_visibility: dict[str, bool] = field(
         default_factory=lambda: dict(DEFAULT_SECTION_VISIBILITY)
     )

@@ -27,6 +27,9 @@ SOUND_PLAYBACK_MODES = (
     SOUND_PLAYBACK_MODE_REPEAT_ONE,
 )
 DEFAULT_SOUND_PLAYBACK_MODE = SOUND_PLAYBACK_MODE_OFF
+DEFAULT_MIDI_COLUMN_WIDTHS = (630, 180, 80, 90)
+MIN_MIDI_COLUMN_WIDTH = 40
+MAX_MIDI_COLUMN_WIDTH = 2000
 DEFAULT_PANEL_ORDER = (
     "input_conversion",
     "common_settings",
@@ -122,6 +125,25 @@ def normalize_sound_playback_mode(value: object) -> str:
     if mode in SOUND_PLAYBACK_MODES:
         return mode
     return DEFAULT_SOUND_PLAYBACK_MODE
+
+
+def normalize_midi_column_widths(value: object) -> tuple[int, int, int, int]:
+    if not isinstance(value, (list, tuple)) or len(value) != len(
+        DEFAULT_MIDI_COLUMN_WIDTHS
+    ):
+        return DEFAULT_MIDI_COLUMN_WIDTHS
+    normalized: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            return DEFAULT_MIDI_COLUMN_WIDTHS
+        try:
+            width = int(item)
+        except (TypeError, ValueError):
+            return DEFAULT_MIDI_COLUMN_WIDTHS
+        normalized.append(
+            max(MIN_MIDI_COLUMN_WIDTH, min(MAX_MIDI_COLUMN_WIDTH, width))
+        )
+    return (normalized[0], normalized[1], normalized[2], normalized[3])
 
 
 def normalize_panel_order(value: object) -> tuple[str, ...]:

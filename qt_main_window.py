@@ -45,6 +45,7 @@ from config import (
     DEFAULT_PANEL_ORDER,
     INPUT_CONVERSION_MIDI_FILE,
     INPUT_CONVERSION_REALTIME,
+    MIN_MIDI_COLUMN_WIDTH,
     NOTE_NAMES,
     SOUND_PLAYBACK_MODE_CONTINUOUS,
     SOUND_PLAYBACK_MODE_OFF,
@@ -864,13 +865,15 @@ class MidiMainWindow(QMainWindow):
         self.midi_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.midi_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.midi_table.verticalHeader().hide()
-        self.midi_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.midi_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.midi_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.midi_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.midi_table.setColumnWidth(1, 182)
-        self.midi_table.setColumnWidth(2, 82)
-        self.midi_table.setColumnWidth(3, 92)
+        midi_header = self.midi_table.horizontalHeader()
+        midi_header.setMinimumSectionSize(MIN_MIDI_COLUMN_WIDTH)
+        for column, width in enumerate(self.state.midi_column_widths):
+            midi_header.setSectionResizeMode(
+                column,
+                QHeaderView.ResizeMode.Interactive,
+            )
+            self.midi_table.setColumnWidth(column, width)
+        midi_header.sectionResized.connect(self._midi_column_resized)
         self.midi_table.cellClicked.connect(
             lambda row, _column: self._select_midi_row(row)
         )
@@ -1385,10 +1388,12 @@ class MidiMainWindow(QMainWindow):
             0,
             0,
         )
-        self.midi_table.setColumnWidth(1, px(180))
-        self.midi_table.setColumnWidth(2, px(80))
-        self.midi_table.setColumnWidth(3, px(90))
-        self.midi_table.horizontalHeader().setFixedHeight(px(24))
+        midi_header = self.midi_table.horizontalHeader()
+        with QSignalBlocker(midi_header):
+            midi_header.setMinimumSectionSize(px(MIN_MIDI_COLUMN_WIDTH))
+            for column, width in enumerate(self.state.midi_column_widths):
+                self.midi_table.setColumnWidth(column, px(width))
+            midi_header.setFixedHeight(px(24))
         for row in range(self.midi_table.rowCount()):
             self.midi_table.setRowHeight(row, px(22))
         self._set_spacer_width(self.device_controls_layout, 1, px(6))
@@ -2033,6 +2038,24 @@ class MidiMainWindow(QMainWindow):
                 )
         if had_focus:
             self.midi_table.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _midi_column_resized(
+        self,
+        logical_index: int,
+        _old_size: int,
+        _new_size: int,
+    ) -> None:
+        if not 0 <= logical_index < self.midi_table.columnCount():
+            return
+        scale = max(1, self.state.ui_scale_percent) / 100.0
+        widths = tuple(
+            max(
+                MIN_MIDI_COLUMN_WIDTH,
+                round(self.midi_table.columnWidth(column) / scale),
+            )
+            for column in range(self.midi_table.columnCount())
+        )
+        self.controller.set_midi_column_widths(widths)
 
     def _render_midi_selection(self, state: AppState) -> None:
         if 0 <= state.selected_midi_index < self.midi_table.rowCount():

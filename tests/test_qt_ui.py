@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFrame,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
@@ -1614,6 +1615,43 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(
             self.window.midi_table.item(0, 1).toolTip(),
             "Library > Album",
+        )
+
+    def test_midi_column_widths_are_resizable_saved_and_scale_aware(self) -> None:
+        self.window.show()
+        self.application.processEvents()
+        header = self.window.midi_table.horizontalHeader()
+
+        for column in range(4):
+            with self.subTest(column=column):
+                self.assertEqual(
+                    header.sectionResizeMode(column),
+                    QHeaderView.ResizeMode.Interactive,
+                )
+
+        header.resizeSection(1, 240)
+        self.application.processEvents()
+        self.assertEqual(
+            self.controller.state.midi_column_widths,
+            (630, 240, 80, 90),
+        )
+        self.assertEqual(
+            self.controller.current_settings().midi_column_widths,
+            (630, 240, 80, 90),
+        )
+
+        self.controller.set_option("ui_scale_percent", 200)
+        self.application.processEvents()
+        self.assertEqual(
+            [self.window.midi_table.columnWidth(column) for column in range(4)],
+            [1260, 480, 160, 180],
+        )
+
+        header.resizeSection(2, 200)
+        self.application.processEvents()
+        self.assertEqual(
+            self.controller.state.midi_column_widths,
+            (630, 240, 100, 90),
         )
 
     def test_clicking_playback_position_seeks_to_clicked_value(self) -> None:

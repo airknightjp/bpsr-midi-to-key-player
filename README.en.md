@@ -18,6 +18,7 @@ The `_internal` folder contains files required by the application. Do not move t
 
 - Recursively load `.mid` and `.midi` files from the selected folder and all subfolders.
 - Show name, folder hierarchy, duration, and note range in the MIDI list. Folder hierarchy uses the `Parent > Child > Grandchild` format.
+- Resize each MIDI-list column by dragging its header boundary and save the adjusted widths.
 - Double-click a MIDI file to play or stop MIDI sound playback.
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.

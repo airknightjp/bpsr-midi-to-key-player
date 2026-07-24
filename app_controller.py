@@ -37,6 +37,7 @@ from config import (
     normalized_key_bindings,
     normalize_special_binding,
     normalize_input_conversion_mode,
+    normalize_midi_column_widths,
     normalize_panel_order,
     normalize_section_visibility,
     normalize_sound_playback_mode,
@@ -138,6 +139,9 @@ class AppController:
             ui_scale_percent=self._normalize_ui_scale(self.settings.ui_scale_percent),
             window_width=max(1, self.settings.window_width),
             window_height=max(1, self.settings.window_height),
+            midi_column_widths=normalize_midi_column_widths(
+                self.settings.midi_column_widths
+            ),
             midi_input_device=self.settings.midi_input_device,
             input_conversion_mode=normalize_input_conversion_mode(
                 self.settings.input_conversion_mode
@@ -1267,6 +1271,13 @@ class AppController:
     def request_save(self) -> None:
         self._settings_dirty = True
 
+    def set_midi_column_widths(self, widths: object) -> None:
+        normalized = normalize_midi_column_widths(widths)
+        if normalized == self.state.midi_column_widths:
+            return
+        self.state.midi_column_widths = normalized
+        self.request_save()
+
     def record_update_check(self, checked_at: int) -> bool:
         self.last_update_check_at = max(0, int(checked_at))
         return self.save_settings_now()
@@ -1318,6 +1329,9 @@ class AppController:
             ui_scale_percent=self.state.ui_scale_percent,
             window_width=self.state.window_width,
             window_height=self.state.window_height,
+            midi_column_widths=normalize_midi_column_widths(
+                self.state.midi_column_widths
+            ),
             last_midi_folder=self.last_midi_folder,
             keyboard_play_shortcut=self.state.keyboard_play_shortcut,
             keyboard_pause_shortcut=self.state.keyboard_pause_shortcut,

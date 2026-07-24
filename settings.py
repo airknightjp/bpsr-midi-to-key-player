@@ -13,6 +13,7 @@ from config import (
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
+    DEFAULT_MIDI_COLUMN_WIDTHS,
     DEFAULT_PANEL_ORDER,
     DEFAULT_SECTION_VISIBILITY,
     DEFAULT_SOUND_PLAYBACK_MODE,
@@ -23,6 +24,7 @@ from config import (
     normalized_key_bindings,
     normalize_special_binding,
     normalize_input_conversion_mode,
+    normalize_midi_column_widths,
     normalize_panel_order,
     normalize_section_visibility,
     normalize_sound_playback_mode,
@@ -69,6 +71,7 @@ class AppSettings:
     ui_scale_percent: int = 100
     window_width: int = 900
     window_height: int = 560
+    midi_column_widths: tuple[int, int, int, int] = DEFAULT_MIDI_COLUMN_WIDTHS
     last_midi_folder: str = ""
     keyboard_play_shortcut: str = DEFAULT_KEYBOARD_PLAY_SHORTCUT
     keyboard_pause_shortcut: str = DEFAULT_KEYBOARD_PAUSE_SHORTCUT
@@ -202,6 +205,9 @@ def load_settings() -> AppSettings:
         ui_scale_percent=_clamp_int(data.get("ui_scale_percent"), minimum=100, maximum=200, default=100),
         window_width=_clamp_int(data.get("window_width"), minimum=1, maximum=10000, default=900),
         window_height=_clamp_int(data.get("window_height"), minimum=1, maximum=2000, default=560),
+        midi_column_widths=normalize_midi_column_widths(
+            data.get("midi_column_widths")
+        ),
         last_midi_folder=_parse_str(data.get("last_midi_folder")),
         keyboard_play_shortcut=keyboard_shortcuts[0],
         keyboard_pause_shortcut=keyboard_shortcuts[1],
@@ -268,6 +274,9 @@ def save_settings(settings: AppSettings) -> None:
             "ui_scale_percent": settings.ui_scale_percent,
             "window_width": settings.window_width,
             "window_height": settings.window_height,
+            "midi_column_widths": list(
+                normalize_midi_column_widths(settings.midi_column_widths)
+            ),
             "last_midi_folder": settings.last_midi_folder,
             "keyboard_play_shortcut": settings.keyboard_play_shortcut,
             "keyboard_pause_shortcut": settings.keyboard_pause_shortcut,

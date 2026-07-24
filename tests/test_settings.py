@@ -25,6 +25,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.ui_scale_percent, 100)
         self.assertEqual(settings.window_width, 900)
+        self.assertEqual(settings.midi_column_widths, (630, 180, 80, 90))
         self.assertEqual(settings.keyboard_play_shortcut, "F9")
         self.assertEqual(settings.keyboard_pause_shortcut, "F10")
         self.assertEqual(settings.keyboard_stop_shortcut, "F11")
@@ -90,6 +91,7 @@ class SettingsTests(unittest.TestCase):
                     ui_scale_percent=150,
                     window_width=1280,
                     window_height=720,
+                    midi_column_widths=(720, 240, 96, 108),
                     last_midi_folder=str(settings_dir / "midis"),
                     keyboard_play_shortcut="Ctrl+P",
                     keyboard_pause_shortcut="Ctrl+R",
@@ -134,6 +136,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.ui_scale_percent, 150)
         self.assertEqual(loaded.window_width, 1280)
         self.assertEqual(loaded.window_height, 720)
+        self.assertEqual(loaded.midi_column_widths, (720, 240, 96, 108))
         self.assertTrue(loaded.countdown_sound)
         self.assertTrue(loaded.game_countdown_sound)
         self.assertTrue(loaded.auto_fit_note_range)
@@ -178,6 +181,23 @@ class SettingsTests(unittest.TestCase):
             "device|48000|2|Float",
         )
         self.assertEqual(loaded.last_update_check_at, 1_789_123_456)
+
+    def test_midi_column_widths_are_clamped_or_reset_when_loaded(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            settings_path = settings_dir / "settings.json"
+            settings_path.write_text(
+                '{"midi_column_widths":[10,180,80,5000]}',
+                encoding="utf-8",
+            )
+            clamped = load_settings()
+            settings_path.write_text(
+                '{"midi_column_widths":[630,180]}',
+                encoding="utf-8",
+            )
+            reset = load_settings()
+
+        self.assertEqual(clamped.midi_column_widths, (40, 180, 80, 2000))
+        self.assertEqual(reset.midi_column_widths, (630, 180, 80, 90))
 
     def test_invalid_qt_value_and_legacy_retest_date_are_discarded(self) -> None:
         with isolated_settings_directory() as settings_dir:
