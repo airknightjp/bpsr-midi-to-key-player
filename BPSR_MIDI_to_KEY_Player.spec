@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets\\app_icon_whale.ico', 'assets'), ('assets\\app_icon_whale.png', 'assets'), ('assets\\whale_slider_frame_0.png', 'assets'), ('assets\\whale_slider_frame_1.png', 'assets'), ('assets\\whale_slider_frame_2.png', 'assets'), ('assets\\check_white.svg', 'assets')],
+    datas=[('assets\\app_icon_whale.ico', 'assets'), ('assets\\app_icon_whale.png', 'assets'), ('assets\\whale_slider_frame_0.png', 'assets'), ('assets\\whale_slider_frame_1.png', 'assets'), ('assets\\whale_slider_frame_2.png', 'assets'), ('assets\\check_white.svg', 'assets'), ('qml', 'qml')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

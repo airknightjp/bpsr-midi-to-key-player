@@ -39,13 +39,12 @@ from note_visualization import PianoRollNote
 from qt_main_window import KeyBindingsDialog, MidiMainWindow
 from qt_components import (
     ContentPanel,
-    FallingNotesWidget,
     InteractiveIconButton,
-    PianoKeyboardWidget,
     ThemedBackground,
     TrackChannelButton,
     make_feature_icon,
 )
+from qt_quick_visuals import FallingNotesWidget, PianoKeyboardWidget
 from qt_styles import THEMES, build_stylesheet
 from settings import AppSettings
 from update_service import AvailableUpdate, ReleaseAsset
@@ -2864,24 +2863,15 @@ class QtUiTests(unittest.TestCase):
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.0, 100, False)
+        roll.set_playback_state(0.0, 100, False)
         roll.show()
-        self.application.processEvents()
-        with patch.object(
-            roll,
-            "_draw_note_span",
-            wraps=roll._draw_note_span,
-        ) as draw_span:
-            roll.grab()
+        QTest.qWait(40)
 
-        draw_span.assert_called_once()
-        top = draw_span.call_args.args[3]
-        bottom = draw_span.call_args.args[4]
-        self.assertAlmostEqual(
-            bottom - top,
-            (0.75 - 0.25) / roll.PREVIEW_SECONDS * (roll.height() - 1),
+        self.assertEqual(
+            roll._bridge.visibleNotes,
+            [{"start": 0.25, "end": 0.75, "note": 60}],
         )
+        self.assertEqual(roll.status(), roll.Status.Ready)
         roll.close()
 
     def test_falling_notes_queries_only_the_visible_time_window(self) -> None:
@@ -2977,24 +2967,15 @@ class QtUiTests(unittest.TestCase):
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.show()
-        self.application.processEvents()
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-        roll._animation_timer.stop()
+        QTest.qWait(40)
+        before = roll.grab().toImage()
 
-        with patch(
-            "qt_components.time.monotonic",
-            return_value=10.05,
-        ), patch.object(
-            roll,
-            "_draw_impact_burst",
-            wraps=roll._draw_impact_burst,
-        ) as draw_burst:
-            roll.grab()
+        roll.set_hit_events(((1, 60, "PERFECT", False),))
+        QTest.qWait(40)
+        after = roll.grab().toImage()
 
-        draw_burst.assert_called_once()
-        self.assertTrue(draw_burst.call_args.kwargs["rainbow"])
-        self.assertEqual(draw_burst.call_args.args[5:], (1.5, 17, 2, 7))
+        self.assertEqual(roll._bridge.impacts[0]["judgment"], "PERFECT")
+        self.assertNotEqual(before, after)
         roll.close()
 
     def test_falling_note_ignores_removed_miss_effect(self) -> None:
@@ -3021,74 +3002,30 @@ class QtUiTests(unittest.TestCase):
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 2.0, 60),))
         roll.show()
-        self.application.processEvents()
+        roll.set_playback_state(0.0, 100, False)
+        QTest.qWait(40)
+        approaching = roll.grab().toImage()
 
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.0, 100, False)
-        with patch.object(
-            roll,
-            "_draw_light_bar",
-            wraps=roll._draw_light_bar,
-        ) as approaching_head:
-            roll.grab()
-        self.assertEqual(approaching_head.call_count, 1)
+        roll.set_playback_state(0.5, 100, False)
+        QTest.qWait(40)
+        held = roll.grab().toImage()
 
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.5, 100, False)
-        with patch.object(
-            roll,
-            "_draw_light_bar",
-            wraps=roll._draw_light_bar,
-        ) as held_head, patch.object(
-            roll,
-            "_minimum_note_body_height",
-            wraps=roll._minimum_note_body_height,
-        ) as held_minimum:
-            roll.grab()
-        held_head.assert_not_called()
-        held_minimum.assert_not_called()
+        self.assertNotEqual(approaching, held)
+        self.assertEqual(roll._bridge.position, 0.5)
         roll.close()
 
-    def test_falling_note_assets_are_cached_and_reused(self) -> None:
+    def test_falling_notes_use_qquickwidget_scene_graph(self) -> None:
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.0, 100, False)
+        roll.set_playback_state(0.0, 100, False)
         roll.show()
-        self.application.processEvents()
+        QTest.qWait(40)
 
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.grab()
-        first_body_ids = tuple(
-            sorted(pixmap.cacheKey() for pixmap in roll._note_body_cache.values())
-        )
-        first_bar_ids = tuple(
-            sorted(pixmap.cacheKey() for pixmap in roll._light_bar_cache.values())
-        )
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.grab()
-
-        self.assertTrue(first_body_ids)
-        self.assertTrue(first_bar_ids)
-        self.assertEqual(
-            first_body_ids,
-            tuple(
-                sorted(
-                    pixmap.cacheKey()
-                    for pixmap in roll._note_body_cache.values()
-                )
-            ),
-        )
-        self.assertEqual(
-            first_bar_ids,
-            tuple(
-                sorted(
-                    pixmap.cacheKey()
-                    for pixmap in roll._light_bar_cache.values()
-                )
-            ),
-        )
+        self.assertEqual(roll.status(), roll.Status.Ready)
+        self.assertNotEqual(roll.graphics_api_name, "Unknown")
+        self.assertFalse(hasattr(roll, "_note_body_cache"))
+        self.assertFalse(roll.grab().isNull())
         roll.close()
 
     def test_falling_note_assets_preserve_subpixel_vertical_motion(self) -> None:
@@ -3098,11 +3035,12 @@ class QtUiTests(unittest.TestCase):
         roll.show()
         self.application.processEvents()
 
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.0, 100, False)
-            first = roll.grab().toImage()
-            roll.set_playback_state(0.005, 100, False)
-            second = roll.grab().toImage()
+        roll.set_playback_state(0.0, 100, False)
+        QTest.qWait(40)
+        first = roll.grab().toImage()
+        roll.set_playback_state(0.005, 100, False)
+        QTest.qWait(40)
+        second = roll.grab().toImage()
 
         self.assertTrue(
             any(
@@ -3129,23 +3067,16 @@ class QtUiTests(unittest.TestCase):
 
         update.assert_not_called()
 
-    def test_falling_note_trail_uses_the_strengthened_opacity(self) -> None:
-        self.assertEqual(
-            FallingNotesWidget.APPROACHING_TRAIL_GLOW_STOPS,
-            ((0.0, 0), (0.55, 31), (1.0, 120)),
-        )
-        self.assertEqual(
-            FallingNotesWidget.APPROACHING_TRAIL_CORE_STOPS,
-            ((0.0, 16), (0.62, 189), (1.0, 255)),
-        )
-        self.assertEqual(
-            FallingNotesWidget.HELD_TRAIL_GLOW_STOPS,
-            ((0.0, 0), (0.60, 31), (0.88, 57), (1.0, 0)),
-        )
-        self.assertEqual(
-            FallingNotesWidget.HELD_TRAIL_CORE_STOPS,
-            ((0.0, 16), (0.58, 189), (0.88, 150), (1.0, 0)),
-        )
+    def test_falling_note_trail_is_rendered_by_qml(self) -> None:
+        qml = (
+            Path(qt_main_window.__file__).resolve().parent
+            / "qml"
+            / "FallingNotes.qml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("fallingNotesBridge.visibleNotes", qml)
+        self.assertIn("GradientStop", qml)
+        self.assertIn("parent.parent.approaching ? 0.47", qml)
 
     def test_short_notes_receive_only_a_visual_minimum_pixel_length(self) -> None:
         roll = FallingNotesWidget()
@@ -3277,7 +3208,7 @@ class QtUiTests(unittest.TestCase):
 
         keyboard.set_used_note_range((48, 72))
         roll.set_used_note_range((48, 72))
-        self.application.processEvents()
+        QTest.qWait(40)
         keyboard_ranged = keyboard.grab().toImage()
         roll_ranged = roll.grab().toImage()
 
@@ -3328,11 +3259,11 @@ class QtUiTests(unittest.TestCase):
         keyboard = PianoKeyboardWidget()
         keyboard.resize(420, 76)
         keyboard.show()
-        self.application.processEvents()
+        QTest.qWait(40)
         released = keyboard.grab().toImage()
 
         keyboard.set_active_notes((48,))
-        self.application.processEvents()
+        QTest.qWait(40)
         pressed = keyboard.grab().toImage()
 
         white_notes = [
@@ -3347,16 +3278,17 @@ class QtUiTests(unittest.TestCase):
 
     def test_three_octave_keyboard_visibly_releases_and_represses_a_retriggered_key(self) -> None:
         keyboard = PianoKeyboardWidget()
+        keyboard.resize(420, 57)
         keyboard.show()
-        self.application.processEvents()
+        QTest.qWait(40)
         released = keyboard.grab().toImage()
 
         keyboard.set_active_notes((48,))
-        self.application.processEvents()
+        QTest.qWait(40)
         held = keyboard.grab().toImage()
 
         keyboard.set_retrigger_events(((48, 1),))
-        self.application.processEvents()
+        QTest.qWait(20)
         visually_released = keyboard.grab().toImage()
 
         self.assertEqual(
@@ -3386,16 +3318,17 @@ class QtUiTests(unittest.TestCase):
 
     def test_three_octave_keyboard_retriggers_every_note_in_a_chord(self) -> None:
         keyboard = PianoKeyboardWidget()
+        keyboard.resize(420, 57)
         keyboard.show()
-        self.application.processEvents()
+        QTest.qWait(40)
         released = keyboard.grab().toImage()
 
         notes = (48, 52, 55)
         keyboard.set_active_notes(notes)
-        self.application.processEvents()
+        QTest.qWait(40)
         held = keyboard.grab().toImage()
         keyboard.set_retrigger_events(((48, 1), (52, 2), (55, 3)))
-        self.application.processEvents()
+        QTest.qWait(20)
         visually_released = keyboard.grab().toImage()
 
         white_notes = [

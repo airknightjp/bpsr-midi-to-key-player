@@ -58,12 +58,10 @@ from note_visualization import build_output_note_range, build_piano_roll_notes
 from qt_components import (
     ColumnSeparatorHeaderView,
     ContentPanel,
-    FallingNotesWidget,
     InteractiveIconButton,
     KnobValueControl,
     PanelDragHandle,
     PanelInsertionIndicator,
-    PianoKeyboardWidget,
     SeekSlider,
     ShortcutCaptureEdit,
     ThemedBackground,
@@ -72,6 +70,7 @@ from qt_components import (
     make_refresh_icon,
     make_transport_icon,
 )
+from qt_quick_visuals import FallingNotesWidget, PianoKeyboardWidget
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 from update_service import (
     AvailableUpdate,
