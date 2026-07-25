@@ -71,6 +71,8 @@ $ArgsList = @(
     "assets\check_white.svg;assets",
     "--add-data",
     "qml;qml",
+    "--additional-hooks-dir",
+    "hooks",
     "--name",
     "BPSR_MIDI_to_KEY_Player",
     "main.py"

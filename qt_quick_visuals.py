@@ -25,6 +25,14 @@ def _color_name(value: str | QColor) -> str:
     return QColor(value).name(QColor.NameFormat.HexArgb)
 
 
+def _load_qml(widget: QQuickWidget, relative: str) -> None:
+    widget.setSource(QUrl.fromLocalFile(str(_resource_path(relative))))
+    if widget.status() != QQuickWidget.Status.Error:
+        return
+    messages = "\n".join(error.toString() for error in widget.errors())
+    raise RuntimeError(f"Failed to load {relative}:\n{messages}")
+
+
 class _KeyboardBridge(QObject):
     activeNotesChanged = Signal()
     releasedNotesChanged = Signal()
@@ -193,7 +201,7 @@ class PianoKeyboardWidget(QQuickWidget):
         self._rendering_enabled = True
         self._bridge = _KeyboardBridge()
         self.rootContext().setContextProperty("keyboardBridge", self._bridge)
-        self.setSource(QUrl.fromLocalFile(str(_resource_path("qml/PianoKeyboard.qml"))))
+        _load_qml(self, "qml/PianoKeyboard.qml")
         self._retrigger_timer = QTimer(self)
         self._retrigger_timer.setInterval(16)
         self._retrigger_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -605,7 +613,7 @@ class FallingNotesWidget(QQuickWidget):
         self._rendering_enabled = True
         self._bridge = _FallingNotesBridge()
         self.rootContext().setContextProperty("fallingNotesBridge", self._bridge)
-        self.setSource(QUrl.fromLocalFile(str(_resource_path("qml/FallingNotes.qml"))))
+        _load_qml(self, "qml/FallingNotes.qml")
         self._animation_timer = QTimer(self)
         self._animation_timer.setInterval(100)
         self._animation_timer.setTimerType(Qt.TimerType.PreciseTimer)

@@ -88,6 +88,7 @@ Item {
     Repeater {
         model: fallingNotesBridge.impacts
         delegate: Item {
+            id: impactDelegate
             required property var modelData
             readonly property int note: Number(modelData.note)
             readonly property string judgment: String(modelData.judgment)
@@ -128,32 +129,32 @@ Item {
             }
 
             Repeater {
-                model: parent.rayCount
+                model: impactDelegate.rayCount
                 delegate: Rectangle {
                     required property int index
                     readonly property real angle: 195
-                        + (parent.rayCount <= 1
+                        + (impactDelegate.rayCount <= 1
                            ? 75
-                           : 150 * index / (parent.rayCount - 1))
+                           : 150 * index / (impactDelegate.rayCount - 1))
                     readonly property real distance: (
-                        5 + 15 * parent.progress
-                    ) * parent.effectScale * parent.keyWidthScale
-                    x: parent.width / 2
+                        5 + 15 * impactDelegate.progress
+                    ) * impactDelegate.effectScale * impactDelegate.keyWidthScale
+                    x: impactDelegate.width / 2
                         + Math.cos(angle * Math.PI / 180) * distance
                     y: Math.sin(angle * Math.PI / 180) * distance
-                    width: Math.max(1, 1.4 * parent.effectScale)
-                    height: Math.max(3, 7 * parent.effectScale)
+                    width: Math.max(1, 1.4 * impactDelegate.effectScale)
+                    height: Math.max(3, 7 * impactDelegate.effectScale)
                     radius: width / 2
                     rotation: angle - 90
-                    color: parent.judgment === "PERFECT"
+                    color: impactDelegate.judgment === "PERFECT"
                            ? Qt.hsla(
-                                 (index / Math.max(1, parent.rayCount)
-                                  + parent.progress * 0.22) % 1.0,
+                                 (index / Math.max(1, impactDelegate.rayCount)
+                                  + impactDelegate.progress * 0.22) % 1.0,
                                  0.92,
                                  0.62,
                                  1.0
                              )
-                           : root.impactColor(parent.judgment)
+                           : root.impactColor(impactDelegate.judgment)
                 }
             }
         }
@@ -217,6 +218,7 @@ Item {
     Repeater {
         model: fallingNotesBridge.visibleNotes
         delegate: Item {
+            id: noteDelegate
             required property var modelData
             readonly property int note: Number(modelData.note)
             readonly property real noteStart: Number(modelData.start)
@@ -258,7 +260,7 @@ Item {
                         color: Qt.rgba(0, 0, 0, 0)
                     }
                     GradientStop {
-                        position: parent.parent.approaching ? 0.55 : 0.60
+                        position: noteDelegate.approaching ? 0.55 : 0.60
                         color: Qt.rgba(
                             fallingNotesBridge.scheduledColor.r,
                             fallingNotesBridge.scheduledColor.g,
@@ -272,7 +274,7 @@ Item {
                             fallingNotesBridge.scheduledColor.r,
                             fallingNotesBridge.scheduledColor.g,
                             fallingNotesBridge.scheduledColor.b,
-                            parent.parent.approaching ? 0.47 : 0.0
+                            noteDelegate.approaching ? 0.47 : 0.0
                         )
                     }
                 }
@@ -298,7 +300,7 @@ Item {
                             1,
                             1,
                             1,
-                            parent.parent.approaching ? 1.0 : 0.0
+                            noteDelegate.approaching ? 1.0 : 0.0
                         )
                     }
                 }

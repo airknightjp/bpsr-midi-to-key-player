@@ -2943,7 +2943,7 @@ class QtUiTests(unittest.TestCase):
     def test_falling_note_hit_events_restore_burst_and_lane_effects(self) -> None:
         roll = FallingNotesWidget()
 
-        with patch("qt_components.time.monotonic", return_value=10.0):
+        with patch("qt_quick_visuals.time.monotonic", return_value=10.0):
             roll.set_hit_events(
                 (
                     (1, 60, "PERFECT", False),
@@ -2957,7 +2957,7 @@ class QtUiTests(unittest.TestCase):
             roll.held_lane_notes,
             frozenset((60, 62, 64)),
         )
-        with patch("qt_components.time.monotonic", return_value=11.0):
+        with patch("qt_quick_visuals.time.monotonic", return_value=11.0):
             roll.set_hit_events(((4, 60, "PERFECT", True),))
         self.assertNotIn(60, roll.held_lane_notes)
         self.assertEqual(roll.lane_fade_count, 1)
@@ -3055,12 +3055,12 @@ class QtUiTests(unittest.TestCase):
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        with patch("qt_components.time.monotonic", return_value=10.0):
+        with patch("qt_quick_visuals.time.monotonic", return_value=10.0):
             roll.set_playback_state(0.0, 100, True)
         roll._animation_timer.stop()
 
         with patch.object(roll, "update") as update, patch(
-            "qt_components.time.monotonic",
+            "qt_quick_visuals.time.monotonic",
             return_value=10.01,
         ):
             roll.set_playback_state(0.01, 100, True)
@@ -3076,7 +3076,7 @@ class QtUiTests(unittest.TestCase):
 
         self.assertIn("fallingNotesBridge.visibleNotes", qml)
         self.assertIn("GradientStop", qml)
-        self.assertIn("parent.parent.approaching ? 0.47", qml)
+        self.assertIn("noteDelegate.approaching ? 0.47", qml)
 
     def test_short_notes_receive_only_a_visual_minimum_pixel_length(self) -> None:
         roll = FallingNotesWidget()
