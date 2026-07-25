@@ -13,8 +13,12 @@ import time
 from pathlib import Path
 
 import numpy as np
-import soundcard as sc
 from PySide6.QtCore import QCoreApplication, QTimer
+
+try:
+    import soundcard as sc
+except ModuleNotFoundError:
+    sc = None
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -39,6 +43,12 @@ def main() -> int:
         help="Record the same sustained chord without changing the Qt queue.",
     )
     args = parser.parse_args()
+    if sc is None:
+        print(
+            "SoundCard is required. Install requirements-test.txt first.",
+            file=sys.stderr,
+        )
+        return 2
     speaker = sc.default_speaker()
     microphone = sc.get_microphone(
         speaker.name,

@@ -10,7 +10,6 @@ from PySide6.QtCore import (
     QMimeData,
     QPoint,
     QPointF,
-    QRect,
     QRectF,
     QSize,
     Qt,
@@ -35,7 +34,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -43,7 +41,6 @@ from PySide6.QtWidgets import (
     QDial,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QStyle,
     QStyleOptionSlider,
     QTableWidget,
@@ -1149,7 +1146,6 @@ class _RhythmLaneFade:
     serial: int
     note: int
     started_at: float
-    missed: bool
 
 
 class FallingNotesWidget(QWidget):
@@ -1157,7 +1153,6 @@ class FallingNotesWidget(QWidget):
     NOTE_MAX = PIANO_NOTE_MAX
     BASE_HEIGHT = PianoKeyboardWidget.BASE_HEIGHT
     PREVIEW_SECONDS = 1.0
-    IMPACT_SECONDS = 0.24
     IMPACT_DURATION_SECONDS = {
         "PERFECT": 0.24,
         "GREAT": 0.18,
@@ -1172,8 +1167,6 @@ class FallingNotesWidget(QWidget):
     RELEASE_IMPACT_PARTICLE_SCALE = 0.50
     LANE_FADE_SECONDS = 0.15
     HELD_LANE_OPACITY = 0.28
-    MISSED_LANE_OPACITY = 0.60
-    MISSED_LANE_COLOR = "#ff3158"
     APPROACHING_TRAIL_GLOW_STOPS = ((0.0, 0), (0.55, 31), (1.0, 120))
     APPROACHING_TRAIL_CORE_STOPS = ((0.0, 16), (0.62, 189), (1.0, 255))
     HELD_TRAIL_GLOW_STOPS = ((0.0, 0), (0.60, 31), (0.88, 57), (1.0, 0))
@@ -1206,10 +1199,6 @@ class FallingNotesWidget(QWidget):
         self._frame_position = 0.0
         self._frame_visible_notes: tuple[PianoRollNote, ...] = ()
         self._frame_visible_lanes: frozenset[int] = frozenset()
-        self._score = 0
-        self._combo = 0
-        self._judgment = ""
-        self._multiplier_tenths = 10
         self._hit_impacts: list[_RhythmHitImpact] = []
         self._held_lane_counts: dict[int, int] = {}
         self._lane_fades: list[_RhythmLaneFade] = []
@@ -1223,15 +1212,12 @@ class FallingNotesWidget(QWidget):
         self._static_layer: QPixmap | None = None
         self._grid_layer: QPixmap | None = None
         self._frame_layer: QPixmap | None = None
-        self._score_layer: QPixmap | None = None
-        self._score_layer_position = QPoint()
         self._note_rect_cache_width = -1.0
         self._note_rect_cache: dict[int, tuple[float, float]] = {}
         self._note_body_cache: dict[tuple[object, ...], QPixmap] = {}
         self._light_bar_cache: dict[tuple[object, ...], QPixmap] = {}
         self._impact_cache: dict[tuple[object, ...], QPixmap] = {}
         self._pending_effect_notes: set[int] = set()
-        self._score_update_pending = False
         self._animation_timer = QTimer(self)
         self._animation_timer.setInterval(16)
         self._animation_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -1254,22 +1240,6 @@ class FallingNotesWidget(QWidget):
     @property
     def live_trail_count(self) -> int:
         return 0
-
-    @property
-    def score(self) -> int:
-        return self._score
-
-    @property
-    def combo(self) -> int:
-        return self._combo
-
-    @property
-    def judgment(self) -> str:
-        return self._judgment
-
-    @property
-    def multiplier_tenths(self) -> int:
-        return self._multiplier_tenths
 
     @property
     def hit_impact_count(self) -> int:
@@ -1295,7 +1265,6 @@ class FallingNotesWidget(QWidget):
         self._rendering_enabled = enabled
         self._animation_timer.stop()
         self._pending_effect_notes.clear()
-        self._score_update_pending = False
         self._hit_impacts.clear()
         self._held_lane_counts.clear()
         self._lane_fades.clear()
@@ -1305,11 +1274,11 @@ class FallingNotesWidget(QWidget):
         self._reset_active_sequence_cache()
         if enabled:
             try:
-                serials = []
-                for event in latest_hit_events:  # type: ignore[union-attr]
-                    values = tuple(event)
-                    if values:
-                        serials.append(int(values[0]))
+                serials = [
+                    int(tuple(event)[0])
+                    for event in latest_hit_events  # type: ignore[union-attr]
+                    if tuple(event)
+                ]
                 self._last_hit_serial = max(
                     serials,
                     default=self._last_hit_serial,
@@ -1318,139 +1287,77 @@ class FallingNotesWidget(QWidget):
                 pass
             self.update()
 
-    def set_score(
-        self,
-        score: int,
-        combo: int,
-        judgment: str = "",
-        multiplier_tenths: int = 10,
-    ) -> None:
-        if not self._rendering_enabled:
-            return
-        next_score = max(0, int(score))
-        next_combo = max(0, int(combo))
-        next_judgment = str(judgment).upper()
-        next_multiplier_tenths = max(10, min(20, int(multiplier_tenths)))
-        if (
-            self._score == next_score
-            and self._combo == next_combo
-            and self._judgment == next_judgment
-            and self._multiplier_tenths == next_multiplier_tenths
-        ):
-            return
-        dirty_notes = {
-            impact.note for impact in self._hit_impacts
-        } | set(self._held_lane_counts) | {
-            fade.note for fade in self._lane_fades
-        }
-        self._score = next_score
-        self._combo = next_combo
-        self._judgment = next_judgment
-        self._multiplier_tenths = next_multiplier_tenths
-        if not next_score and not next_combo and not next_judgment:
-            self._hit_impacts.clear()
-            self._held_lane_counts.clear()
-            self._lane_fades.clear()
-            self._update_animation_timer()
-        self._score_layer = None
-        if self._playback_running or self._animation_timer.isActive():
-            self._score_update_pending = True
-            self._pending_effect_notes.update(dirty_notes)
-        else:
-            self.update(self._score_update_rect())
-            self._update_note_lanes(
-                dirty_notes,
-                include_effect_margin=True,
-            )
-
     def set_hit_events(self, events: object) -> None:
         if not self._rendering_enabled:
             return
         try:
-            normalized_events = []
-            for raw_event in events:  # type: ignore[union-attr]
+            source = (
+                events
+                if isinstance(events, (list, tuple))
+                else tuple(events)  # type: ignore[arg-type]
+            )
+            pending: list[tuple[int, int, str, bool]] = []
+            for raw_event in reversed(source):
                 values = tuple(raw_event)
-                if len(values) == 3:
-                    serial, note, judgment = values
-                    released = False
-                elif len(values) == 4:
-                    serial, note, judgment, released = values
-                else:
-                    return
-                normalized_events.append(
+                if len(values) not in {3, 4}:
+                    continue
+                serial = int(values[0])
+                if serial <= self._last_hit_serial:
+                    break
+                pending.append(
                     (
-                        int(serial),
-                        int(note),
-                        str(judgment).upper(),
-                        bool(released),
+                        serial,
+                        int(values[1]),
+                        str(values[2]).upper(),
+                        bool(values[3]) if len(values) == 4 else False,
                     )
                 )
-            normalized = tuple(
-                sorted(normalized_events, key=lambda item: item[0])
-            )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, IndexError):
             return
         now = time.monotonic()
-        changed = False
-        for serial, note, judgment, released in normalized:
-            if serial <= self._last_hit_serial:
-                continue
+        changed_notes: set[int] = set()
+        for serial, note, judgment, released in reversed(pending):
             self._last_hit_serial = serial
-            if not self.NOTE_MIN <= note <= self.NOTE_MAX:
+            if (
+                not self.NOTE_MIN <= note <= self.NOTE_MAX
+                or judgment not in {"PERFECT", "GREAT", "GOOD"}
+            ):
                 continue
-            if judgment == "MISS":
-                if released:
-                    self._release_held_lane(note)
+            if released:
+                self._release_held_lane(note)
                 self._lane_fades.append(
                     _RhythmLaneFade(
                         serial=serial,
                         note=note,
                         started_at=now,
-                        missed=True,
-                    )
-                )
-            elif judgment in {"PERFECT", "GREAT", "GOOD"}:
-                if released:
-                    self._release_held_lane(note)
-                    self._lane_fades.append(
-                        _RhythmLaneFade(
-                            serial=serial,
-                            note=note,
-                            started_at=now,
-                            missed=False,
-                        )
-                    )
-                else:
-                    self._held_lane_counts[note] = (
-                        self._held_lane_counts.get(note, 0) + 1
-                    )
-                self._hit_impacts.append(
-                    _RhythmHitImpact(
-                        serial=serial,
-                        note=note,
-                        started_at=now,
-                        judgment=judgment,
-                        released=released,
                     )
                 )
             else:
-                continue
-            changed = True
-        if changed:
-            self._hit_impacts = self._hit_impacts[-64:]
-            self._lane_fades = self._lane_fades[-64:]
-            self._update_animation_timer()
-            changed_notes = {
-                note
-                for _serial, note, _judgment, _released in normalized
-            }
-            if self._animation_timer.isActive():
-                self._pending_effect_notes.update(changed_notes)
-            else:
-                self._update_note_lanes(
-                    changed_notes,
-                    include_effect_margin=True,
+                self._held_lane_counts[note] = (
+                    self._held_lane_counts.get(note, 0) + 1
                 )
+            self._hit_impacts.append(
+                _RhythmHitImpact(
+                    serial=serial,
+                    note=note,
+                    started_at=now,
+                    judgment=judgment,
+                    released=released,
+                )
+            )
+            changed_notes.add(note)
+        if not changed_notes:
+            return
+        self._hit_impacts = self._hit_impacts[-64:]
+        self._lane_fades = self._lane_fades[-64:]
+        self._update_animation_timer()
+        if self._animation_timer.isActive():
+            self._pending_effect_notes.update(changed_notes)
+        else:
+            self._update_note_lanes(
+                changed_notes,
+                include_effect_margin=True,
+            )
 
     def _release_held_lane(self, note: int) -> None:
         active_count = self._held_lane_counts.get(note, 0)
@@ -1535,7 +1442,10 @@ class FallingNotesWidget(QWidget):
             return
         _ = trigger_events
         try:
-            active = {int(note) for note in active_notes}  # type: ignore[union-attr]
+            active = {
+                int(note)
+                for note in active_notes  # type: ignore[union-attr]
+            }
         except (TypeError, ValueError):
             return
         stale = set(self._held_lane_counts).difference(active)
@@ -1604,10 +1514,10 @@ class FallingNotesWidget(QWidget):
         moving_notes = self._prepare_animation_frame(now)
         self._update_animation_timer()
         self._update_note_lanes(moving_notes)
-        self._update_note_lanes(effect_notes, include_effect_margin=True)
-        if self._score_update_pending:
-            self._score_update_pending = False
-            self.update(self._score_update_rect())
+        self._update_note_lanes(
+            effect_notes,
+            include_effect_margin=True,
+        )
 
     def _update_animation_timer(self) -> None:
         should_run = (
@@ -1670,7 +1580,6 @@ class FallingNotesWidget(QWidget):
         self._static_layer = None
         self._grid_layer = None
         self._frame_layer = None
-        self._score_layer = None
         self._note_body_cache.clear()
         self._light_bar_cache.clear()
         self._impact_cache.clear()
@@ -1790,62 +1699,6 @@ class FallingNotesWidget(QWidget):
                     float(self.height()),
                 ).toAlignedRect()
             )
-
-    def _score_update_rect(self) -> QRect:
-        height = max(1, round(18 * self._scale))
-        return QRect(0, 0, max(1, self.width()), min(self.height(), height))
-
-    def _ensure_score_layer(self) -> tuple[QPixmap, QPoint]:
-        if self._score_layer is not None:
-            return self._score_layer, self._score_layer_position
-        score_font = self.font()
-        score_font.setBold(True)
-        score_font.setPixelSize(max(8, round(9 * self._scale)))
-        metrics = QFontMetricsF(score_font)
-        score_text = self._score_text()
-        padding = max(2, round(4 * self._scale))
-        text_width = max(1, round(metrics.horizontalAdvance(score_text)))
-        text_height = max(1, round(metrics.height()))
-        layer = QPixmap(text_width + padding * 2, text_height + padding)
-        layer.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(layer)
-        painter.setFont(score_font)
-        dark_surface = self._surface.lightness() < 128
-        shadow = (
-            QColor(0, 0, 0, 150)
-            if dark_surface
-            else QColor(255, 255, 255, 190)
-        )
-        score_color = (
-            QColor(255, 255, 255)
-            if dark_surface
-            else QColor(self._border).darker(190)
-        )
-        text_rect = QRectF(
-            float(padding),
-            0.0,
-            float(text_width),
-            float(text_height + padding),
-        )
-        painter.setPen(shadow)
-        painter.drawText(
-            text_rect.translated(1.0 * self._scale, 1.0 * self._scale),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
-            score_text,
-        )
-        painter.setPen(score_color)
-        painter.drawText(
-            text_rect,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
-            score_text,
-        )
-        painter.end()
-        self._score_layer = layer
-        self._score_layer_position = QPoint(
-            max(0, self.width() - layer.width() - padding),
-            max(0, round(2 * self._scale)),
-        )
-        return layer, self._score_layer_position
 
     @staticmethod
     def _region_intersects_lane(
@@ -2634,7 +2487,11 @@ class FallingNotesWidget(QWidget):
         painter.restore()
 
     @staticmethod
-    def _rainbow_impact_color(index: int, count: int, progress: float) -> QColor:
+    def _rainbow_impact_color(
+        index: int,
+        count: int,
+        progress: float,
+    ) -> QColor:
         count = max(1, int(count))
         hue = round(
             (int(index) % count) * 360.0 / count
@@ -2699,17 +2556,6 @@ class FallingNotesWidget(QWidget):
         painter.setBrush(gradient)
         painter.drawRect(QRectF(x, 0.5, note_width, height))
         painter.restore()
-
-    def _score_text(self) -> str:
-        judgment_prefix = (
-            f"{self._judgment}   "
-            if self._judgment and self._judgment != "MISS"
-            else ""
-        )
-        return (
-            f"{judgment_prefix}SCORE {self._score:06d}   "
-            f"COMBO {self._combo}   x{self._multiplier_tenths / 10:.1f}"
-        )
 
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().paintEvent(event)
@@ -2818,23 +2664,13 @@ class FallingNotesWidget(QWidget):
             ):
                 continue
             progress = elapsed / self.LANE_FADE_SECONDS
-            base_opacity = (
-                self.MISSED_LANE_OPACITY
-                if fade.missed
-                else self.HELD_LANE_OPACITY
-            )
-            color = (
-                QColor(self.MISSED_LANE_COLOR)
-                if fade.missed
-                else QColor(self._live)
-            )
             self._draw_lane_glow(
                 painter,
                 x,
                 note_width,
                 height,
-                color,
-                base_opacity * (1.0 - progress) ** 2,
+                QColor(self._live),
+                self.HELD_LANE_OPACITY * (1.0 - progress) ** 2,
             )
 
         if self._grid_layer is not None:
@@ -2872,8 +2708,6 @@ class FallingNotesWidget(QWidget):
 
         if self._frame_layer is not None:
             painter.drawPixmap(0, 0, self._frame_layer)
-        score_layer, score_position = self._ensure_score_layer()
-        painter.drawPixmap(score_position, score_layer)
         painter.end()
 
 
@@ -3463,39 +3297,6 @@ class SeekSlider(PositionSlider):
         super().mouseReleaseEvent(event)
 
 
-class ReadableSpinBox(QSpinBox):
-    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = self.palette().color(self.foregroundRole())
-        pen = QPen(color, max(1.0, self.height() / 24), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        center_x = self.width() - max(5, round(self.height() * 0.28))
-        half_width = max(2, round(self.height() * 0.10))
-        rise = max(1, round(self.height() * 0.06))
-        upper_y = round(self.height() * 0.28)
-        lower_y = round(self.height() * 0.72)
-        painter.drawPolyline(
-            QPolygonF(
-                [
-                    QPointF(center_x - half_width, upper_y + rise),
-                    QPointF(center_x, upper_y - rise),
-                    QPointF(center_x + half_width, upper_y + rise),
-                ]
-            )
-        )
-        painter.drawPolyline(
-            QPolygonF(
-                [
-                    QPointF(center_x - half_width, lower_y - rise),
-                    QPointF(center_x, lower_y + rise),
-                    QPointF(center_x + half_width, lower_y - rise),
-                ]
-            )
-        )
-
-
 def _draw_text_centered_in_circle(
     painter: QPainter,
     circle: QRectF,
@@ -3601,6 +3402,77 @@ class ColumnSeparatorHeaderView(QHeaderView):
     ) -> None:
         super().__init__(orientation, parent)
         self._separator_color = QColor("#c4ccd6")
+        self._left_resizable_section = -1
+        self._left_resize_origin_x = 0
+        self._left_resize_origin_width = 0
+
+    def set_left_resizable_section(self, logical_index: int) -> None:
+        self._left_resizable_section = int(logical_index)
+
+    def _is_left_resize_handle(self, x: int) -> bool:
+        logical_index = self._left_resizable_section
+        if not 0 <= logical_index < self.count():
+            return False
+        boundary = self.sectionViewportPosition(logical_index)
+        return abs(int(x) - boundary) <= 5
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._is_left_resize_handle(round(event.position().x()))
+        ):
+            self._left_resize_origin_x = round(event.position().x())
+            self._left_resize_origin_width = self.sectionSize(
+                self._left_resizable_section
+            )
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._left_resize_origin_width > 0:
+            self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+            delta = round(event.position().x()) - self._left_resize_origin_x
+            preceding_visual_index = self.visualIndex(
+                self._left_resizable_section
+            ) - 1
+            preceding_index = self.logicalIndex(preceding_visual_index)
+            available_width = self._left_resize_origin_width
+            if 0 <= preceding_index < self.count():
+                available_width += max(
+                    0,
+                    self.sectionSize(preceding_index)
+                    - self.minimumSectionSize(),
+                )
+            target_width = max(
+                self.minimumSectionSize(),
+                min(available_width, self._left_resize_origin_width - delta),
+            )
+            self.resizeSection(self._left_resizable_section, target_width)
+            event.accept()
+            return
+        if self._is_left_resize_handle(round(event.position().x())):
+            self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+            event.accept()
+            return
+        self.viewport().unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._left_resize_origin_width > 0:
+            self._left_resize_origin_width = 0
+            if self._is_left_resize_handle(round(event.position().x())):
+                self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+            else:
+                self.viewport().unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self._left_resize_origin_width <= 0:
+            self.viewport().unsetCursor()
+        super().leaveEvent(event)
 
     def set_separator_color(self, color: str | QColor) -> None:
         self._separator_color = QColor(color)

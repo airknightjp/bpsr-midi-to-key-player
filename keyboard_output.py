@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
 import time
 from ctypes import wintypes
@@ -102,11 +103,34 @@ class Input(ctypes.Structure):
     ]
 
 
+def foreground_window_belongs_to_current_process() -> bool:
+    user32 = ctypes.windll.user32
+    get_foreground_window = user32.GetForegroundWindow
+    get_foreground_window.restype = wintypes.HWND
+    foreground_window = get_foreground_window()
+    if not foreground_window:
+        return False
+
+    process_id = wintypes.DWORD()
+    get_window_thread_process_id = user32.GetWindowThreadProcessId
+    get_window_thread_process_id.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    get_window_thread_process_id.restype = wintypes.DWORD
+    get_window_thread_process_id(
+        foreground_window,
+        ctypes.byref(process_id),
+    )
+    return process_id.value == os.getpid()
+
+
 class KeyboardOutput:
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
         self._lock = threading.RLock()
         self._pressed: set[str] = set()
+        self._suppressed: set[str] = set()
         self._pressed_at: dict[str, float] = {}
         self._last_released_at: dict[str, float] = {}
 
@@ -123,7 +147,13 @@ class KeyboardOutput:
             if key in self._pressed:
                 return
             self._wait_for_repeat_gap(key)
-            self._send(key, key_up=False)
+            if (
+                not self.dry_run
+                and foreground_window_belongs_to_current_process()
+            ):
+                self._suppressed.add(key)
+            else:
+                self._send(key, key_up=False)
             self._pressed.add(key)
             self._pressed_at[key] = time.perf_counter()
 
@@ -132,7 +162,10 @@ class KeyboardOutput:
             if key not in self._pressed:
                 return
             self._wait_for_minimum_hold(key)
-            self._send(key, key_up=True)
+            if key in self._suppressed:
+                self._suppressed.discard(key)
+            else:
+                self._send(key, key_up=True)
             self._pressed.discard(key)
             self._pressed_at.pop(key, None)
             self._last_released_at[key] = time.perf_counter()

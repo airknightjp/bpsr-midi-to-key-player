@@ -21,29 +21,21 @@ from settings import AppSettings
 class RecordingView:
     def __init__(self) -> None:
         self.states = []
-        self.logs: list[str] = []
+        self.positions: list[tuple[float, float]] = []
         self.messages: list[tuple[str, str, str]] = []
-        self.clear_count = 0
         self.output_release_delays: list[int] = []
-        self.rhythm_score_delays: list[int | None] = []
 
     def render(self, state) -> None:  # type: ignore[no-untyped-def]
         self.states.append(state)
 
-    def append_log(self, message: str) -> None:
-        self.logs.append(message)
-
-    def clear_log(self) -> None:
-        self.clear_count += 1
+    def render_position(self, position: float, duration: float) -> None:
+        self.positions.append((position, duration))
 
     def show_message(self, level: str, title: str, message: str) -> None:
         self.messages.append((level, title, message))
 
     def schedule_output_note_release(self, delay_ms: int) -> None:
         self.output_release_delays.append(delay_ms)
-
-    def schedule_rhythm_score_update(self, delay_ms: int | None) -> None:
-        self.rhythm_score_delays.append(delay_ms)
 
 
 class FakePlayer:
@@ -95,23 +87,94 @@ class AppControllerTests(unittest.TestCase):
     def make_controller(self, **settings) -> AppController:  # type: ignore[no-untyped-def]
         return AppController(AppSettings(**settings))
 
-    def test_controller_has_no_qt_or_tk_dependency(self) -> None:
+    def test_controller_has_no_qt_dependency(self) -> None:
         source = inspect.getsource(app_controller)
         self.assertNotIn("PySide6", source)
-        self.assertNotIn("tkinter", source)
 
     def test_worker_messages_coalesce_event_dispatch_notifications(self) -> None:
         controller = self.make_controller()
         notifications: list[bool] = []
         controller.set_event_notifier(lambda: notifications.append(True))
 
-        controller._queue_worker_message(("log", "first"))
-        controller._queue_worker_message(("log", "second"))
+        generation = controller.position_generation
+        controller._queue_worker_message(("position", 0, generation, 1.0))
+        controller._queue_worker_message(("position", 0, generation, 2.0))
 
         self.assertEqual(notifications, [True])
         controller.process_pending_events()
-        controller._queue_worker_message(("log", "third"))
+        controller._queue_worker_message(("position", 0, generation, 3.0))
         self.assertEqual(notifications, [True, True])
+
+    def test_realtime_timing_emits_great_without_score_state(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 3
+        controller.midi_input_id = 4
+        controller.state.current_mode = "sound"
+        controller.state.midi_input_running = True
+        controller.worker_queue.put(
+            ("sound_output_note", 3, 60, True, 10.0)
+        )
+        controller.worker_queue.put(
+            ("midi_output_note", 4, 60, True, 10.075)
+        )
+
+        controller.process_pending_events()
+
+        self.assertEqual(
+            controller.state.rhythm_hit_events,
+            ((1, 60, "GREAT", False),),
+        )
+        self.assertFalse(hasattr(controller.state, "rhythm_score"))
+        self.assertFalse(hasattr(controller.state, "rhythm_combo"))
+
+    def test_midi_only_and_conversion_events_are_automatic_perfect(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 3
+        controller.state.current_mode = "sound"
+        controller.worker_queue.put(
+            ("sound_output_note", 3, 60, True, 10.0)
+        )
+        controller.worker_queue.put(
+            ("sound_output_note", 3, 60, False, 11.0)
+        )
+
+        controller.process_pending_events()
+
+        self.assertEqual(
+            controller.state.rhythm_hit_events,
+            (
+                (1, 60, "PERFECT", False),
+                (2, 60, "PERFECT", True),
+            ),
+        )
+
+        controller.state.current_mode = "keys"
+        controller.worker_queue.put(
+            ("key_output_note", 3, 64, True, 12.0)
+        )
+        controller.process_pending_events()
+
+        self.assertEqual(
+            controller.state.rhythm_hit_events[-1],
+            (3, 64, "PERFECT", False),
+        )
+
+    def test_unmatched_timing_does_not_emit_miss(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 3
+        controller.midi_input_id = 4
+        controller.state.current_mode = "sound"
+        controller.state.midi_input_running = True
+        controller.worker_queue.put(
+            ("sound_output_note", 3, 60, True, 10.0)
+        )
+        controller.worker_queue.put(
+            ("midi_output_note", 4, 60, True, 10.2)
+        )
+
+        controller.process_pending_events()
+
+        self.assertEqual(controller.state.rhythm_hit_events, ())
 
     def test_seek_discards_queued_positions_from_the_previous_generation(self) -> None:
         controller = self.make_controller()
@@ -129,6 +192,25 @@ class AppControllerTests(unittest.TestCase):
         controller.process_pending_events()
 
         self.assertAlmostEqual(controller.state.position, 90.1)
+
+    def test_worker_position_uses_dedicated_view_update(self) -> None:
+        controller = self.make_controller()
+        view = RecordingView()
+        controller.attach_view(view)
+        view.states.clear()
+        controller.state.duration = 120.0
+        controller.playback_id = 7
+
+        controller.worker_queue.put(
+            ("position", 7, controller.position_generation, 10.0)
+        )
+        controller.worker_queue.put(
+            ("position", 7, controller.position_generation, 10.5)
+        )
+        controller.process_pending_events()
+
+        self.assertEqual(view.states, [])
+        self.assertEqual(view.positions, [(10.5, 120.0)])
 
     def test_settings_are_saved_only_when_controller_shuts_down(self) -> None:
         controller = self.make_controller()
@@ -190,7 +272,9 @@ class AppControllerTests(unittest.TestCase):
     def test_pause_and_resume_keyboard_playback_from_current_position(self) -> None:
         controller = self.make_controller()
         player = FakePlayer()
+        sound_player = FakePlayer()
         controller.player = player
+        controller.sound_player = sound_player
         controller.state.current_mode = "keys"
         controller.state.duration = 60.0
         controller.state.position = 4.0
@@ -199,7 +283,9 @@ class AppControllerTests(unittest.TestCase):
         controller.toggle_keyboard_pause()
 
         self.assertTrue(player.stopped)
+        self.assertTrue(sound_player.stopped)
         self.assertIsNone(controller.player)
+        self.assertIsNone(controller.sound_player)
         self.assertTrue(controller.state.keyboard_paused)
         self.assertEqual(controller.state.position, 12.5)
         self.assertEqual(controller.state.status, "paused")
@@ -211,7 +297,6 @@ class AppControllerTests(unittest.TestCase):
         play_keyboard.assert_called_once_with(
             start_time=12.5,
             countdown=False,
-            reset_rhythm_score=False,
         )
         self.assertIsNone(controller.state.current_mode)
 
@@ -235,7 +320,6 @@ class AppControllerTests(unittest.TestCase):
 
         play_sound.assert_called_once_with(
             start_time=12.5,
-            reset_rhythm_score=False,
         )
         self.assertIsNone(controller.state.current_mode)
 
@@ -361,6 +445,28 @@ class AppControllerTests(unittest.TestCase):
         self.assertIsNone(controller.state.current_mode)
         self.assertEqual(controller.state.position, 0.0)
 
+    def test_midi_file_conversion_restarts_from_zero_during_sound_playback(
+        self,
+    ) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.current_mode = "sound"
+        controller.state.position = 18.5
+
+        with (
+            patch.object(
+                controller,
+                "stop_playback",
+                wraps=controller.stop_playback,
+            ) as stop_playback,
+            patch.object(controller, "play_keyboard") as play_keyboard,
+        ):
+            controller.toggle_input_conversion()
+
+        stop_playback.assert_called_once_with()
+        play_keyboard.assert_called_once_with(start_time=0.0)
+        self.assertIsNone(controller.state.current_mode)
+        self.assertEqual(controller.state.position, 0.0)
+
     def test_start_hotkey_restarts_midi_conversion_while_sound_is_paused(
         self,
     ) -> None:
@@ -452,10 +558,33 @@ class AppControllerTests(unittest.TestCase):
                 play_keyboard.assert_not_called()
                 self.assertTrue(controller.state.midi_input_running)
 
-    def test_input_shortcuts_do_not_affect_active_midi_sound_playback(
+    def test_start_hotkey_restarts_midi_conversion_during_sound_playback(
         self,
     ) -> None:
-        for action in ("play", "pause_resume", "stop"):
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.current_mode = "sound"
+        controller.state.position = 18.5
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with (
+            patch.object(
+                controller,
+                "stop_playback",
+                wraps=controller.stop_playback,
+            ) as stop_playback,
+            patch.object(controller, "play_keyboard") as play_keyboard,
+        ):
+            controller.process_pending_events()
+
+        stop_playback.assert_called_once_with()
+        play_keyboard.assert_called_once_with(start_time=0.0)
+        self.assertIsNone(controller.state.current_mode)
+        self.assertEqual(controller.state.position, 0.0)
+
+    def test_pause_and_end_shortcuts_do_not_affect_active_midi_sound_playback(
+        self,
+    ) -> None:
+        for action in ("pause_resume", "stop"):
             with self.subTest(action=action):
                 controller = self.make_controller(
                     input_conversion_mode="midi_file"
@@ -519,7 +648,6 @@ class AppControllerTests(unittest.TestCase):
         play_keyboard.assert_called_once_with(
             start_time=12.5,
             countdown=False,
-            reset_rhythm_score=False,
         )
 
     def test_end_hotkey_stops_only_midi_file_conversion(self) -> None:
@@ -637,7 +765,6 @@ class AppControllerTests(unittest.TestCase):
         controller.realtime_sound_output = MagicMock()
 
         cases = (
-            ("dry_run", "set_dry_run", ("player", "midi_input_bridge")),
             (
                 "auto_fit_note_range",
                 "set_auto_fit_note_range",
@@ -696,8 +823,18 @@ class AppControllerTests(unittest.TestCase):
                     method = getattr(getattr(controller, target_name), method_name)
                     method.assert_called_once_with(True)
 
-                if option == "dry_run":
-                    controller.realtime_sound_output.set_enabled.assert_called_once_with(True)
+    def test_play_sound_updates_realtime_preview_without_disabling_key_output(
+        self,
+    ) -> None:
+        controller = self.make_controller(play_sound=True)
+        controller.midi_input_bridge = MagicMock()
+        controller.realtime_sound_output = MagicMock()
+
+        controller.set_option("play_sound", False)
+
+        self.assertFalse(controller.state.play_sound)
+        controller.realtime_sound_output.set_enabled.assert_called_once_with(False)
+        controller.midi_input_bridge.set_dry_run.assert_not_called()
 
     def test_sound_source_is_persistent_and_updates_active_outputs(self) -> None:
         controller = self.make_controller()
@@ -727,7 +864,6 @@ class AppControllerTests(unittest.TestCase):
                 "audio_runtime",
                 480,
                 1_024,
-                "Audio runtime automatically adjusted",
             )
         )
         controller.process_pending_events()
@@ -738,11 +874,6 @@ class AppControllerTests(unittest.TestCase):
             controller.current_settings().automatic_audio_buffer_frames,
             1_024,
         )
-        self.assertIn(
-            "Audio runtime automatically adjusted",
-            view.logs,
-        )
-
     def test_learned_qt_minimum_is_persisted_through_settings(self) -> None:
         controller = self.make_controller(
             minimum_stable_qt_frames=1_024,
@@ -796,30 +927,6 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(controller.enabled_sources(), {(0, 0)})
         self.assertTrue(controller.state.track_channels[0].enabled)
         self.assertFalse(controller.state.track_channels[1].enabled)
-
-    def test_track_toggle_enables_or_disables_every_channel_in_the_track(self) -> None:
-        controller = self.make_controller()
-        controller._set_enabled_sources(((0, 0), (1, 0)))
-        controller.state.track_channels = [
-            TrackChannelItem(0, 0, True),
-            TrackChannelItem(0, 1, False),
-            TrackChannelItem(1, 0, True),
-        ]
-
-        controller.toggle_track(0)
-
-        self.assertEqual(
-            controller.enabled_sources(),
-            {(0, 0), (0, 1), (1, 0)},
-        )
-        self.assertTrue(all(item.enabled for item in controller.state.track_channels))
-
-        controller.toggle_track(0)
-
-        self.assertEqual(controller.enabled_sources(), {(1, 0)})
-        self.assertFalse(controller.state.track_channels[0].enabled)
-        self.assertFalse(controller.state.track_channels[1].enabled)
-        self.assertTrue(controller.state.track_channels[2].enabled)
 
     def test_first_folder_load_enables_all_track_channels(self) -> None:
         controller = self.make_controller()
@@ -880,6 +987,74 @@ class AppControllerTests(unittest.TestCase):
         metadata_scan.assert_called_once_with(controller.midi_files)
         select_midi.assert_called_once_with(0)
 
+    def test_reload_reuses_unchanged_midi_rows_without_restarting_metadata(self) -> None:
+        controller = self.make_controller()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first = root / "first.mid"
+            second = root / "second.mid"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            summary = MidiSummary(
+                path=first,
+                duration=1.0,
+                channels=(0,),
+                event_count=1,
+                tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+            )
+            with (
+                patch(
+                    "app_controller.parse_midi",
+                    return_value=([], summary),
+                ) as parse_midi,
+                patch.object(controller, "_start_metadata_scan") as metadata_scan,
+            ):
+                controller.load_midi_folder(root)
+                rows = controller.state.midi_rows
+                metadata_scan.reset_mock()
+
+                controller.reload_midi_folder()
+
+        self.assertIs(controller.state.midi_rows, rows)
+        parse_midi.assert_called_once_with(first)
+        metadata_scan.assert_not_called()
+
+    def test_reload_rebuilds_only_the_modified_midi_row(self) -> None:
+        controller = self.make_controller()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first = root / "first.mid"
+            second = root / "second.mid"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            summary = MidiSummary(
+                path=first,
+                duration=1.0,
+                channels=(0,),
+                event_count=1,
+                tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+            )
+            with (
+                patch("app_controller.parse_midi", return_value=([], summary)),
+                patch.object(controller, "_start_metadata_scan") as metadata_scan,
+            ):
+                controller.load_midi_folder(root)
+                previous_rows = controller.state.midi_rows
+                metadata_scan.reset_mock()
+                second.write_bytes(b"second changed")
+
+                with patch.object(
+                    controller,
+                    "_format_midi_folder",
+                    wraps=controller._format_midi_folder,
+                ) as format_folder:
+                    controller.reload_midi_folder()
+
+        self.assertIs(controller.state.midi_rows[0], previous_rows[0])
+        self.assertIsNot(controller.state.midi_rows[1], previous_rows[1])
+        format_folder.assert_called_once_with(root, second)
+        metadata_scan.assert_called_once_with([second])
+
     def test_removed_duplicate_filename_does_not_select_another_folder(self) -> None:
         controller = self.make_controller()
         controller.midi_files = [
@@ -920,6 +1095,146 @@ class AppControllerTests(unittest.TestCase):
         self.assertTrue(player.kwargs["chord_optimization"])
         self.assertTrue(player.kwargs["repeat_prevention"])
         self.assertEqual(player.play_args[1]["countdown_seconds"], 4)
+
+    def test_keyboard_conversion_uses_regular_sound_player_when_enabled(
+        self,
+    ) -> None:
+        controller = self.make_controller(
+            play_sound=True,
+            midi_sound_volume=67,
+            sound_source="organ",
+        )
+        controller.events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0)
+        ]
+        controller._set_enabled_sources(((0, 0),))
+        keyboard_player = MagicMock()
+        sound_player = MagicMock()
+        sound_player.is_playing = False
+
+        with (
+            patch("app_controller.KeyboardOutput") as output_class,
+            patch(
+                "app_controller.MidiKeyboardPlayer",
+                return_value=keyboard_player,
+            ) as keyboard_player_class,
+            patch(
+                "app_controller.MidiSoundPlayer",
+                return_value=sound_player,
+            ) as sound_player_class,
+        ):
+            controller.play_keyboard(start_time=2.5, countdown=False)
+            keyboard_player_class.call_args.kwargs["on_state"]("playing")
+
+        output_class.assert_called_once_with()
+        sound_player_class.assert_called_once()
+        self.assertEqual(
+            sound_player_class.call_args.kwargs["volume"],
+            67,
+        )
+        self.assertEqual(
+            sound_player_class.call_args.kwargs["sound_source"],
+            "organ",
+        )
+        sound_player.play.assert_called_once_with(
+            controller.events,
+            start_time=2.5,
+        )
+
+    def test_keyboard_conversion_sends_keys_without_sound_when_disabled(
+        self,
+    ) -> None:
+        controller = self.make_controller(play_sound=False)
+        controller.events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0)
+        ]
+        controller._set_enabled_sources(((0, 0),))
+        keyboard_player = MagicMock()
+
+        with (
+            patch("app_controller.KeyboardOutput") as output_class,
+            patch(
+                "app_controller.MidiKeyboardPlayer",
+                return_value=keyboard_player,
+            ),
+            patch("app_controller.MidiSoundPlayer") as sound_player_class,
+        ):
+            controller.play_keyboard(countdown=False)
+
+        output_class.assert_called_once_with()
+        sound_player_class.assert_not_called()
+
+    def test_keyboard_conversion_sound_can_be_toggled_while_running(
+        self,
+    ) -> None:
+        controller = self.make_controller(play_sound=False)
+        controller.events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0)
+        ]
+        controller.player = MagicMock()
+        controller.player.current_position.return_value = 3.25
+        controller.state.current_mode = "keys"
+        sound_player = MagicMock()
+        sound_player.is_playing = False
+
+        with patch(
+            "app_controller.MidiSoundPlayer",
+            return_value=sound_player,
+        ):
+            controller.set_option("play_sound", True)
+            controller.set_option("play_sound", False)
+
+        sound_player.play.assert_called_once_with(
+            controller.events,
+            start_time=3.25,
+        )
+        sound_player.stop.assert_called_once_with()
+        sound_player.wait_until_stopped.assert_called_once_with(timeout=2.0)
+        self.assertIsNone(controller.sound_player)
+
+    def test_keyboard_conversion_end_stops_its_sound_player(self) -> None:
+        controller = self.make_controller(play_sound=True)
+        sound_player = MagicMock()
+        controller.player = MagicMock()
+        controller.sound_player = sound_player
+        controller.state.current_mode = "keys"
+        controller.playback_id = 6
+        controller.worker_queue.put(("key_state", 6, "stopped"))
+
+        controller.process_pending_events()
+
+        sound_player.stop.assert_called_once_with()
+        sound_player.wait_until_stopped.assert_called_once_with(timeout=2.0)
+        self.assertIsNone(controller.sound_player)
+        self.assertIsNone(controller.state.current_mode)
+
+    def test_realtime_conversion_always_sends_keys_and_optionally_plays_sound(
+        self,
+    ) -> None:
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                controller = self.make_controller(play_sound=enabled)
+                controller.midi_input_devices = [(7, "USB MIDI")]
+                controller.state.midi_input_device = "USB MIDI"
+                bridge = MagicMock()
+                realtime_sound = MagicMock()
+
+                with (
+                    patch("app_controller.KeyboardOutput") as output_class,
+                    patch(
+                        "app_controller.RealtimeMidiSoundOutput",
+                        return_value=realtime_sound,
+                    ),
+                    patch(
+                        "app_controller.MidiInputKeyboardBridge",
+                        return_value=bridge,
+                    ),
+                ):
+                    controller.start_midi_input()
+
+                output_class.assert_called_once_with()
+                realtime_sound.set_enabled.assert_called_once_with(enabled)
+                bridge.start.assert_called_once_with()
 
     def test_realtime_input_does_not_block_midi_sound_playback(self) -> None:
         controller = self.make_controller(sound_source="synth")
@@ -1171,299 +1486,6 @@ class AppControllerTests(unittest.TestCase):
             frozenset(),
         )
 
-    def test_simultaneous_sound_and_realtime_events_update_score_and_combo(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.1))
-
-        with patch("app_controller.time.monotonic", return_value=10.1):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 70)
-        self.assertEqual(controller.state.rhythm_combo, 1)
-        self.assertEqual(controller.state.rhythm_judgment, "GREAT")
-        self.assertEqual(controller.state.rhythm_multiplier_tenths, 10)
-        self.assertEqual(
-            controller.state.rhythm_hit_events,
-            ((1, 60, "GREAT", False),),
-        )
-
-    def test_release_timing_adds_score_and_emits_an_effect_event(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.0))
-        controller.worker_queue.put(("sound_output_note", 3, 60, False, 11.0))
-        controller.worker_queue.put(("midi_output_note", 4, 60, False, 11.1))
-
-        with patch("app_controller.time.monotonic", return_value=11.1):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 270)
-        self.assertEqual(controller.state.rhythm_combo, 2)
-        self.assertEqual(controller.state.rhythm_judgment, "GREAT")
-        self.assertEqual(
-            controller.state.rhythm_hit_events,
-            (
-                (1, 60, "PERFECT", False),
-                (2, 60, "GREAT", True),
-            ),
-        )
-
-    def test_missed_release_resets_combo(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.0))
-        controller.worker_queue.put(("sound_output_note", 3, 60, False, 11.0))
-
-        with patch("app_controller.time.monotonic", return_value=11.0):
-            controller.process_pending_events()
-        with patch("app_controller.time.monotonic", return_value=11.151):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 200)
-        self.assertEqual(controller.state.rhythm_combo, 0)
-        self.assertEqual(controller.state.rhythm_judgment, "MISS")
-        self.assertEqual(
-            controller.state.rhythm_hit_events[-1],
-            (2, 60, "MISS", True),
-        )
-
-    def test_simultaneous_scored_chord_preserves_every_hit_effect_event(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        for note in (60, 64, 67):
-            controller.worker_queue.put(
-                ("sound_output_note", 3, note, True, 10.0)
-            )
-            controller.worker_queue.put(
-                ("midi_output_note", 4, note, True, 10.0)
-            )
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 300)
-        self.assertEqual(controller.state.rhythm_combo, 3)
-        self.assertEqual(
-            controller.state.rhythm_hit_events,
-            (
-                (1, 60, "PERFECT", False),
-                (2, 64, "PERFECT", False),
-                (3, 67, "PERFECT", False),
-            ),
-        )
-
-    def test_midi_playback_without_realtime_input_scores_automatic_perfect(
-        self,
-    ) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.state.current_mode = "sound"
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("sound_output_note", 3, 60, False, 11.0))
-
-        with patch("app_controller.time.monotonic", return_value=11.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 300)
-        self.assertEqual(controller.state.rhythm_combo, 2)
-        self.assertEqual(controller.state.rhythm_judgment, "PERFECT")
-        self.assertEqual(
-            controller.state.rhythm_hit_events,
-            (
-                (1, 60, "PERFECT", False),
-                (2, 60, "PERFECT", True),
-            ),
-        )
-
-    def test_midi_input_conversion_scores_automatic_perfect(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.state.current_mode = "keys"
-        controller.worker_queue.put(("key_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("key_output_note", 3, 60, False, 11.0))
-
-        with patch("app_controller.time.monotonic", return_value=11.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 300)
-        self.assertEqual(controller.state.rhythm_combo, 2)
-        self.assertEqual(controller.state.rhythm_judgment, "PERFECT")
-        self.assertEqual(
-            controller.state.rhythm_hit_events,
-            (
-                (1, 60, "PERFECT", False),
-                (2, 60, "PERFECT", True),
-            ),
-        )
-
-    def test_hold_score_updates_from_a_single_shot_view_timer(self) -> None:
-        controller = self.make_controller()
-        view = RecordingView()
-        controller.attach_view(view)
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.0))
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 100)
-        self.assertEqual(controller.state.rhythm_combo, 1)
-        self.assertEqual(view.rhythm_score_delays[-1], 100)
-
-        with patch("app_controller.time.monotonic", return_value=10.1):
-            controller.process_rhythm_score_update()
-
-        self.assertEqual(controller.state.rhythm_score, 110)
-        self.assertEqual(controller.state.rhythm_combo, 1)
-        self.assertEqual(view.rhythm_score_delays[-1], 100)
-
-    def test_hidden_rhythm_game_skips_automatic_scoring(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.state.current_mode = "sound"
-        controller.set_section_visible("piano_roll", False)
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("sound_output_note", 3, 60, False, 11.0))
-
-        with patch("app_controller.time.monotonic", return_value=11.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 0)
-        self.assertEqual(controller.state.rhythm_combo, 0)
-        self.assertEqual(controller.state.rhythm_hit_events, ())
-
-    def test_hiding_rhythm_game_cancels_pending_scoring_until_reshown(
-        self,
-    ) -> None:
-        controller = self.make_controller()
-        view = RecordingView()
-        controller.attach_view(view)
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.0))
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 100)
-        self.assertTrue(controller._rhythm_scorer.has_active_holds)
-
-        controller.set_section_visible("piano_roll", False)
-        self.assertIsNone(view.rhythm_score_delays[-1])
-        self.assertFalse(controller._rhythm_scorer.has_active_holds)
-
-        with patch("app_controller.time.monotonic", return_value=10.5):
-            controller.process_rhythm_score_update()
-        self.assertEqual(controller.state.rhythm_score, 100)
-        self.assertEqual(controller.state.rhythm_hit_events, ((1, 60, "PERFECT", False),))
-        self.assertIsNone(view.rhythm_score_delays[-1])
-
-        controller.set_section_visible("piano_roll", True)
-        controller.worker_queue.put(("sound_output_note", 3, 64, True, 11.0))
-        controller.worker_queue.put(("midi_output_note", 4, 64, True, 11.0))
-        with patch("app_controller.time.monotonic", return_value=11.0):
-            controller.process_pending_events()
-
-        self.assertGreater(controller.state.rhythm_score, 100)
-        self.assertEqual(controller.state.rhythm_hit_events[-1][1:], (64, "PERFECT", False))
-
-    def test_pending_note_timer_displays_miss_without_another_midi_event(
-        self,
-    ) -> None:
-        controller = self.make_controller()
-        view = RecordingView()
-        controller.attach_view(view)
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertEqual(view.rhythm_score_delays[-1], 151)
-
-        with patch("app_controller.time.monotonic", return_value=10.151):
-            controller.process_rhythm_score_update()
-
-        self.assertEqual(controller.state.rhythm_judgment, "MISS")
-        self.assertEqual(controller.state.rhythm_combo, 0)
-        self.assertEqual(
-            controller.state.rhythm_hit_events,
-            ((1, 60, "MISS", False),),
-        )
-        self.assertIsNone(view.rhythm_score_delays[-1])
-
-    def test_stopping_playback_cancels_pending_rhythm_updates(self) -> None:
-        controller = self.make_controller()
-        view = RecordingView()
-        controller.attach_view(view)
-        controller.playback_id = 3
-        controller.state.current_mode = "keys"
-        controller.worker_queue.put(("key_output_note", 3, 60, True, 10.0))
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertEqual(view.rhythm_score_delays[-1], 100)
-        controller.stop_playback()
-
-        self.assertIsNone(view.rhythm_score_delays[-1])
-        self.assertFalse(controller._rhythm_scorer.has_active_holds)
-
-    def test_realtime_input_without_midi_playback_does_not_score(self) -> None:
-        controller = self.make_controller()
-        controller.midi_input_id = 4
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.0))
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertEqual(controller.state.rhythm_score, 0)
-        self.assertEqual(controller.state.rhythm_combo, 0)
-        self.assertEqual(controller.state.rhythm_hit_events, ())
-
-    def test_sound_note_remap_updates_visuals_without_adding_score(self) -> None:
-        controller = self.make_controller()
-        controller.playback_id = 3
-        controller.midi_input_id = 4
-        controller.state.current_mode = "sound"
-        controller.state.midi_input_running = True
-        controller.worker_queue.put(("sound_output_remap", 3, 48, True))
-        controller.worker_queue.put(("midi_output_note", 4, 48, True, 10.0))
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            controller.process_pending_events()
-
-        self.assertIn(48, controller.state.active_output_notes)
-        self.assertEqual(controller.state.rhythm_score, 0)
-        self.assertEqual(controller.state.rhythm_combo, 0)
-
     def test_stopping_realtime_input_clears_displayed_output_notes(self) -> None:
         controller = self.make_controller()
         controller.state.midi_input_running = True
@@ -1473,10 +1495,6 @@ class AppControllerTests(unittest.TestCase):
         controller.stop_midi_input()
 
         self.assertEqual(controller.state.active_output_notes, frozenset())
-
-    def test_note_range_format_is_standard_midi_notation(self) -> None:
-        self.assertEqual(AppController.format_note_range((36, 85)), "C2-C#6")
-
 
 if __name__ == "__main__":
     unittest.main()

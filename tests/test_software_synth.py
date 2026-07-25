@@ -235,7 +235,6 @@ class SoftwareSynthTests(unittest.TestCase):
 
         self.assertGreater(int(np.max(np.abs(pcm))), 0)
         self.assertTrue(metrics.synthesis_utilization)
-        self.assertTrue(metrics.synthesis_durations)
         self.assertGreaterEqual(metrics.ring_buffer_bytes, 0)
         self.assertGreater(metrics.ring_target_bytes, 0)
 
@@ -413,13 +412,16 @@ class SoftwareSynthTests(unittest.TestCase):
     def test_audio_metrics_distinguish_supply_delay_from_buffer_shortage(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
 
-        stream._record_synthesis_utilization(1.25, 0.01)
+        stream._record_synthesis_utilization(1.25, active_audio=True)
         stream._record_supply_shortage()
         metrics = stream.metrics_snapshot()
 
         self.assertEqual(len(metrics.supply_delays), 1)
         self.assertEqual(len(metrics.shortages), 1)
-        self.assertEqual(metrics.synthesis_durations[-1][1], 0.01)
+        self.assertEqual(
+            metrics.synthesis_utilization[-1][1],
+            1.25,
+        )
 
     def test_output_underrun_is_marked_when_pcm_producer_was_empty(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
@@ -491,6 +493,59 @@ class SoftwareSynthTests(unittest.TestCase):
             engine.stream.buffer_frames,
             AUDIO_BUFFER_FRAME_OPTIONS[-1],
         )
+
+    def test_last_client_schedules_audio_output_shutdown(self) -> None:
+        engine = software_synth.SoftwareSynthEngine()
+        timer = Mock()
+        timer.daemon = False
+        try:
+            with patch(
+                "software_synth.threading.Timer",
+                return_value=timer,
+            ) as timer_type:
+                engine.register_client(1, None)
+                engine.unregister_client(1)
+
+            timer_type.assert_called_once_with(
+                software_synth.AUDIO_IDLE_SHUTDOWN_SECONDS,
+                engine._stop_idle_output,
+                args=(engine._idle_shutdown_generation,),
+            )
+            self.assertTrue(timer.daemon)
+            timer.start.assert_called_once()
+        finally:
+            engine._idle_shutdown_timer = None
+            engine.shutdown()
+
+    def test_new_client_cancels_pending_audio_output_shutdown(self) -> None:
+        engine = software_synth.SoftwareSynthEngine()
+        timer = Mock()
+        engine._idle_shutdown_timer = timer
+        try:
+            engine.register_client(1, None)
+
+            timer.cancel.assert_called_once()
+            self.assertIsNone(engine._idle_shutdown_timer)
+            self.assertEqual(engine._active_clients, {1})
+        finally:
+            engine._active_clients.clear()
+            engine.shutdown()
+
+    def test_idle_shutdown_stops_qt_output_and_synthesis_worker(self) -> None:
+        engine = software_synth.SoftwareSynthEngine()
+        try:
+            with (
+                patch.object(engine, "_stop_output_locked") as stop_output,
+                patch.object(engine.stream, "stop_worker") as stop_worker,
+                patch.object(engine.stream, "clear_metrics") as clear_metrics,
+            ):
+                engine._stop_idle_output()
+
+            stop_output.assert_called_once()
+            stop_worker.assert_called_once()
+            clear_metrics.assert_called_once()
+        finally:
+            engine.shutdown()
 
     def test_push_output_fills_the_active_qt_queue_target(self) -> None:
         class FakeStream:
@@ -697,6 +752,7 @@ class SoftwareSynthTests(unittest.TestCase):
                 (float(second), 0.10)
                 for second in range(1, 22)
             ),
+            currently_active_audio=True,
         )
 
         decision = policy.evaluate(21.0, 2_048, metrics)
@@ -714,6 +770,7 @@ class SoftwareSynthTests(unittest.TestCase):
                 (float(second), 0.10)
                 for second in range(1, 22)
             ),
+            currently_active_audio=True,
         )
         reduced = policy.evaluate(21.0, 2_048, low_cost_metrics)
         self.assertIsNotNone(reduced)
@@ -741,6 +798,7 @@ class SoftwareSynthTests(unittest.TestCase):
                 (float(second), 0.10)
                 for second in range(1, 22)
             ),
+            currently_active_audio=True,
         )
 
         decision = policy.evaluate(
@@ -764,6 +822,7 @@ class SoftwareSynthTests(unittest.TestCase):
                     (float(second), 0.10)
                     for second in range(1, 22)
                 ),
+                currently_active_audio=True,
             ),
             minimum_frames=128,
         )
@@ -780,6 +839,7 @@ class SoftwareSynthTests(unittest.TestCase):
                     (float(second), 0.10)
                     for second in range(22, 43)
                 ),
+                currently_active_audio=True,
             ),
             minimum_frames=128,
         )
@@ -797,7 +857,22 @@ class SoftwareSynthTests(unittest.TestCase):
                 (float(second), 0.10)
                 for second in range(1, 22)
             ),
+            currently_active_audio=True,
             output_underruns=(20.0,),
+        )
+
+        decision = policy.evaluate(21.0, 2_048, metrics)
+
+        self.assertIsNone(decision)
+
+    def test_auto_buffer_does_not_reduce_from_silent_render_metrics(self) -> None:
+        policy = AudioBufferAutoPolicy(now=0.0)
+        metrics = AudioSupplyMetrics(
+            shortages=(),
+            synthesis_utilization=tuple(
+                (float(second), 0.01)
+                for second in range(1, 22)
+            ),
         )
 
         decision = policy.evaluate(21.0, 2_048, metrics)

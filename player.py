@@ -29,8 +29,8 @@ from playback_timing import PlaybackClock, PlaybackTimeline, prepare_playback_ev
 from repeat_guard import RapidRepeatGuard
 
 
-LogCallback = Callable[[str], None]
 StateCallback = Callable[[str], None]
+ErrorCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
 CountdownCallback = Callable[[int], None]
@@ -44,8 +44,8 @@ class MidiKeyboardPlayer:
     def __init__(
         self,
         output: KeyboardOutput,
-        log: LogCallback | None = None,
         on_state: StateCallback | None = None,
+        on_error: ErrorCallback | None = None,
         on_position: PositionCallback | None = None,
         on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
@@ -66,8 +66,8 @@ class MidiKeyboardPlayer:
         octave_up_key: str = OCTAVE_UP_KEY,
     ):
         self.output = output
-        self.log = log or (lambda _message: None)
         self.on_state = on_state or (lambda _state: None)
+        self.on_error = on_error or (lambda _message: None)
         self.on_position = on_position or (lambda _position: None)
         self.on_optimization_progress = on_optimization_progress or (lambda _progress: None)
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
@@ -292,7 +292,6 @@ class MidiKeyboardPlayer:
         start_time: float,
         on_countdown_tick: CountdownCallback | None,
     ) -> None:
-        failure: Exception | None = None
         try:
             self._reset_external_octave_to_base_if_needed()
             for remaining in range(countdown_seconds, 0, -1):
@@ -353,12 +352,13 @@ class MidiKeyboardPlayer:
                     break
                 timeline.mark_emitted(scheduled_time)
                 self._consume_release_request()
-                self._refresh_chord_optimization_plan(events)
                 self.on_position(clock.position())
                 self._handle_event(event)
         except Exception as exc:
-            failure = exc
-            self.log(f"Keyboard playback failed: {exc}")
+            try:
+                self.on_error(str(exc) or exc.__class__.__name__)
+            except Exception:
+                pass
         finally:
             for cleanup in (
                 self._release_active_note_keys,
@@ -367,10 +367,8 @@ class MidiKeyboardPlayer:
             ):
                 try:
                     cleanup()
-                except Exception as exc:
-                    if failure is None:
-                        failure = exc
-                        self.log(f"Keyboard playback cleanup failed: {exc}")
+                except Exception:
+                    pass
             self._active_notes.clear()
             self._active_key_owner.clear()
             self._active_key_note.clear()
@@ -414,46 +412,35 @@ class MidiKeyboardPlayer:
         if event.kind == "note_on" and event.note is not None:
             note = self._playable_event_note(event)
             if note is None:
-                self.log(f"{event.time:8.3f}s skip note {event.note}")
                 return
             with self._config_lock:
                 key_bindings = self.key_bindings
             mapping = midi_note_to_key(note, key_bindings)
             if mapping is None:
-                self.log(f"{event.time:8.3f}s skip note {event.note}")
                 return
             repeat_token = (mapping.octave_shift, mapping.key)
             if self._repeat_guard.should_suppress(repeat_token, emitted_at):
-                self.log(f"{event.time:8.3f}s skip rapid repeat {mapping.note_name:<3} -> {mapping.key}")
                 return
 
             self._move_to_octave_shift(mapping.octave_shift)
             owner = self._note_owner(event.track, event.channel, event.note)
             self._press_note_key(mapping.key, owner=owner, output_note=mapping.note)
             self._active_notes[owner].append(mapping.key)
-            source = "" if note == event.note else f" from {self._note_name(event.note)}"
-            self.log(f"{event.time:8.3f}s on  {mapping.note_name:<3}{source} -> {mapping.key}")
 
         elif event.kind == "note_off" and event.note is not None:
-            key = self._release_note(event.track, event.channel or 0, event.note)
-            if key is not None:
-                self.log(f"{event.time:8.3f}s off note {event.note} -> {key}")
+            self._release_note(event.track, event.channel or 0, event.note)
 
         elif event.kind == "sustain" and event.value is not None:
             if event.value >= 64:
                 self._set_sustain(event.track, event.channel or 0, enabled=True)
-                state = "on "
             else:
                 self._set_sustain(event.track, event.channel or 0, enabled=False)
-                state = "off"
-            self.log(f"{event.time:8.3f}s sustain {state}")
 
         elif event.kind == AUTO_SUSTAIN_EVENT_KIND and event.value is not None:
             if not self._auto_sustain_enabled():
                 return
             enabled = event.value >= 64
             self._set_sustain(event.track, event.channel or 0, enabled, automatic=True)
-            self.log(f"{event.time:8.3f}s auto sustain {'on ' if enabled else 'off'}")
 
     def _event_is_enabled(self, event: MidiEvent) -> bool:
         if event.channel is None:
@@ -526,7 +513,7 @@ class MidiKeyboardPlayer:
         if force:
             self._optimization_planner.build_now()
         else:
-            self._optimization_planner.schedule()
+            self._schedule_chord_optimization()
 
     def _mark_chord_optimization_dirty_locked(self) -> None:
         self._chord_optimization_plan_dirty = True
@@ -535,8 +522,7 @@ class MidiKeyboardPlayer:
     def _schedule_chord_optimization(self) -> None:
         with self._config_lock:
             should_schedule = (
-                self._clock is not None
-                and self._current_events is not None
+                self._current_events is not None
                 and self.chord_optimization
                 and self._chord_optimization_plan_dirty
             )
@@ -602,11 +588,6 @@ class MidiKeyboardPlayer:
             and self._optimization_generation == generation
         )
 
-    @staticmethod
-    def _note_name(note: int) -> str:
-        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-        return f"{names[note % 12]}{note // 12 - 1}"
-
     def _move_to_octave_shift(self, target_shift: int) -> None:
         changed = target_shift != self._octave_shift
         if changed:
@@ -614,11 +595,9 @@ class MidiKeyboardPlayer:
         while self._octave_shift < target_shift:
             self.output.tap(self.octave_up_key)
             self._octave_shift += 1
-            self.log(f"octave up -> {self._octave_shift}")
         while self._octave_shift > target_shift:
             self.output.tap(self.octave_down_key)
             self._octave_shift -= 1
-            self.log(f"octave down -> {self._octave_shift}")
         if changed:
             time.sleep(OCTAVE_SWITCH_SETTLE_SECONDS)
 
@@ -673,8 +652,8 @@ class MidiKeyboardPlayer:
     def _emit_output_note(self, note: int, pressed: bool) -> None:
         try:
             self.on_output_note(note, pressed)
-        except Exception as exc:
-            self.log(f"Output keyboard display update failed: {exc}")
+        except Exception:
+            pass
 
     @staticmethod
     def _note_owner(track: int | None, channel: int | None, note: int) -> NoteOwner:

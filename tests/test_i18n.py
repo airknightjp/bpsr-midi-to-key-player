@@ -6,21 +6,16 @@ from i18n import COLOR_THEME_NAMES, TEXT, normalize_color_theme
 
 
 class I18nTests(unittest.TestCase):
-    def test_test_mode_labels_include_sound_and_log_in_every_language(self) -> None:
-        self.assertEqual(TEXT["en"]["dry_run"], "Test mode (sound/log only)")
+    def test_conversion_sound_labels_exist_in_every_language(self) -> None:
+        self.assertEqual(TEXT["en"]["conversion_sound"], "Play sound")
         self.assertEqual(
-            TEXT["ja"]["dry_run"],
-            "\u30c6\u30b9\u30c8\u30e2\u30fc\u30c9(\u97f3\u30fb\u30ed\u30b0\u306e\u307f)",
+            TEXT["ja"]["conversion_sound"],
+            "\u97f3\u3092\u9cf4\u3089\u3059",
         )
         self.assertEqual(
-            TEXT["zh"]["dry_run"],
-            "\u6d4b\u8bd5\u6a21\u5f0f(\u4ec5\u58f0\u97f3\u548c\u65e5\u5fd7)",
+            TEXT["zh"]["conversion_sound"],
+            "\u64ad\u653e\u58f0\u97f3",
         )
-
-    def test_log_tab_uses_short_label_in_every_language(self) -> None:
-        self.assertEqual(TEXT["ja"]["playback_log"], "\u30ed\u30b0")
-        self.assertEqual(TEXT["en"]["playback_log"], "Log")
-        self.assertEqual(TEXT["zh"]["playback_log"], "\u65e5\u5fd7")
 
     def test_file_menu_and_exit_labels_exist_for_all_languages(self) -> None:
         expected = {
@@ -68,7 +63,7 @@ class I18nTests(unittest.TestCase):
                 self.assertEqual(translations["release_notes"], labels[0])
                 self.assertEqual(translations["dont_show_again"], labels[1])
                 content = translations["release_notes_content"]
-                self.assertTrue(content.startswith("v1.4.0"))
+                self.assertTrue(content.startswith("v1.5.0"))
                 self.assertIn(labels[2], content)
                 self.assertIn("Qt", content)
                 self.assertIn("Buffer", content)
@@ -159,21 +154,6 @@ class I18nTests(unittest.TestCase):
     def test_english_vertical_slider_labels_use_abbreviations(self) -> None:
         self.assertEqual(TEXT["en"]["playback_speed"], "SPD")
         self.assertEqual(TEXT["en"]["midi_sound_volume"], "VOL")
-
-    def test_log_messages_are_english_for_all_languages(self) -> None:
-        expected = {
-            "folder_loaded_log": "Loaded folder {folder}: {count} MIDI files",
-            "loaded_log": "Loaded {name}: {event_count} events, {duration:.2f}s, channels {channels}",
-            "key_playback_started": "Key playback started ({mode})",
-            "sound_playback_stopped": "MIDI sound playback stopped",
-            "dry_run_mode": "test mode",
-            "real_keyboard_output": "real keyboard output",
-        }
-
-        for language, translations in TEXT.items():
-            with self.subTest(language=language):
-                for key, value in expected.items():
-                    self.assertEqual(translations[key], value)
 
     def test_color_theme_names_include_pink_for_all_languages(self) -> None:
         for language, theme_names in COLOR_THEME_NAMES.items():

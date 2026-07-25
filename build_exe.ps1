@@ -55,8 +55,6 @@ $ArgsList = @(
     "--contents-directory",
     "_internal",
     "--windowed",
-    "--exclude-module",
-    "tkinter",
     "--icon",
     "assets\app_icon_whale.ico",
     "--add-data",
@@ -71,14 +69,19 @@ $ArgsList = @(
     "assets\whale_slider_frame_2.png;assets",
     "--add-data",
     "assets\check_white.svg;assets",
-    "--add-data",
-    "assets\radio_white_dot.svg;assets",
     "--name",
     "BPSR_MIDI_to_KEY_Player",
     "main.py"
 )
 
 & $Python -c "import sys; from PyInstaller.__main__ import run; run(sys.argv[1:])" @ArgsList
+
+$SpecPath = "BPSR_MIDI_to_KEY_Player.spec"
+if (Test-Path $SpecPath) {
+    $SpecContent = [System.IO.File]::ReadAllText($SpecPath).Replace("`r`n", "`n")
+    $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($SpecPath, $SpecContent, $Utf8NoBom)
+}
 
 if (-not (Test-Path $OutputExe)) {
     throw "Build failed: $OutputExe was not created."

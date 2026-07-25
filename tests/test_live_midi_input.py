@@ -217,24 +217,6 @@ class LiveMidiInputTests(unittest.TestCase):
 
         self.assertEqual(output.events, [])
 
-    def test_state_logs_are_not_indented_and_input_events_are_indented(self) -> None:
-        output = FakeOutput()
-        logs: list[str] = []
-        bridge = self._running_bridge(output, log=logs.append)
-
-        bridge.log("MIDI keyboard input started")
-        bridge._note_on(channel=0, note=55, velocity=93)
-        bridge.log("MIDI keyboard input stopped")
-
-        self.assertEqual(
-            logs,
-            [
-                "MIDI keyboard input started",
-                "   input ch 0 on  G3  -> b v93",
-                "MIDI keyboard input stopped",
-            ],
-        )
-
     def test_auto_fit_note_range_uses_base_range_without_octave_switch(self) -> None:
         output = FakeOutput()
         bridge = self._running_bridge(output, auto_fit_note_range=True)
@@ -265,10 +247,8 @@ class LiveMidiInputTests(unittest.TestCase):
 
     def test_repeat_prevention_suppresses_realtime_same_target_and_consumes_note_off(self) -> None:
         output = FakeOutput()
-        logs: list[str] = []
         bridge = self._running_bridge(
             output,
-            log=logs.append,
             repeat_prevention=True,
         )
 
@@ -277,7 +257,6 @@ class LiveMidiInputTests(unittest.TestCase):
         bridge._note_off(channel=0, note=60)
 
         self.assertEqual(output.events, [("press", "a")])
-        self.assertTrue(any("skip rapid repeat" in message for message in logs))
 
         bridge._note_off(channel=0, note=60)
         self.assertEqual(output.events, [("press", "a"), ("release", "a")])

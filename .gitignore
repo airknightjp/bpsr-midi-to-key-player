@@ -7,8 +7,10 @@ __pycache__/
 .test_appdata_*/
 build/
 dist/
+main_build/
+release/
 tmp/
 github_upload_v*/
 release_v*/
 *.zip
-
+settings.json

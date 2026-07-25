@@ -26,7 +26,7 @@ from software_synth import SoftwareSynthClient
 
 
 StateCallback = Callable[[str], None]
-LogCallback = Callable[[str], None]
+ErrorCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
 OutputNoteCallback = Callable[[int, bool], None]
@@ -40,8 +40,8 @@ POSITION_REPORT_INTERVAL_SECONDS = 1.0 / 30.0
 class MidiSoundPlayer:
     def __init__(
         self,
-        log: LogCallback | None = None,
         on_state: StateCallback | None = None,
+        on_error: ErrorCallback | None = None,
         on_position: PositionCallback | None = None,
         on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
@@ -65,8 +65,8 @@ class MidiSoundPlayer:
         qt_audio_environment: str = "",
         on_qt_learning_changed: QtLearningChangedCallback | None = None,
     ):
-        self.log = log or (lambda _message: None)
         self.on_state = on_state or (lambda _state: None)
+        self.on_error = on_error or (lambda _message: None)
         self.on_position = on_position or (lambda _position: None)
         self.on_optimization_progress = on_optimization_progress or (lambda _progress: None)
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
@@ -333,12 +333,7 @@ class MidiSoundPlayer:
         self._optimization_planner.wait(timeout=0.2)
 
     def _run(self, events: list[MidiEvent], start_time: float) -> None:
-        failure: Exception | None = None
         try:
-            self.log(
-                f"MIDI sound playback started "
-                f"(volume {self._volume}%, source {self.sound_source})"
-            )
             self.on_state("sound playing")
             current_events = events
             current_start_time = start_time
@@ -356,18 +351,19 @@ class MidiSoundPlayer:
                 self._release_all_now()
                 current_start_time = pending_seek
         except Exception as exc:
-            failure = exc
-            self.log(f"MIDI sound playback failed: {exc}")
+            try:
+                self.on_error(str(exc) or exc.__class__.__name__)
+            except Exception:
+                pass
         finally:
             try:
                 self._release_all_now()
-            except Exception as exc:
-                if failure is None:
-                    self.log(f"MIDI sound cleanup failed: {exc}")
+            except Exception:
+                pass
             try:
                 self._close_audio()
-            except Exception as exc:
-                self.log(f"Software synthesizer close failed: {exc}")
+            except Exception:
+                pass
             with self._state_lock:
                 self._clock = None
                 self._current_events = None
@@ -443,7 +439,6 @@ class MidiSoundPlayer:
                 return last_position
             timeline.mark_emitted(scheduled_time)
             last_position = event.time
-            self._refresh_chord_optimization_plan(events)
             self._report_position_if_due(
                 clock.position(),
                 position_generation,
@@ -615,7 +610,7 @@ class MidiSoundPlayer:
         if force:
             self._optimization_planner.build_now()
         else:
-            self._optimization_planner.schedule()
+            self._schedule_chord_optimization()
 
     def _mark_chord_optimization_dirty_locked(self) -> None:
         self._chord_optimization_plan_dirty = True
@@ -624,8 +619,7 @@ class MidiSoundPlayer:
     def _schedule_chord_optimization(self) -> None:
         with self._state_lock:
             should_schedule = (
-                self._clock is not None
-                and self._current_events is not None
+                self._current_events is not None
                 and self.chord_optimization
                 and self._chord_optimization_plan_dirty
             )
@@ -740,8 +734,8 @@ class MidiSoundPlayer:
     ) -> None:
         try:
             (output_callback or self.on_output_note)(note, pressed)
-        except Exception as exc:
-            self.log(f"Output keyboard display update failed: {exc}")
+        except Exception:
+            pass
 
     def _send_control_change(self, channel: int, control: int, value: int) -> None:
         if control == 64:
@@ -866,7 +860,6 @@ class RealtimeMidiSoundOutput:
     def __init__(
         self,
         volume: int = 100,
-        log: LogCallback | None = None,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         auto_sustain: bool = False,
@@ -878,7 +871,6 @@ class RealtimeMidiSoundOutput:
         qt_audio_environment: str = "",
         on_qt_learning_changed: QtLearningChangedCallback | None = None,
     ):
-        self.log = log or (lambda _message: None)
         self._volume = self._clamp_volume(volume)
         self.transpose_semitones = max(
             MIN_TRANSPOSE_SEMITONES,
@@ -922,9 +914,6 @@ class RealtimeMidiSoundOutput:
             if enabled:
                 if not self._synth.is_open and not self._open_audio():
                     self._enabled = False
-                    detail = self._synth.last_error
-                    message = "Realtime MIDI sound failed: could not open software synthesizer"
-                    self.log(f"{message}: {detail}" if detail else message)
                     return False
                 self._reset_repeat_state()
                 self._enabled = True
@@ -1020,8 +1009,7 @@ class RealtimeMidiSoundOutput:
                 elif event_type == 0xB0 and data1 == 64:
                     self._auto_sustain_controller.manual_sustain(channel)
                     self._set_realtime_sustain(channel, data2 >= 64, automatic=False)
-            except Exception as exc:
-                self.log(f"Realtime MIDI sound failed: {exc}")
+            except Exception:
                 self._enabled = False
                 self._release_and_close()
 
@@ -1093,8 +1081,8 @@ class RealtimeMidiSoundOutput:
         try:
             if self._synth.is_open:
                 self._release_all_now()
-        except Exception as exc:
-            self.log(f"Realtime MIDI sound cleanup failed: {exc}")
+        except Exception:
+            pass
         finally:
             self._active_notes.clear()
             self._sustain_channels.clear()
@@ -1103,8 +1091,8 @@ class RealtimeMidiSoundOutput:
             self._reset_repeat_state()
             try:
                 self._close_audio()
-            except Exception as exc:
-                self.log(f"Realtime software synthesizer close failed: {exc}")
+            except Exception:
+                pass
 
     def _reset_repeat_state(self) -> None:
         self._repeat_guard.reset()

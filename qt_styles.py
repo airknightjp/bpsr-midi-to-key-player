@@ -364,6 +364,11 @@ def build_stylesheet(
     QTabWidget::pane {{ background: {palette.surface}; border: 1px solid {palette.border}; top: -1px; }}
     QTabBar::tab {{ background: {palette.panel_alt}; border: 1px solid {palette.border}; padding: {pad_y}px {pad_x}px; }}
     QTabBar::tab:selected {{ background: {palette.surface}; border-bottom-color: {palette.surface}; color: {palette.accent}; font-weight: 600; }}
+    QTabBar#PlayerTabBar[reloadFeedback="true"]::tab:first {{
+        background: {palette.accent};
+        border-color: {palette.accent_hover};
+        color: {palette.accent_text};
+    }}
     QTreeWidget, QTableWidget, QPlainTextEdit {{
         background: {palette.surface};
         alternate-background-color: {palette.surface_hover};

@@ -22,7 +22,6 @@ class MidiListRow:
     name: str
     folder: str = ""
     duration: str = "--:--"
-    note_range: str = "--"
 
 
 @dataclass(frozen=True)
@@ -51,24 +50,20 @@ class AppState:
     realtime_visible_output_notes: frozenset[int] = field(default_factory=frozenset)
     realtime_output_retrigger_events: tuple[tuple[int, int], ...] = ()
     realtime_output_retrigger_serial: int = 0
-    rhythm_score: int = 0
-    rhythm_combo: int = 0
-    rhythm_judgment: str = ""
-    rhythm_multiplier_tenths: int = 10
     rhythm_hit_events: tuple[tuple[int, int, str, bool], ...] = ()
     midi_rows: list[MidiListRow] = field(default_factory=list)
     selected_midi_index: int = -1
     track_channels: list[TrackChannelItem] = field(default_factory=list)
     midi_input_devices: list[str] = field(default_factory=list)
     midi_input_device: str = ""
-    countdown_seconds: int = 3
+    countdown_seconds: int = 0
     midi_sound_volume: int = 80
     sound_source: str = "piano"
     audio_qt_frames: int = DEFAULT_QT_AUDIO_FRAMES
     audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
     playback_speed_percent: int = 100
     sound_playback_mode: str = DEFAULT_SOUND_PLAYBACK_MODE
-    dry_run: bool = True
+    play_sound: bool = True
     countdown_sound: bool = False
     game_countdown_sound: bool = False
     auto_fit_note_range: bool = False

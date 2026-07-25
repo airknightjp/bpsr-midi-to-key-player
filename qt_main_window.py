@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from app_controller import AppController, UI_SCALE_PERCENT_OPTIONS
-from app_state import AppState
+from app_state import AppState, MidiListRow
 from config import (
     BASE_NOTE_MAX,
     BASE_NOTE_MIN,
@@ -83,7 +83,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 KEYBOARD_PANEL_HEIGHT = 71
@@ -117,10 +117,18 @@ class MidiMainWindow(QMainWindow):
         self._full_visibility_height: int | None = None
         self._render_signatures: dict[str, object] = {}
         self._rendered_midi_rows: object | None = None
+        self._rendered_midi_row_items: list[MidiListRow] = []
         self._rendered_track_channels: object | None = None
+        self._rendered_time_text: str | None = None
         self._available_update: AvailableUpdate | None = None
         self._manual_update_check = False
         self._build_ui()
+        self._midi_reload_feedback_timer = QTimer(self)
+        self._midi_reload_feedback_timer.setSingleShot(True)
+        self._midi_reload_feedback_timer.setInterval(150)
+        self._midi_reload_feedback_timer.timeout.connect(
+            lambda: self._set_midi_reload_feedback(False)
+        )
         self._focus_clear_controls = (
             self.sound_source_combo,
             self.shortcut_start_edit,
@@ -152,12 +160,6 @@ class MidiMainWindow(QMainWindow):
         self._output_note_release_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._output_note_release_timer.timeout.connect(
             self.controller.process_output_note_releases
-        )
-        self._rhythm_score_timer = QTimer(self)
-        self._rhythm_score_timer.setSingleShot(True)
-        self._rhythm_score_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._rhythm_score_timer.timeout.connect(
-            self.controller.process_rhythm_score_update
         )
         self._hotkey_timer = QTimer(self)
         self._hotkey_timer.setInterval(3000)
@@ -606,7 +608,7 @@ class MidiMainWindow(QMainWindow):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(6)
         self.settings_grid = grid
-        self.dry_run_check = self._option_check("dry_run")
+        self.play_sound_check = self._option_check("play_sound")
         self.auto_fit_check = self._option_check("auto_fit_note_range")
         self.repeat_check = self._option_check("repeat_prevention")
         self.humanize_check = self._option_check("humanize_timing")
@@ -614,7 +616,7 @@ class MidiMainWindow(QMainWindow):
         self.optimization_check = self._option_check("chord_optimization")
         self.auto_sustain_check = self._option_check("auto_sustain")
         for column, widget in enumerate(
-            (self.dry_run_check, self.auto_fit_check, self.repeat_check)
+            (self.play_sound_check, self.auto_fit_check, self.repeat_check)
         ):
             widget.setProperty("settingsItem", True)
             grid.addWidget(
@@ -816,9 +818,9 @@ class MidiMainWindow(QMainWindow):
         tab_row.setSpacing(0)
         self.tab_row = tab_row
         self.tab_bar = QTabBar()
+        self.tab_bar.setObjectName("PlayerTabBar")
         self.tab_bar.setDrawBase(False)
         self.tab_bar.setExpanding(False)
-        self.tab_bar.currentChanged.connect(self._change_player_page)
         self.tab_bar.tabBarDoubleClicked.connect(self._player_tab_double_clicked)
         self.tab_bar_container = QWidget()
         tab_bar_container_layout = QVBoxLayout(self.tab_bar_container)
@@ -859,7 +861,6 @@ class MidiMainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignBottom,
         )
 
-        self.player_stack = QStackedWidget()
         self.midi_table = QTableWidget(0, 3)
         self.midi_header = ColumnSeparatorHeaderView(
             Qt.Orientation.Horizontal,
@@ -874,12 +875,25 @@ class MidiMainWindow(QMainWindow):
         self.midi_table.verticalHeader().hide()
         midi_header = self.midi_table.horizontalHeader()
         midi_header.setMinimumSectionSize(MIN_MIDI_COLUMN_WIDTH)
+        midi_header.setStretchLastSection(False)
+        self.midi_header.set_left_resizable_section(
+            self.midi_table.columnCount() - 1
+        )
         for column, width in enumerate(self.state.midi_column_widths):
             midi_header.setSectionResizeMode(
                 column,
-                QHeaderView.ResizeMode.Interactive,
+                (
+                    QHeaderView.ResizeMode.Stretch
+                    if column == 1
+                    else (
+                        QHeaderView.ResizeMode.Fixed
+                        if column == self.midi_table.columnCount() - 1
+                        else QHeaderView.ResizeMode.Interactive
+                    )
+                ),
             )
-            self.midi_table.setColumnWidth(column, width)
+            if column != 1:
+                self.midi_table.setColumnWidth(column, width)
         midi_header.sectionResized.connect(self._midi_column_resized)
         self.midi_table.cellClicked.connect(
             lambda row, _column: self._select_midi_row(row)
@@ -891,11 +905,7 @@ class MidiMainWindow(QMainWindow):
             )
         )
         self.midi_table.itemDoubleClicked.connect(lambda _item: self.controller.toggle_sound_playback())
-        self.log_output = QPlainTextEdit()
-        self.log_output.setReadOnly(True)
-        self.player_stack.addWidget(self.midi_table)
-        self.player_stack.addWidget(self.log_output)
-        content_layout.addWidget(self.player_stack, 1)
+        content_layout.addWidget(self.midi_table, 1)
         body.addWidget(content, 1)
         self.player_layout.addLayout(body, 1)
 
@@ -1022,7 +1032,7 @@ class MidiMainWindow(QMainWindow):
             )
             settings_signature = (
                 state.input_conversion_mode,
-                state.dry_run,
+                state.play_sound,
                 state.auto_fit_note_range,
                 state.repeat_prevention,
                 state.humanize_timing,
@@ -1153,22 +1163,6 @@ class MidiMainWindow(QMainWindow):
                         | state.realtime_output_notes,
                         (),
                     )
-                piano_roll_score_signature = (
-                    state.rhythm_score,
-                    state.rhythm_combo,
-                    state.rhythm_judgment,
-                    state.rhythm_multiplier_tenths,
-                )
-                if self._signature_changed(
-                    "piano_roll_score",
-                    piano_roll_score_signature,
-                ):
-                    self.piano_roll.set_score(
-                        state.rhythm_score,
-                        state.rhythm_combo,
-                        state.rhythm_judgment,
-                        state.rhythm_multiplier_tenths,
-                    )
                 if self._signature_changed(
                     "piano_roll_hits",
                     state.rhythm_hit_events,
@@ -1176,7 +1170,6 @@ class MidiMainWindow(QMainWindow):
                     self.piano_roll.set_hit_events(
                         state.rhythm_hit_events
                     )
-
             player_controls_signature = (
                 state.language,
                 state.midi_sound_volume,
@@ -1215,6 +1208,11 @@ class MidiMainWindow(QMainWindow):
         finally:
             self._rendering = False
 
+    def render_position(self, position: float, duration: float) -> None:
+        signature = (position, duration)
+        self._render_signatures["position"] = signature
+        self._render_player_position_values(position, duration)
+
     def _signature_changed(self, name: str, signature: object) -> bool:
         if name in self._render_signatures and self._render_signatures[name] == signature:
             return False
@@ -1250,7 +1248,7 @@ class MidiMainWindow(QMainWindow):
         self.shortcut_pause_label.setText(text["shortcut_pause_resume"])
         self.shortcut_end_label.setText(text["shortcut_end"])
         self.shortcut_lock_check.setText(text["shortcut_lock"])
-        self.dry_run_check.setText(text["dry_run"])
+        self.play_sound_check.setText(text["conversion_sound"])
         self.auto_fit_check.setText(text["auto_fit_note_range"])
         self.repeat_check.setText(text["repeat_prevention"])
         self.humanize_check.setText(text["humanize_timing"])
@@ -1273,7 +1271,6 @@ class MidiMainWindow(QMainWindow):
         while self.tab_bar.count():
             self.tab_bar.removeTab(0)
         self.tab_bar.addTab(text["midi_list"])
-        self.tab_bar.addTab(text["playback_log"])
         self._update_midi_tab_icon(state.color_theme, state.ui_scale_percent)
         self.midi_table.setHorizontalHeaderLabels(
             [
@@ -1430,7 +1427,8 @@ class MidiMainWindow(QMainWindow):
         with QSignalBlocker(midi_header):
             midi_header.setMinimumSectionSize(px(MIN_MIDI_COLUMN_WIDTH))
             for column, width in enumerate(self.state.midi_column_widths):
-                self.midi_table.setColumnWidth(column, px(width))
+                if column != 1:
+                    self.midi_table.setColumnWidth(column, px(width))
             midi_header.setFixedHeight(px(24))
         for row in range(self.midi_table.rowCount()):
             self.midi_table.setRowHeight(row, px(22))
@@ -1731,7 +1729,6 @@ class MidiMainWindow(QMainWindow):
                     "piano_roll_sequence",
                     "piano_roll_playback",
                     "piano_roll_live",
-                    "piano_roll_score",
                     "piano_roll_hits",
                 ):
                     self._render_signatures.pop(signature, None)
@@ -1877,7 +1874,7 @@ class MidiMainWindow(QMainWindow):
             enabled = state.current_mode not in {"keys", "keys_paused"}
         else:
             enabled = (
-                state.current_mode in {None, "sound_paused"}
+                state.current_mode in {None, "sound", "sound_paused"}
                 and not state.midi_input_running
             )
         self.conversion_start_button.setEnabled(
@@ -1921,7 +1918,7 @@ class MidiMainWindow(QMainWindow):
 
     def _render_settings(self, state: AppState) -> None:
         for check, value in (
-            (self.dry_run_check, state.dry_run),
+            (self.play_sound_check, state.play_sound),
             (self.auto_fit_check, state.auto_fit_note_range),
             (self.repeat_check, state.repeat_prevention),
             (self.humanize_check, state.humanize_timing),
@@ -2043,45 +2040,114 @@ class MidiMainWindow(QMainWindow):
         )
 
     def _render_player_position(self, state: AppState) -> None:
-        duration = max(0.0, state.duration)
-        slider_value = round(1000 * state.position / duration) if duration else 0
+        self._render_player_position_values(state.position, state.duration)
+
+    def _render_player_position_values(
+        self,
+        position: float,
+        duration: float,
+    ) -> None:
+        duration = max(0.0, duration)
+        slider_value = round(1000 * position / duration) if duration else 0
         with QSignalBlocker(self.position_slider):
-            if not self.position_slider.is_user_drag_active():
+            if (
+                not self.position_slider.is_user_drag_active()
+                and self.position_slider.value() != slider_value
+            ):
                 self.position_slider.setValue(slider_value)
-        self.time_label.setText(
-            f"{self.controller.format_time(state.position)} / {self.controller.format_time(duration)}"
+        time_text = (
+            f"{self.controller.format_time(position)} / "
+            f"{self.controller.format_time(duration)}"
         )
+        if time_text != self._rendered_time_text:
+            self.time_label.setText(time_text)
+            self._rendered_time_text = time_text
 
     def _render_midi_rows(self, state: AppState) -> None:
         had_focus = (
             self.midi_table.hasFocus()
             or self.midi_table.viewport().hasFocus()
         )
+        previous_rows = {
+            row.path: row
+            for row in self._rendered_midi_row_items
+        }
+        desired_paths = {str(row.path) for row in state.midi_rows}
         with QSignalBlocker(self.midi_table):
-            if self.midi_table.rowCount() != len(state.midi_rows):
-                self.midi_table.setRowCount(len(state.midi_rows))
+            for row_index in range(self.midi_table.rowCount() - 1, -1, -1):
+                if self._midi_table_path_at(row_index) not in desired_paths:
+                    self.midi_table.removeRow(row_index)
+
+            current_paths = [
+                self._midi_table_path_at(row_index)
+                for row_index in range(self.midi_table.rowCount())
+            ]
             for row_index, row in enumerate(state.midi_rows):
-                for column, value in enumerate(
-                    (row.name, row.folder, row.duration)
+                path_text = str(row.path)
+                inserted = False
+                if (
+                    row_index >= len(current_paths)
+                    or current_paths[row_index] != path_text
                 ):
-                    item = self.midi_table.item(row_index, column)
-                    if item is None:
-                        item = QTableWidgetItem()
-                        self.midi_table.setItem(row_index, column, item)
-                    if item.text() != value:
-                        item.setText(value)
-                    tooltip = value if column == 1 else ""
-                    if item.toolTip() != tooltip:
-                        item.setToolTip(tooltip)
-                    path_text = str(row.path)
-                    if item.data(Qt.ItemDataRole.UserRole) != path_text:
-                        item.setData(Qt.ItemDataRole.UserRole, path_text)
-                self.midi_table.setRowHeight(
-                    row_index,
-                    max(1, round(22 * state.ui_scale_percent / 100)),
+                    try:
+                        source_index = current_paths.index(path_text, row_index + 1)
+                    except ValueError:
+                        self.midi_table.insertRow(row_index)
+                        current_paths.insert(row_index, path_text)
+                        inserted = True
+                    else:
+                        self._move_midi_table_row(source_index, row_index)
+                        current_paths.pop(source_index)
+                        current_paths.insert(row_index, path_text)
+
+                previous_row = previous_rows.get(row.path)
+                missing_item = any(
+                    self.midi_table.item(row_index, column) is None
+                    for column in range(self.midi_table.columnCount())
                 )
+                if inserted or missing_item or previous_row is not row:
+                    self._update_midi_table_row(row_index, row)
+                    self.midi_table.setRowHeight(
+                        row_index,
+                        max(1, round(22 * state.ui_scale_percent / 100)),
+                    )
+        self._rendered_midi_row_items = state.midi_rows
         if had_focus:
             self.midi_table.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _midi_table_path_at(self, row_index: int) -> str:
+        item = self.midi_table.item(row_index, 0)
+        if item is None:
+            return ""
+        return str(item.data(Qt.ItemDataRole.UserRole) or "")
+
+    def _move_midi_table_row(self, source_index: int, target_index: int) -> None:
+        items = [
+            self.midi_table.takeItem(source_index, column)
+            for column in range(self.midi_table.columnCount())
+        ]
+        row_height = self.midi_table.rowHeight(source_index)
+        self.midi_table.removeRow(source_index)
+        self.midi_table.insertRow(target_index)
+        for column, item in enumerate(items):
+            if item is not None:
+                self.midi_table.setItem(target_index, column, item)
+        self.midi_table.setRowHeight(target_index, row_height)
+
+    def _update_midi_table_row(self, row_index: int, row: MidiListRow) -> None:
+        path_text = str(row.path)
+        for column, value in enumerate((row.name, row.folder, row.duration)):
+            item = self.midi_table.item(row_index, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self.midi_table.setItem(row_index, column, item)
+            if item.text() != value:
+                item.setText(value)
+            tooltip = value if column == 1 else ""
+            if item.toolTip() != tooltip:
+                item.setToolTip(tooltip)
+            if item.data(Qt.ItemDataRole.UserRole) != path_text:
+                item.setData(Qt.ItemDataRole.UserRole, path_text)
 
     def _midi_column_resized(
         self,
@@ -2091,13 +2157,13 @@ class MidiMainWindow(QMainWindow):
     ) -> None:
         if not 0 <= logical_index < self.midi_table.columnCount():
             return
+        if logical_index not in (0, self.midi_table.columnCount() - 1):
+            return
         scale = max(1, self.state.ui_scale_percent) / 100.0
-        widths = tuple(
-            max(
-                MIN_MIDI_COLUMN_WIDTH,
-                round(self.midi_table.columnWidth(column) / scale),
-            )
-            for column in range(self.midi_table.columnCount())
+        widths = list(self.state.midi_column_widths)
+        widths[logical_index] = max(
+            MIN_MIDI_COLUMN_WIDTH,
+            round(self.midi_table.columnWidth(logical_index) / scale),
         )
         self.controller.set_midi_column_widths(widths)
 
@@ -2246,13 +2312,20 @@ class MidiMainWindow(QMainWindow):
         if folder:
             self.controller.load_midi_folder(folder)
 
-    def _change_player_page(self, index: int) -> None:
-        if index >= 0:
-            self.player_stack.setCurrentIndex(index)
-
     def _player_tab_double_clicked(self, index: int) -> None:
         if index == 0:
             self.controller.reload_midi_folder()
+            self._set_midi_reload_feedback(True)
+            self._midi_reload_feedback_timer.start()
+
+    def _set_midi_reload_feedback(self, active: bool) -> None:
+        if self.tab_bar.property("reloadFeedback") is active:
+            return
+        self.tab_bar.setProperty("reloadFeedback", active)
+        style = self.tab_bar.style()
+        style.unpolish(self.tab_bar)
+        style.polish(self.tab_bar)
+        self.tab_bar.update(self.tab_bar.tabRect(0))
 
     def _select_midi_row(self, row: int) -> None:
         if (
@@ -2274,12 +2347,6 @@ class MidiMainWindow(QMainWindow):
         sound_source = self.sound_source_combo.itemData(index)
         if sound_source:
             self.controller.set_option("sound_source", sound_source)
-
-    def append_log(self, message: str) -> None:
-        self.log_output.appendPlainText(str(message))
-
-    def clear_log(self) -> None:
-        self.log_output.clear()
 
     def show_message(self, level: str, title: str, message: str) -> None:
         icon = {
@@ -2532,12 +2599,6 @@ class MidiMainWindow(QMainWindow):
 
     def schedule_output_note_release(self, delay_ms: int) -> None:
         self._output_note_release_timer.start(max(1, int(delay_ms)))
-
-    def schedule_rhythm_score_update(self, delay_ms: int | None) -> None:
-        if delay_ms is None:
-            self._rhythm_score_timer.stop()
-            return
-        self._rhythm_score_timer.start(max(1, int(delay_ms)))
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._closing_for_exit and self.state.tray_resident and QSystemTrayIcon.isSystemTrayAvailable():

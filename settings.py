@@ -49,7 +49,7 @@ class AppSettings:
     countdown_seconds: int = DEFAULT_COUNTDOWN_SECONDS
     midi_sound_volume: int = 80
     sound_source: str = DEFAULT_SOUND_SOURCE
-    dry_run: bool = True
+    play_sound: bool = True
     countdown_sound: bool = False
     game_countdown_sound: bool = False
     auto_fit_note_range: bool = False
@@ -163,7 +163,7 @@ def load_settings() -> AppSettings:
             default=80,
         ),
         sound_source=normalize_sound_source(data.get("sound_source")),
-        dry_run=_parse_bool(data.get("dry_run"), default=True),
+        play_sound=_parse_bool(data.get("play_sound"), default=True),
         countdown_sound=_parse_bool(data.get("countdown_sound"), default=False),
         game_countdown_sound=_parse_bool(data.get("game_countdown_sound"), default=False),
         auto_fit_note_range=_parse_bool(data.get("auto_fit_note_range"), default=False),
@@ -248,7 +248,7 @@ def save_settings(settings: AppSettings) -> None:
             "countdown_seconds": settings.countdown_seconds,
             "midi_sound_volume": settings.midi_sound_volume,
             "sound_source": settings.sound_source,
-            "dry_run": settings.dry_run,
+            "play_sound": settings.play_sound,
             "countdown_sound": settings.countdown_sound,
             "game_countdown_sound": settings.game_countdown_sound,
             "auto_fit_note_range": settings.auto_fit_note_range,

@@ -68,7 +68,33 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.4.0
+    "en": """v1.5.0
+
+This release improves MIDI library management, performance visualization,
+and playback efficiency.
+
+[Main changes]
+
+- MIDI files are now loaded recursively from the selected folder and all
+  subfolders. The MIDI list shows the folder hierarchy and saves adjusted
+  column widths.
+- Reloading reuses unchanged MIDI metadata and updates only added, removed,
+  or modified files.
+- The selected MIDI's final output range is shown on the keyboard and
+  falling-note display.
+- Play sound now works with both MIDI input conversion and realtime input
+  conversion while keyboard output remains enabled.
+- Keyboard output is suppressed while this app or one of its child windows
+  has focus.
+- Removed the log tab, score, and combo display while keeping timing
+  judgments and their visual effects.
+- Reduced unnecessary playback planning, list rebuilding, visual updates,
+  and idle audio processing.
+- The default countdown is now 0 seconds.
+
+[v1.4.0]
+
+v1.4.0
 
 This release adds secure in-app updates through GitHub Releases.
 
@@ -109,7 +135,7 @@ control feedback.
 [v1.3.0]
 
 This release adds an in-app software synthesizer, automatic audio tuning,
-performance visualization and scoring, and automatic sustain generation.
+performance visualization, and automatic sustain generation.
 
 [Main changes]
 
@@ -128,10 +154,6 @@ performance visualization and scoring, and automatic sustain generation.
   use. Existing CC64 pedal events take priority.
 - Added a full A0-C8 keyboard and falling-note rhythm-game display. Both show
   the notes produced by the final output mapping.
-- Added PERFECT, GREAT, and GOOD timing judgments, combo multipliers, and
-  scoring for note press, hold, and release timing.
-- MIDI-only playback and MIDI input conversion are displayed as automatic
-  PERFECT performances.
 - Added Previous, Play/Pause, Next, Continuous playback, Repeat one, and
   Continuous playback off controls.
 - Unified realtime input conversion and MIDI input conversion under one Start
@@ -163,7 +185,32 @@ performance visualization and scoring, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.4.0
+    "ja": """v1.5.0
+
+本バージョンでは、MIDIライブラリ管理、演奏表示、
+再生処理の効率と安定性を改善しました。
+
+【主な変更】
+
+- 選択フォルダ配下のサブフォルダを再帰的に読み込み、
+  MIDI一覧へフォルダ階層を表示するようにしました。
+  列幅の変更と保存にも対応しました。
+- リロード時は変更のないMIDI情報を再利用し、
+  追加、削除、更新されたファイルだけを処理します。
+- 選択中MIDIの最終出力音域を鍵盤と音ゲー欄へ表示します。
+- MIDI入力変換とリアルタイム入力変換の両方で、
+  キー入力と同時に「音を鳴らす」を利用できるようにしました。
+- 本アプリまたは子ウィンドウがフォーカス中は、
+  本アプリからのキー入力送信を抑止します。
+- ログタブ、スコア、コンボ表示を削除し、
+  タイミング判定と演出だけを残しました。
+- 不要な再生計画、一覧再構築、描画更新、
+  未使用時の音声処理を削減しました。
+- カウントダウンの初期値を0秒へ変更しました。
+
+【v1.4.0】
+
+v1.4.0
 
 本バージョンでは、GitHub Releasesを利用した安全なアプリ内更新機能を
 追加しました。
@@ -206,7 +253,7 @@ performance visualization and scoring, and automatic sustain generation.
 【v1.3.0】
 
 本バージョンでは、アプリ内ソフトウェア音源、音声出力の自動最適化、
-演奏の可視化・採点機能、サスティンの自動生成を追加しました。
+演奏の可視化、サスティンの自動生成を追加しました。
 
 【主な変更】
 
@@ -227,11 +274,6 @@ performance visualization and scoring, and automatic sustain generation.
   元の演奏にCC64が含まれる場合は、そのペダル操作を優先します。
 - A0-C8のフル鍵盤表示と、上から音が流れる音ゲー表示を追加しました。
   実際の最終出力音を鍵盤と音ゲー画面へ反映します。
-- MIDI再生とリアルタイム入力のタイミングを比較する採点機能を
-  追加しました。PERFECT、GREAT、GOODの判定、コンボ倍率、
-  押下、長押し、離上の採点に対応しています。
-- MIDI音源再生のみの場合とMIDI入力変換では、
-  演奏内容を自動的にPERFECTとして表示します。
 - 前の曲、再生／一時停止、次の曲、連続再生、
   1曲ループ再生の操作を追加しました。
 - リアルタイム入力変換とMIDI入力変換を共通の開始ボタンへ統合し、
@@ -268,7 +310,25 @@ performance visualization and scoring, and automatic sustain generation.
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.4.0
+    "zh": """v1.5.0
+
+本版本改进了MIDI文件管理、演奏显示以及播放效率和稳定性。
+
+【主要变更】
+
+- 递归读取所选文件夹及其所有子文件夹中的MIDI文件，
+  并在列表中显示文件夹层级，同时保存调整后的列宽。
+- 重新加载时复用未变更的MIDI信息，仅处理新增、删除或修改的文件。
+- 在键盘和下落音符画面中显示所选MIDI的最终输出音域。
+- MIDI输入转换和实时输入转换均可在发送按键的同时播放声音。
+- 当本应用或其子窗口获得焦点时，不发送键盘输入。
+- 删除日志标签页、分数和连击显示，保留时序判定及其视觉效果。
+- 减少不必要的播放规划、列表重建、绘制更新和空闲音频处理。
+- 默认倒计时改为0秒。
+
+【v1.4.0】
+
+v1.4.0
 
 本版本新增了通过GitHub Releases进行安全应用内更新的功能。
 
@@ -302,7 +362,7 @@ performance visualization and scoring, and automatic sustain generation.
 【v1.3.0】
 
 本版本新增了应用内软件合成器、音频输出自动优化、
-演奏可视化与评分，以及自动延音生成功能。
+演奏可视化，以及自动延音生成功能。
 
 【主要变更】
 
@@ -317,8 +377,6 @@ performance visualization and scoring, and automatic sustain generation.
   保持音数量、保持时间和音域，生成不易造成声音浑浊的踏板操作。
   原始演奏中包含CC64时，优先使用原有踏板操作。
 - 新增A0-C8完整键盘和下落式音符显示，并反映最终输出映射后的音符。
-- 新增PERFECT、GREAT、GOOD判定、连击倍率，以及按下、长按和松开评分。
-- 仅播放MIDI音源或执行MIDI输入转换时，演奏会自动显示为PERFECT。
 - 新增上一首、播放／暂停、下一首、连续播放、单曲循环和
   关闭连续播放操作。
 - 将实时输入转换与MIDI输入转换合并为一个开始按钮，
@@ -404,7 +462,7 @@ TEXT = {
         "start_midi_input": "Start Listening",
         "stop_midi_input": "End",
         "no_midi_input_devices": "No MIDI input devices",
-        "dry_run": "Test mode (sound/log only)",
+        "conversion_sound": "Play sound",
         "countdown": "Countdown",
         "seconds_unit": "sec",
         "countdown_sound": "Sound",
@@ -438,15 +496,14 @@ TEXT = {
         "playback_mode_off": "Continuous playback off",
         "playback_mode_continuous": "Continuous playback",
         "playback_mode_repeat_one": "Repeat one",
-        "playback_log": "Log",
         "midi_list": "MIDI List",
         "name": "Name",
         "folder": "Folder",
         "duration": "Duration",
-        "folder_loaded_log": "Loaded folder {folder}: {count} MIDI files",
         "no_midi_files": "No MIDI files were found in the selected folder.",
         "select_midi_file": "Select MIDI folder",
         "load_failed_title": "Load failed",
+        "playback_failed_title": "Playback failed",
         "no_midi_title": "No MIDI",
         "load_midi_first": "Load a MIDI file first.",
         "no_events_title": "No events",
@@ -454,12 +511,7 @@ TEXT = {
         "already_playing_title": "Already playing",
         "waiting": "waiting..",
         "optimization_progress": "Optimizing {percent}%",
-        "loaded_log": "Loaded {name}: {event_count} events, {duration:.2f}s, channels {channels}",
         "none": "none",
-        "key_playback_started": "Key playback started ({mode})",
-        "sound_playback_stopped": "MIDI sound playback stopped",
-        "dry_run_mode": "test mode",
-        "real_keyboard_output": "real keyboard output",
     },
     "ja": {
         "title": "BPSR MIDI to KEY Player",
@@ -514,7 +566,7 @@ TEXT = {
         "start_midi_input": "\u53d7\u4ed8\u958b\u59cb",
         "stop_midi_input": "\u7d42\u4e86",
         "no_midi_input_devices": "MIDI\u5165\u529b\u30c7\u30d0\u30a4\u30b9\u306a\u3057",
-        "dry_run": "\u30c6\u30b9\u30c8\u30e2\u30fc\u30c9(\u97f3\u30fb\u30ed\u30b0\u306e\u307f)",
+        "conversion_sound": "\u97f3\u3092\u9cf4\u3089\u3059",
         "countdown": "\u30ab\u30a6\u30f3\u30c8\u30c0\u30a6\u30f3",
         "seconds_unit": "\u79d2",
         "countdown_sound": "\u97f3\u3092\u9cf4\u3089\u3059",
@@ -548,15 +600,14 @@ TEXT = {
         "playback_mode_off": "\u9023\u7d9a\u518d\u751f\u30aa\u30d5",
         "playback_mode_continuous": "\u9023\u7d9a\u518d\u751f",
         "playback_mode_repeat_one": "1\u66f2\u30eb\u30fc\u30d7\u518d\u751f",
-        "playback_log": "\u30ed\u30b0",
         "midi_list": "MIDI\u4e00\u89a7",
         "name": "\u540d\u524d",
         "folder": "\u30d5\u30a9\u30eb\u30c0",
         "duration": "\u9577\u3055",
-        "folder_loaded_log": "Loaded folder {folder}: {count} MIDI files",
         "no_midi_files": "\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306bMIDI\u30d5\u30a1\u30a4\u30eb\u304c\u3042\u308a\u307e\u305b\u3093\u3002",
         "select_midi_file": "MIDI\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u629e",
         "load_failed_title": "\u8aad\u307f\u8fbc\u307f\u5931\u6557",
+        "playback_failed_title": "\u518d\u751f\u5931\u6557",
         "no_midi_title": "MIDI\u672a\u9078\u629e",
         "load_midi_first": "\u5148\u306bMIDI\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304f\u3060\u3055\u3044\u3002",
         "no_events_title": "\u30a4\u30d9\u30f3\u30c8\u306a\u3057",
@@ -564,12 +615,7 @@ TEXT = {
         "already_playing_title": "\u518d\u751f\u4e2d",
         "waiting": "waiting..",
         "optimization_progress": "\u6700\u9069\u5316\u4e2d {percent}%",
-        "loaded_log": "Loaded {name}: {event_count} events, {duration:.2f}s, channels {channels}",
         "none": "\u306a\u3057",
-        "key_playback_started": "Key playback started ({mode})",
-        "sound_playback_stopped": "MIDI sound playback stopped",
-        "dry_run_mode": "test mode",
-        "real_keyboard_output": "real keyboard output",
     },
     "zh": {
         "title": "BPSR MIDI to KEY Player",
@@ -622,7 +668,7 @@ TEXT = {
         "start_midi_input": "\u5f00\u59cb\u63a5\u6536",
         "stop_midi_input": "\u7ed3\u675f",
         "no_midi_input_devices": "\u6ca1\u6709 MIDI \u8f93\u5165\u8bbe\u5907",
-        "dry_run": "\u6d4b\u8bd5\u6a21\u5f0f(\u4ec5\u58f0\u97f3\u548c\u65e5\u5fd7)",
+        "conversion_sound": "\u64ad\u653e\u58f0\u97f3",
         "countdown": "\u5012\u8ba1\u65f6",
         "seconds_unit": "\u79d2",
         "countdown_sound": "\u64ad\u653e\u58f0\u97f3",
@@ -656,15 +702,14 @@ TEXT = {
         "playback_mode_off": "\u5173\u95ed\u8fde\u7eed\u64ad\u653e",
         "playback_mode_continuous": "\u8fde\u7eed\u64ad\u653e",
         "playback_mode_repeat_one": "\u5355\u66f2\u5faa\u73af",
-        "playback_log": "\u65e5\u5fd7",
         "midi_list": "MIDI \u5217\u8868",
         "name": "\u540d\u79f0",
         "folder": "\u6587\u4ef6\u5939",
         "duration": "\u65f6\u957f",
-        "folder_loaded_log": "Loaded folder {folder}: {count} MIDI files",
         "no_midi_files": "\u6240\u9009\u6587\u4ef6\u5939\u4e2d\u6ca1\u6709 MIDI \u6587\u4ef6\u3002",
         "select_midi_file": "\u9009\u62e9 MIDI \u6587\u4ef6\u5939",
         "load_failed_title": "\u52a0\u8f7d\u5931\u8d25",
+        "playback_failed_title": "\u64ad\u653e\u5931\u8d25",
         "no_midi_title": "\u672a\u9009\u62e9 MIDI",
         "load_midi_first": "\u8bf7\u5148\u52a0\u8f7d MIDI \u6587\u4ef6\u3002",
         "no_events_title": "\u6ca1\u6709\u4e8b\u4ef6",
@@ -672,12 +717,7 @@ TEXT = {
         "already_playing_title": "\u6b63\u5728\u64ad\u653e",
         "waiting": "waiting..",
         "optimization_progress": "\u4f18\u5316\u4e2d {percent}%",
-        "loaded_log": "Loaded {name}: {event_count} events, {duration:.2f}s, channels {channels}",
         "none": "\u65e0",
-        "key_playback_started": "Key playback started ({mode})",
-        "sound_playback_stopped": "MIDI sound playback stopped",
-        "dry_run_mode": "test mode",
-        "real_keyboard_output": "real keyboard output",
     },
 }
 

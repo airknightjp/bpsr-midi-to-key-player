@@ -23,7 +23,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Double-click a MIDI file to play or stop MIDI sound playback.
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.
-- Use test mode to hear and log conversion output without sending real key input.
+- Enable `Play sound` to hear the conversion output while sending key input.
 - Adjust volume, playback position, and playback speed (10-200%). Double-click the volume or speed label to reset it to 100%.
 - Adjust UI scale (100-200%) and window opacity from the View menu.
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
@@ -37,11 +37,9 @@ The `_internal` folder contains files required by the application. Do not move t
 - Select Piano, Electric Piano, Organ, or Synth as the software sound source.
 - Automatically tune the Qt audio queue and internal Buffer for the current environment.
 - Show final output notes on a full A0-C8 keyboard and falling-note rhythm display.
-- Judge MIDI playback against realtime input timing and show score and combo.
 - Control Previous, Play/Pause, Next, Continuous playback, and Repeat one.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
-- Log countdown ticks and in-game countdown key presses.
 - Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported. These shortcuts control MIDI input conversion only and do not affect realtime input conversion or MIDI sound playback.
 - Lock shortcut settings to avoid accidental changes.
 - Edit the C3-B5 bindings and the Sustain, Octave down, and Octave up keys from `Settings > Key Bindings`.
@@ -89,12 +87,10 @@ MIDI sound playback and realtime preview sound use an in-app software synthesize
 - Learn the smallest stable Qt value for the current audio environment and reuse it on the next launch.
 - Show the current values as `Qt ... | Buffer ...` at the right end of the menu bar.
 
-## Performance Display and Scoring
+## Performance Display
 
 - Show the final output notes from MIDI playback, MIDI input conversion, and realtime input conversion on a full A0-C8 keyboard.
 - Display each note's start, duration, and release position in a falling-note lane aligned with the keyboard.
-- When MIDI playback and realtime input are used together, judge press, hold, and release timing as PERFECT, GREAT, or GOOD and show score and combo.
-- MIDI-only sound playback and MIDI input conversion are displayed as automatic PERFECT performances.
 - Hiding the Rhythm Game or Keyboard panel stops its related drawing and calculations and resynchronizes it when shown again.
 
 ## Note Range
@@ -155,7 +151,7 @@ Use `Settings > Key Bindings` to change the output keys for the C3-B5 three-octa
 5. Select `MIDI Input Conversion` and press the shared Start button to play the selected MIDI as keyboard input.
 6. Select `Realtime Input Conversion` and press the shared Start button to convert a USB MIDI keyboard in realtime.
 7. During countdown, focus the target application that should receive keyboard input.
-8. Enable `Test mode (sound/log only)` when you want to check conversion sound and logs without sending real keys.
+8. Enable `Play sound` to hear the conversion output while sending key input.
 
 Keyboard output is sent to whichever application is focused at that moment.
 
@@ -171,6 +167,8 @@ Repeat prevention applies to MIDI file keyboard conversion, MIDI sound playback,
 Administrator privileges are usually not required.
 
 The app uses the Windows `SendInput` API for keyboard output. If the target application is running as administrator, Windows may block input from this app when it is running as a normal user. In that case, launch this app with the same privilege level as the target application.
+
+To prevent accidental input, keyboard output from this app is suppressed while its main window or a child window has focus.
 
 ## Settings File
 
@@ -191,7 +189,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.4.0
+v1.5.0
 
 ## Copyright
 

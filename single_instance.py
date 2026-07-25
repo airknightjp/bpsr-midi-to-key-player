@@ -68,9 +68,6 @@ class SingleInstance:
         self._kernel32.SetEvent(self._event)
         self._show_existing_window()
 
-    def bring_existing_window_to_front(self) -> None:
-        self._show_existing_window()
-
     def start_activation_listener(self, callback: Callable[[], None]) -> None:
         if (
             self._kernel32 is None
@@ -97,14 +94,6 @@ class SingleInstance:
             daemon=True,
         )
         self._activation_thread.start()
-
-    def consume_activation_request(self) -> bool:
-        if self._kernel32 is None or self._event is None:
-            return False
-        return (
-            self._kernel32.WaitForSingleObject(self._event, 0)
-            == WAIT_OBJECT_0
-        )
 
     def close(self) -> None:
         self._activation_stop.set()

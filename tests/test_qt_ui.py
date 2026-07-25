@@ -127,39 +127,24 @@ class QtUiTests(unittest.TestCase):
         rows_render.assert_not_called()
         sources_render.assert_not_called()
 
-    def test_position_change_does_not_resubmit_rhythm_visual_state(self) -> None:
+    def test_position_time_text_changes_only_when_displayed_second_changes(self) -> None:
         self.controller.state.duration = 120.0
+        self.controller.state.position = 0.0
         self.controller._notify()
 
-        with (
-            patch.object(
-                self.window.piano_roll,
-                "set_playback_state",
-                wraps=self.window.piano_roll.set_playback_state,
-            ) as playback_render,
-            patch.object(
-                self.window.piano_roll,
-                "set_live_state",
-                wraps=self.window.piano_roll.set_live_state,
-            ) as live_render,
-            patch.object(
-                self.window.piano_roll,
-                "set_score",
-                wraps=self.window.piano_roll.set_score,
-            ) as score_render,
-            patch.object(
-                self.window.piano_roll,
-                "set_hit_events",
-                wraps=self.window.piano_roll.set_hit_events,
-            ) as hit_render,
-        ):
-            self.controller.state.position = 45.0
-            self.controller._notify()
+        with patch.object(
+            self.window.time_label,
+            "setText",
+            wraps=self.window.time_label.setText,
+        ) as set_text:
+            self.window.render_position(0.2, 120.0)
+            set_text.assert_not_called()
 
-        playback_render.assert_called_once()
-        live_render.assert_not_called()
-        score_render.assert_not_called()
-        hit_render.assert_not_called()
+            self.window.render_position(1.0, 120.0)
+            set_text.assert_called_once_with("00:01 / 02:00")
+
+    def test_player_has_only_the_midi_list_tab(self) -> None:
+        self.assertEqual(self.window.tab_bar.count(), 1)
 
     def test_position_change_does_not_recalculate_output_note_range(self) -> None:
         self.controller.events = [
@@ -268,16 +253,9 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.4.0")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.5.0")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
-        legacy_source = (project_root / "legacy_tk_main.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(
-            f'APP_VERSION = "{qt_main_window.APP_VERSION}"',
-            legacy_source,
-        )
         for relative_path in (
             "README.md",
             "README.ja.md",
@@ -428,7 +406,7 @@ class QtUiTests(unittest.TestCase):
     def test_countdown_uses_a_knob_and_updates_the_setting(self) -> None:
         self.assertEqual(self.window.countdown_control.knob.minimum(), 0)
         self.assertEqual(self.window.countdown_control.knob.maximum(), 10)
-        self.assertEqual(self.window.countdown_control.knob.value(), 3)
+        self.assertEqual(self.window.countdown_control.knob.value(), 0)
 
         self.window.countdown_control.knob.setValue(7)
         self.assertEqual(self.controller.state.countdown_seconds, 7)
@@ -863,6 +841,16 @@ class QtUiTests(unittest.TestCase):
 
         self.assertTrue(self.window.conversion_start_button.isEnabled())
 
+    def test_midi_file_start_button_is_enabled_during_sound_playback(self) -> None:
+        self.controller.set_option("input_conversion_mode", "midi_file")
+        self.controller.state.current_mode = "sound"
+        self.controller._notify()
+
+        self.assertTrue(self.window.conversion_start_button.isEnabled())
+        self.assertFalse(
+            self.window.conversion_start_button.property("active")
+        )
+
     def test_common_start_button_uses_the_selected_conversion_mode(self) -> None:
         self.assertFalse(hasattr(self.window, "realtime_button"))
         self.assertFalse(hasattr(self.window, "keyboard_play_button"))
@@ -1272,52 +1260,6 @@ class QtUiTests(unittest.TestCase):
                 self.assertTrue(panel.isVisibleTo(self.window))
                 self.assertEqual(self.window.height(), visible_height)
 
-    def test_hidden_piano_roll_stops_visual_work_and_resyncs_when_shown(self) -> None:
-        self.window.show()
-        self.application.processEvents()
-        roll = self.window.piano_roll
-        roll.set_playback_state(1.0, 100, True)
-        self.assertTrue(roll._animation_timer.isActive())
-
-        self.controller.set_section_visible("piano_roll", False)
-        self.application.processEvents()
-
-        self.assertFalse(roll.rendering_enabled)
-        self.assertFalse(roll._animation_timer.isActive())
-        self.controller.state.position = 12.5
-        self.controller.state.transpose_semitones = 5
-        self.controller.state.rhythm_score = 1234
-        self.controller.state.rhythm_combo = 12
-        self.controller.state.rhythm_judgment = "GREAT"
-        self.controller.state.rhythm_hit_events = (
-            (9, 60, "GREAT", False),
-        )
-        original_build = qt_main_window.build_piano_roll_notes
-        with patch(
-            "qt_main_window.build_piano_roll_notes",
-            wraps=original_build,
-        ) as build_notes:
-            self.controller._notify()
-            build_notes.assert_not_called()
-            with patch.object(
-                self.controller,
-                "piano_roll_playback_running",
-                return_value=True,
-            ):
-                self.controller.set_section_visible("piano_roll", True)
-                self.application.processEvents()
-
-        self.assertTrue(roll.rendering_enabled)
-        self.assertTrue(roll._animation_timer.isActive())
-        self.assertEqual(roll._position, 12.5)
-        self.assertEqual(roll.score, 1234)
-        self.assertEqual(roll.combo, 12)
-        self.assertEqual(roll.judgment, "GREAT")
-        self.assertEqual(roll.hit_impact_count, 0)
-        self.assertEqual(roll._last_hit_serial, 9)
-        build_notes.assert_called_once()
-        roll._animation_timer.stop()
-
     def test_hidden_keyboard_stops_visual_work_and_resyncs_when_shown(self) -> None:
         self.window.show()
         self.application.processEvents()
@@ -1388,11 +1330,24 @@ class QtUiTests(unittest.TestCase):
     def test_double_clicking_midi_list_tab_reloads_folder(self) -> None:
         calls = []
         self.controller.reload_midi_folder = lambda: calls.append(True)
+        self.window.show()
+        self.application.processEvents()
 
         self.window.tab_bar.tabBarDoubleClicked.emit(0)
+        self.application.processEvents()
+        self.assertIs(
+            self.window.tab_bar.property("reloadFeedback"),
+            True,
+        )
         self.window.tab_bar.tabBarDoubleClicked.emit(1)
 
         self.assertEqual(calls, [True])
+        self.assertTrue(self.window._midi_reload_feedback_timer.isActive())
+        QTest.qWait(180)
+        self.assertIs(
+            self.window.tab_bar.property("reloadFeedback"),
+            False,
+        )
 
     def test_midi_list_tab_has_reload_icon_and_track_header_stays_hidden(self) -> None:
         self.window.show()
@@ -1664,7 +1619,6 @@ class QtUiTests(unittest.TestCase):
                 name="song.mid",
                 folder="Library > Album",
                 duration="01:23",
-                note_range="C3-B5",
             )
         ]
         self.controller._notify()
@@ -1689,6 +1643,50 @@ class QtUiTests(unittest.TestCase):
             self.window.midi_table.item(0, 1).toolTip(),
             "Library > Album",
         )
+
+    def test_midi_list_updates_only_the_changed_row(self) -> None:
+        first = MidiListRow(Path("first.mid"), "first.mid", duration="00:10")
+        second = MidiListRow(Path("second.mid"), "second.mid", duration="00:20")
+        self.controller.state.midi_rows = [first, second]
+        self.controller._notify()
+        first_item = self.window.midi_table.item(0, 0)
+        updated_second = MidiListRow(
+            Path("second.mid"),
+            "second.mid",
+            duration="00:21",
+        )
+
+        with patch.object(
+            self.window,
+            "_update_midi_table_row",
+            wraps=self.window._update_midi_table_row,
+        ) as update_row:
+            self.controller.state.midi_rows = [first, updated_second]
+            self.controller._notify()
+
+        update_row.assert_called_once_with(1, updated_second)
+        self.assertIs(self.window.midi_table.item(0, 0), first_item)
+        self.assertEqual(self.window.midi_table.item(1, 2).text(), "00:21")
+
+    def test_midi_list_inserts_and_removes_rows_without_rebuilding_others(self) -> None:
+        second = MidiListRow(Path("second.mid"), "second.mid", duration="00:20")
+        third = MidiListRow(Path("third.mid"), "third.mid", duration="00:30")
+        self.controller.state.midi_rows = [second, third]
+        self.controller._notify()
+        second_item = self.window.midi_table.item(0, 0)
+        third_item = self.window.midi_table.item(1, 0)
+        first = MidiListRow(Path("first.mid"), "first.mid", duration="00:10")
+
+        self.controller.state.midi_rows = [first, second, third]
+        self.controller._notify()
+
+        self.assertIs(self.window.midi_table.item(1, 0), second_item)
+        self.assertIs(self.window.midi_table.item(2, 0), third_item)
+
+        self.controller.state.midi_rows = [first, third]
+        self.controller._notify()
+
+        self.assertIs(self.window.midi_table.item(1, 0), third_item)
 
     def test_midi_header_separators_align_with_column_edges(self) -> None:
         self.window.resize(1400, self.window.height())
@@ -1729,11 +1727,12 @@ class QtUiTests(unittest.TestCase):
                     + header.sectionViewportPosition(last_logical_index)
                     + header.sectionSize(last_logical_index)
                 )
-                unused_x = min(image.width() - 2, sections_end + 10)
-                self.assertGreater(unused_x, sections_end)
-                self.assertEqual(
-                    image.pixelColor(unused_x, y),
-                    QColor(palette.surface),
+                self.assertLessEqual(
+                    abs(
+                        sections_end
+                        - (body_origin.x() + header.viewport().width())
+                    ),
+                    1,
                 )
 
     def test_midi_column_widths_are_resizable_saved_and_scale_aware(self) -> None:
@@ -1741,36 +1740,89 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
         header = self.window.midi_table.horizontalHeader()
 
-        for column in range(3):
-            with self.subTest(column=column):
-                self.assertEqual(
-                    header.sectionResizeMode(column),
-                    QHeaderView.ResizeMode.Interactive,
-                )
+        self.assertEqual(
+            header.sectionResizeMode(0),
+            QHeaderView.ResizeMode.Interactive,
+        )
+        self.assertEqual(
+            header.sectionResizeMode(1),
+            QHeaderView.ResizeMode.Stretch,
+        )
+        self.assertEqual(
+            header.sectionResizeMode(2),
+            QHeaderView.ResizeMode.Fixed,
+        )
+        self.assertEqual(
+            header.sectionViewportPosition(2) + header.sectionSize(2),
+            header.viewport().width(),
+        )
 
-        header.resizeSection(1, 240)
+        duration_left = header.sectionViewportPosition(2)
+        folder_left = header.sectionViewportPosition(1)
+        header.resizeSection(0, 560)
         self.application.processEvents()
         self.assertEqual(
             self.controller.state.midi_column_widths,
-            (630, 240, 80),
+            (560, 180, 80),
         )
         self.assertEqual(
             self.controller.current_settings().midi_column_widths,
-            (630, 240, 80),
+            (560, 180, 80),
+        )
+        self.assertNotEqual(header.sectionViewportPosition(1), folder_left)
+        self.assertEqual(header.sectionViewportPosition(2), duration_left)
+        duration_width = header.sectionSize(2)
+        duration_right = (
+            header.sectionViewportPosition(2) + duration_width
+        )
+        duration_boundary = header.sectionViewportPosition(2)
+        header_y = header.height() // 2
+        QTest.mouseMove(
+            header.viewport(),
+            QPoint(duration_boundary, header_y),
+        )
+        self.assertEqual(
+            header.viewport().cursor().shape(),
+            Qt.CursorShape.SplitHCursor,
+        )
+        QTest.mousePress(
+            header.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(duration_boundary, header_y),
+        )
+        QTest.mouseMove(
+            header.viewport(),
+            QPoint(duration_boundary - 20, header_y),
+        )
+        QTest.mouseRelease(
+            header.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(duration_boundary - 20, header_y),
+        )
+        self.application.processEvents()
+        self.assertEqual(header.sectionSize(2), duration_width + 20)
+        self.assertEqual(
+            header.sectionViewportPosition(2) + header.sectionSize(2),
+            duration_right,
+        )
+        self.assertEqual(
+            self.controller.state.midi_column_widths,
+            (560, 180, 100),
         )
 
         self.controller.set_option("ui_scale_percent", 200)
         self.application.processEvents()
         self.assertEqual(
-            [self.window.midi_table.columnWidth(column) for column in range(3)],
-            [1260, 480, 160],
+            self.window.midi_table.columnWidth(0),
+            1120,
         )
-
-        header.resizeSection(2, 200)
-        self.application.processEvents()
         self.assertEqual(
-            self.controller.state.midi_column_widths,
-            (630, 240, 100),
+            self.window.midi_table.columnWidth(2),
+            200,
+        )
+        self.assertEqual(
+            header.sectionViewportPosition(2) + header.sectionSize(2),
+            header.viewport().width(),
         )
 
     def test_clicking_playback_position_seeks_to_clicked_value(self) -> None:
@@ -2493,7 +2545,7 @@ class QtUiTests(unittest.TestCase):
     def test_settings_items_use_two_left_aligned_rows(self) -> None:
         self.window.show()
         self.application.processEvents()
-        common_items = (self.window.dry_run_check, self.window.auto_fit_check, self.window.repeat_check)
+        common_items = (self.window.play_sound_check, self.window.auto_fit_check, self.window.repeat_check)
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
@@ -2514,7 +2566,7 @@ class QtUiTests(unittest.TestCase):
         first_row_bottom = max(
             item.geometry().bottom()
             for item in (
-                self.window.dry_run_check,
+                self.window.play_sound_check,
                 self.window.auto_fit_check,
                 self.window.repeat_check,
             )
@@ -2532,7 +2584,7 @@ class QtUiTests(unittest.TestCase):
 
     def test_mode_switch_keeps_all_detailed_settings_enabled(self) -> None:
         for option in (
-            "dry_run",
+            "play_sound",
             "auto_fit_note_range",
             "repeat_prevention",
             "humanize_timing",
@@ -2545,7 +2597,7 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
 
         detailed_settings = (
-            self.window.dry_run_check,
+            self.window.play_sound_check,
             self.window.auto_fit_check,
             self.window.repeat_check,
             self.window.humanize_check,
@@ -2808,23 +2860,6 @@ class QtUiTests(unittest.TestCase):
             frozenset((64,)),
         )
 
-    def test_score_and_combo_are_rendered_in_falling_notes(self) -> None:
-        self.controller.playback_id = 3
-        self.controller.midi_input_id = 4
-        self.controller.state.current_mode = "sound"
-        self.controller.state.midi_input_running = True
-        self.controller.worker_queue.put(("sound_output_note", 3, 60, True, 10.0))
-        self.controller.worker_queue.put(("midi_output_note", 4, 60, True, 10.1))
-
-        with patch("app_controller.time.monotonic", return_value=10.1):
-            self.controller.process_pending_events()
-
-        self.assertEqual(self.window.piano_roll.score, 70)
-        self.assertEqual(self.window.piano_roll.combo, 1)
-        self.assertEqual(self.window.piano_roll.judgment, "GREAT")
-        self.assertEqual(self.window.piano_roll.multiplier_tenths, 10)
-        self.assertEqual(self.window.piano_roll.hit_impact_count, 1)
-
     def test_falling_note_body_uses_the_note_on_to_note_off_length(self) -> None:
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
@@ -2847,21 +2882,6 @@ class QtUiTests(unittest.TestCase):
             bottom - top,
             (0.75 - 0.25) / roll.PREVIEW_SECONDS * (roll.height() - 1),
         )
-        roll.close()
-
-    def test_realtime_tail_visual_is_disabled(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        roll.show()
-        self.application.processEvents()
-        before = roll.grab().toImage()
-
-        roll.set_live_state((60,), ((60, 1),))
-        self.application.processEvents()
-        after = roll.grab().toImage()
-
-        self.assertEqual(roll.live_trail_count, 0)
-        self.assertEqual(before, after)
         roll.close()
 
     def test_falling_notes_queries_only_the_visible_time_window(self) -> None:
@@ -2908,121 +2928,19 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(roll._visible_sequence_notes(0.26, 1.0), (note,))
         self.assertEqual(roll._visible_sequence_notes(8.0, 1.0), ())
 
-    def test_falling_note_only_bursts_after_a_scored_hit(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        roll.show()
-        self.application.processEvents()
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.26, 100, True)
-        roll._animation_timer.stop()
-
-        with patch(
-            "qt_components.time.monotonic",
-            return_value=10.0,
-        ), patch.object(
-            roll,
-            "_draw_impact_burst",
-            wraps=roll._draw_impact_burst,
-        ) as unscored_burst:
-            roll.grab()
-        unscored_burst.assert_not_called()
-
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-        roll._animation_timer.stop()
-        with patch(
-            "qt_components.time.monotonic",
-            return_value=10.05,
-        ), patch.object(
-            roll,
-            "_draw_impact_burst",
-            wraps=roll._draw_impact_burst,
-        ) as scored_burst:
-            roll.grab()
-        scored_burst.assert_called_once()
-        self.assertEqual(scored_burst.call_args.args[5:], (1.5, 17, 2, 7))
-        self.assertTrue(scored_burst.call_args.kwargs["rainbow"])
-        self.assertEqual(
-            scored_burst.call_args.kwargs["key_width_scale"],
-            1.0,
-        )
-        self.assertEqual(
-            scored_burst.call_args.kwargs["effect_size_scale"],
-            1.0,
-        )
-        self.assertEqual(
-            scored_burst.call_args.kwargs["effect_opacity"],
-            0.50,
-        )
-        roll.close()
-
-    def test_running_falling_notes_coalesces_hit_and_score_updates(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.0, 100, True)
-            roll.set_score(100, 1, "PERFECT", 10)
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-        roll._animation_timer.stop()
-
-        self.assertTrue(roll._score_update_pending)
-        self.assertEqual(roll._pending_effect_notes, {60})
-
-        with patch("qt_components.time.monotonic", return_value=10.016):
-            roll._advance_animation()
-        roll._animation_timer.stop()
-
-        self.assertFalse(roll._score_update_pending)
-        self.assertEqual(roll._pending_effect_notes, set())
-        roll.close()
-
-    def test_falling_note_impact_is_drawn_behind_scheduled_notes(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        roll.show()
-        self.application.processEvents()
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_playback_state(0.26, 100, True)
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-        roll._animation_timer.stop()
-        draw_order = []
-
-        with patch(
-            "qt_components.time.monotonic",
-            return_value=10.05,
-        ), patch.object(
-            roll,
-            "_draw_impact_burst",
-            side_effect=lambda *args, **kwargs: draw_order.append("impact"),
-        ), patch.object(
-            roll,
-            "_draw_note_span",
-            side_effect=lambda *args, **kwargs: draw_order.append("note"),
-        ):
-            roll.grab()
-
-        self.assertEqual(draw_order, ["impact", "note"])
-        roll.close()
-
-    def test_falling_note_judgments_have_clearly_distinct_effects(self) -> None:
+    def test_falling_note_renders_three_distinct_judgment_effects(self) -> None:
         roll = FallingNotesWidget()
 
         perfect = roll._impact_style("PERFECT")
         great = roll._impact_style("GREAT")
         good = roll._impact_style("GOOD")
 
-        self.assertGreater(perfect[1], great[1])
-        self.assertGreater(great[1], good[1])
-        self.assertGreater(perfect[2], great[2])
-        self.assertGreater(great[2], good[2])
-        self.assertEqual((perfect[3], great[3], good[3]), (2, 1, 0))
         self.assertEqual(
             (perfect[2:], great[2:], good[2:]),
             ((17, 2, 7), (10, 1, 4), (5, 0, 2)),
         )
+        self.assertGreater(perfect[1], great[1])
+        self.assertGreater(great[1], good[1])
         self.assertGreater(
             roll._impact_duration("PERFECT"),
             roll._impact_duration("GREAT"),
@@ -3032,24 +2950,36 @@ class QtUiTests(unittest.TestCase):
             roll._impact_duration("GOOD"),
         )
 
-    def test_perfect_impact_uses_a_full_rainbow_palette(self) -> None:
+    def test_falling_note_hit_events_restore_burst_and_lane_effects(self) -> None:
         roll = FallingNotesWidget()
 
-        colors = {
-            roll._rainbow_impact_color(index, 7, 0.0).hue()
-            for index in range(7)
-        }
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_hit_events(
+                (
+                    (1, 60, "PERFECT", False),
+                    (2, 62, "GREAT", False),
+                    (3, 64, "GOOD", False),
+                )
+            )
 
-        self.assertEqual(len(colors), 7)
-        self.assertGreaterEqual(max(colors) - min(colors), 300)
+        self.assertEqual(roll.hit_impact_count, 3)
+        self.assertEqual(
+            roll.held_lane_notes,
+            frozenset((60, 62, 64)),
+        )
+        with patch("qt_components.time.monotonic", return_value=11.0):
+            roll.set_hit_events(((4, 60, "PERFECT", True),))
+        self.assertNotIn(60, roll.held_lane_notes)
+        self.assertEqual(roll.lane_fade_count, 1)
+        self.assertFalse(hasattr(roll, "set_score"))
 
-    def test_release_impact_is_smaller_and_quieter_than_press_impact(self) -> None:
+    def test_perfect_hit_draws_the_rainbow_burst(self) -> None:
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.show()
         self.application.processEvents()
         with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 60, "PERFECT", True),))
+            roll.set_hit_events(((1, 60, "PERFECT", False),))
         roll._animation_timer.stop()
 
         with patch(
@@ -3059,149 +2989,32 @@ class QtUiTests(unittest.TestCase):
             roll,
             "_draw_impact_burst",
             wraps=roll._draw_impact_burst,
-        ) as release_burst:
+        ) as draw_burst:
             roll.grab()
 
-        release_burst.assert_called_once()
-        self.assertEqual(
-            release_burst.call_args.args[5:],
-            (1.5, 8, 2, 4),
-        )
-        self.assertEqual(
-            release_burst.call_args.kwargs["effect_size_scale"],
-            0.60,
-        )
-        self.assertEqual(
-            release_burst.call_args.kwargs["effect_opacity"],
-            0.20,
-        )
-        self.assertTrue(release_burst.call_args.kwargs["rainbow"])
+        draw_burst.assert_called_once()
+        self.assertTrue(draw_burst.call_args.kwargs["rainbow"])
+        self.assertEqual(draw_burst.call_args.args[5:], (1.5, 17, 2, 7))
         roll.close()
 
-    def test_falling_note_impact_uses_full_size_and_opacity(self) -> None:
-        self.assertEqual(FallingNotesWidget.IMPACT_SIZE_SCALE, 1.0)
-        self.assertEqual(FallingNotesWidget.IMPACT_OPACITY, 1.0)
-
-    def test_falling_note_impact_matches_white_and_black_key_widths(self) -> None:
-        roll = FallingNotesWidget()
-        width = 1079.0
-        _white_x, white_width = roll._note_rect(60, width)
-        _black_x, black_width = roll._note_rect(61, width)
-
-        self.assertEqual(
-            roll._impact_key_width_scale(white_width, width),
-            1.0,
-        )
-        self.assertAlmostEqual(
-            roll._impact_key_width_scale(black_width, width),
-            0.62,
-        )
-
-    def test_miss_creates_a_red_lane_fade_without_a_burst(self) -> None:
+    def test_falling_note_ignores_removed_miss_effect(self) -> None:
         roll = FallingNotesWidget()
 
-        roll.set_hit_events(((1, 60, "MISS"),))
+        roll.set_hit_events(((1, 60, "MISS", False),))
 
         self.assertEqual(roll.hit_impact_count, 0)
-        self.assertEqual(roll.lane_fade_count, 1)
-        self.assertNotIn("MISS", roll._score_text())
-
-    def test_lane_glow_strengths_use_the_approved_opacity(self) -> None:
-        self.assertEqual(FallingNotesWidget.HELD_LANE_OPACITY, 0.28)
-        self.assertEqual(FallingNotesWidget.MISSED_LANE_OPACITY, 0.60)
-        self.assertEqual(FallingNotesWidget.LANE_FADE_SECONDS, 0.15)
-
-    def test_miss_draws_a_red_glow_over_the_missed_note_lane(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        roll.show()
-        self.application.processEvents()
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 61, "MISS"),))
-        roll._animation_timer.stop()
-        with patch(
-            "qt_components.time.monotonic",
-            return_value=10.1,
-        ), patch.object(
-            roll,
-            "_draw_lane_glow",
-            wraps=roll._draw_lane_glow,
-        ) as draw_glow:
-            roll.grab()
-
-        draw_glow.assert_called_once()
-        expected_x, expected_width = roll._note_rect(61, roll.width() - 1)
-        self.assertAlmostEqual(draw_glow.call_args.args[1], expected_x)
-        self.assertAlmostEqual(draw_glow.call_args.args[2], expected_width)
-        self.assertEqual(
-            draw_glow.call_args.args[4].name().upper(),
-            "#FF3158",
-        )
-        roll.close()
-
-    def test_scored_lane_stays_lit_until_release_then_fades(self) -> None:
-        roll = FallingNotesWidget()
-
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-        self.assertEqual(roll.held_lane_notes, frozenset((60,)))
-
-        with patch("qt_components.time.monotonic", return_value=11.0):
-            roll.set_hit_events(((2, 60, "PERFECT", True),))
-        self.assertEqual(roll.held_lane_notes, frozenset())
-        self.assertEqual(roll.lane_fade_count, 1)
-
-        with patch("qt_components.time.monotonic", return_value=11.151):
-            roll._advance_animation()
         self.assertEqual(roll.lane_fade_count, 0)
 
-    def test_released_output_note_clears_a_held_lane_without_other_state_changes(self) -> None:
-        self.controller.state.rhythm_hit_events = ((1, 60, "PERFECT", False),)
-        self.controller.state.active_output_notes = frozenset((60,))
-        self.controller._notify()
-        self.assertEqual(self.window.piano_roll.held_lane_notes, frozenset((60,)))
-
-        self.controller.state.active_output_notes = frozenset()
-        self.controller._notify()
-
-        self.assertEqual(self.window.piano_roll.held_lane_notes, frozenset())
-
-    def test_missed_release_turns_off_the_held_lane(self) -> None:
+    def test_perfect_effect_uses_rainbow_palette(self) -> None:
         roll = FallingNotesWidget()
 
-        roll.set_hit_events(((1, 60, "PERFECT", False),))
-        self.assertEqual(roll.held_lane_notes, frozenset((60,)))
+        colors = {
+            roll._rainbow_impact_color(index, 7, 0.0).hue()
+            for index in range(7)
+        }
 
-        roll.set_hit_events(((2, 60, "MISS", True),))
-
-        self.assertEqual(roll.held_lane_notes, frozenset())
-        self.assertEqual(roll.lane_fade_count, 1)
-
-    def test_miss_judgment_text_is_common_to_every_language(self) -> None:
-        for language in ("en", "ja", "zh"):
-            with self.subTest(language=language):
-                self.controller.set_option("language", language)
-                self.controller.state.rhythm_judgment = ""
-                self.controller._notify()
-                self.controller.state.rhythm_judgment = "MISS"
-                self.controller._notify()
-
-                self.assertEqual(self.window.piano_roll.judgment, "MISS")
-
-    def test_midi_only_playback_renders_an_automatic_perfect_hit(self) -> None:
-        self.controller.playback_id = 3
-        self.controller.state.current_mode = "sound"
-        self.controller.worker_queue.put(
-            ("sound_output_note", 3, 60, True, 10.0)
-        )
-
-        with patch("app_controller.time.monotonic", return_value=10.0):
-            self.controller.process_pending_events()
-
-        self.assertEqual(self.window.piano_roll.score, 100)
-        self.assertEqual(self.window.piano_roll.combo, 1)
-        self.assertEqual(self.window.piano_roll.judgment, "PERFECT")
-        self.assertEqual(self.window.piano_roll.hit_impact_count, 1)
+        self.assertEqual(len(colors), 7)
+        self.assertGreaterEqual(max(colors) - min(colors), 300)
 
     def test_falling_note_head_disappears_after_reaching_the_hit_line(self) -> None:
         roll = FallingNotesWidget()
@@ -3235,95 +3048,6 @@ class QtUiTests(unittest.TestCase):
         held_head.assert_not_called()
         held_minimum.assert_not_called()
         roll.close()
-
-    def test_falling_note_trail_has_no_white_sparkle(self) -> None:
-        class RecordingPainter:
-            def __init__(self) -> None:
-                self.ellipse_count = 0
-
-            def setPen(self, *_args) -> None:
-                return None
-
-            def setBrush(self, *_args) -> None:
-                return None
-
-            def drawRoundedRect(self, *_args) -> None:
-                return None
-
-            def drawEllipse(self, *_args) -> None:
-                self.ellipse_count += 1
-
-        roll = FallingNotesWidget()
-        painter = RecordingPainter()
-        with patch.object(roll, "_draw_light_bar") as draw_head, patch.object(
-            roll,
-            "_draw_impact_core",
-        ) as draw_impact_core:
-            roll._draw_note_span(
-                painter,
-                10.0,
-                20.0,
-                0.0,
-                50.0,
-                QColor("#00ccff"),
-                now=10.0,
-                phase_seed=60.0,
-            )
-
-        self.assertEqual(painter.ellipse_count, 0)
-        draw_head.assert_called_once()
-        draw_impact_core.assert_not_called()
-
-    def test_long_held_note_does_not_draw_a_sparkle(self) -> None:
-        class RecordingPainter:
-            def setPen(self, *_args) -> None:
-                return None
-
-            def setBrush(self, *_args) -> None:
-                return None
-
-            def drawRoundedRect(self, *_args) -> None:
-                return None
-
-        roll = FallingNotesWidget()
-        painter = RecordingPainter()
-        with patch.object(roll, "_draw_impact_core") as draw_impact_core:
-            for now in (10.20, 10.50):
-                roll._draw_note_span(
-                    painter,
-                    10.0,
-                    20.0,
-                    0.0,
-                    50.0,
-                    QColor("#00ccff"),
-                    show_head=False,
-                    now=now,
-                    phase_seed=0.0,
-                )
-
-        draw_impact_core.assert_not_called()
-
-    def test_impact_effects_do_not_generate_pure_white_sparkles(self) -> None:
-        self.assertNotIn(
-            "QColor(255, 255, 255",
-            inspect.getsource(FallingNotesWidget._draw_impact_core),
-        )
-        self.assertNotIn(
-            "QColor(255, 255, 255",
-            inspect.getsource(FallingNotesWidget._draw_impact_burst),
-        )
-
-    def test_held_lane_stays_visible_without_running_an_idle_animation(self) -> None:
-        roll = FallingNotesWidget()
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-
-        with patch("qt_components.time.monotonic", return_value=10.25):
-            roll._advance_animation()
-
-        self.assertEqual(roll.hit_impact_count, 0)
-        self.assertEqual(roll.held_lane_notes, frozenset((60,)))
-        self.assertFalse(roll._animation_timer.isActive())
 
     def test_falling_note_assets_are_cached_and_reused(self) -> None:
         roll = FallingNotesWidget()
@@ -3387,39 +3111,6 @@ class QtUiTests(unittest.TestCase):
                 for y in range(first.height())
             )
         )
-        roll.close()
-
-    def test_impact_and_score_layers_are_cached_until_their_state_changes(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        roll.show()
-        self.application.processEvents()
-        with patch("qt_components.time.monotonic", return_value=10.0):
-            roll.set_hit_events(((1, 60, "PERFECT", False),))
-        roll._animation_timer.stop()
-        with patch("qt_components.time.monotonic", return_value=10.05):
-            roll.grab()
-        impact_keys = tuple(
-            sorted(pixmap.cacheKey() for pixmap in roll._impact_cache.values())
-        )
-        score_key = roll._score_layer.cacheKey()
-
-        with patch("qt_components.time.monotonic", return_value=10.05):
-            roll.grab()
-
-        self.assertTrue(impact_keys)
-        self.assertEqual(
-            impact_keys,
-            tuple(
-                sorted(
-                    pixmap.cacheKey()
-                    for pixmap in roll._impact_cache.values()
-                )
-            ),
-        )
-        self.assertEqual(roll._score_layer.cacheKey(), score_key)
-        roll.set_score(100, 1, "PERFECT", 10)
-        self.assertIsNone(roll._score_layer)
         roll.close()
 
     def test_running_position_sync_does_not_request_a_duplicate_full_repaint(self) -> None:
@@ -3518,17 +3209,6 @@ class QtUiTests(unittest.TestCase):
 
             self.assertAlmostEqual(
                 center_y + (bar_height + outline_width) / 2.0,
-                float(roll.height() - 1),
-            )
-
-    def test_falling_note_impact_starts_at_bottom_at_each_scale(self) -> None:
-        roll = FallingNotesWidget()
-        for scale in (1.0, 2.0):
-            roll.apply_scale(scale)
-            roll.resize(round(1080 * scale), round(57 * scale))
-
-            self.assertEqual(
-                roll._impact_origin_y(),
                 float(roll.height() - 1),
             )
 
@@ -3764,7 +3444,7 @@ class QtUiTests(unittest.TestCase):
         self.assertFalse(hasattr(self.window, "common_caption"))
         self.assertFalse(hasattr(self.window, "performance_caption"))
         items = (
-            self.window.dry_run_check,
+            self.window.play_sound_check,
             self.window.auto_fit_check,
             self.window.repeat_check,
             self.window.humanize_check,

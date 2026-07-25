@@ -17,7 +17,6 @@ class IconAssetTests(unittest.TestCase):
                 "app_icon_whale.ico",
                 "app_icon_whale.png",
                 "check_white.svg",
-                "radio_white_dot.svg",
                 "whale_slider_frame_0.png",
                 "whale_slider_frame_1.png",
                 "whale_slider_frame_2.png",

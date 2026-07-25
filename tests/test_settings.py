@@ -23,6 +23,7 @@ class SettingsTests(unittest.TestCase):
     def test_display_and_shortcut_defaults(self) -> None:
         settings = AppSettings()
 
+        self.assertEqual(settings.countdown_seconds, 0)
         self.assertEqual(settings.ui_scale_percent, 100)
         self.assertEqual(settings.window_width, 900)
         self.assertEqual(settings.midi_column_widths, (630, 180, 80))
@@ -36,6 +37,7 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(hasattr(settings, "qt_frames_retest_after"))
         self.assertEqual(settings.input_conversion_mode, "midi_file")
         self.assertEqual(settings.sound_playback_mode, "off")
+        self.assertTrue(settings.play_sound)
         self.assertFalse(settings.hide_release_notes_on_startup)
         self.assertEqual(settings.last_update_check_at, 0)
         self.assertEqual(
@@ -69,7 +71,7 @@ class SettingsTests(unittest.TestCase):
                     countdown_seconds=2,
                     midi_sound_volume=70,
                     sound_source="synth",
-                    dry_run=False,
+                    play_sound=False,
                     countdown_sound=True,
                     game_countdown_sound=True,
                     auto_fit_note_range=True,
@@ -124,9 +126,14 @@ class SettingsTests(unittest.TestCase):
                 )
             )
 
+            saved_payload = json.loads(
+                (settings_dir / "settings.json").read_text(encoding="utf-8")
+            )
             loaded = load_settings()
             self.assertFalse((settings_dir / "settings.json.tmp").exists())
 
+        self.assertFalse(saved_payload["play_sound"])
+        self.assertNotIn("dry_run", saved_payload)
         self.assertEqual(loaded.color_theme, "orange")
         self.assertEqual(loaded.sound_source, "synth")
         self.assertTrue(loaded.always_on_top)
@@ -139,6 +146,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.midi_column_widths, (720, 240, 96))
         self.assertTrue(loaded.countdown_sound)
         self.assertTrue(loaded.game_countdown_sound)
+        self.assertFalse(loaded.play_sound)
         self.assertTrue(loaded.auto_fit_note_range)
         self.assertEqual(loaded.transpose_semitones, -7)
         self.assertEqual(loaded.octave_shift, 2)
@@ -181,6 +189,17 @@ class SettingsTests(unittest.TestCase):
             "device|48000|2|Float",
         )
         self.assertEqual(loaded.last_update_check_at, 1_789_123_456)
+
+    def test_removed_dry_run_setting_is_not_loaded(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            (settings_dir / "settings.json").write_text(
+                json.dumps({"dry_run": False}),
+                encoding="utf-8",
+            )
+
+            loaded = load_settings()
+
+        self.assertTrue(loaded.play_sound)
 
     def test_midi_column_widths_are_clamped_or_reset_when_loaded(self) -> None:
         with isolated_settings_directory() as settings_dir:

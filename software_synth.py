@@ -64,11 +64,14 @@ AUTO_BUFFER_STABILIZATION_SECONDS = 20.0
 AUTO_BUFFER_DOWNSHIFT_STABLE_SECONDS = 20.0
 AUTO_BUFFER_DOWNSHIFT_MAX_UTILIZATION = 0.25
 AUTO_BUFFER_DOWNSHIFT_BLOCK_SECONDS = 60.0
+AUTO_BUFFER_ACTIVITY_SPAN_SECONDS = 15.0
+AUTO_BUFFER_MIN_ACTIVITY_SAMPLES = 20
 AUTO_QT_UNDERRUN_WINDOW_SECONDS = 5.0
 AUTO_QT_UNDERRUN_THRESHOLD = 3
 AUTO_QT_STABILIZATION_SECONDS = 60.0
 AUTO_QT_ACTIVITY_SPAN_SECONDS = 15.0
 AUTO_QT_MIN_ACTIVITY_SAMPLES = 20
+AUDIO_IDLE_SHUTDOWN_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -152,7 +155,6 @@ class SynthRenderState:
 class AudioSupplyMetrics:
     shortages: tuple[float, ...]
     synthesis_utilization: tuple[tuple[float, float], ...]
-    synthesis_durations: tuple[tuple[float, float], ...] = ()
     supply_delays: tuple[float, ...] = ()
     output_underruns: tuple[float, ...] = ()
     producer_starved_output_underruns: tuple[float, ...] = ()
@@ -310,13 +312,25 @@ class AudioBufferAutoPolicy:
         ):
             return None
         utilization_cutoff = now - AUTO_BUFFER_DOWNSHIFT_STABLE_SECONDS
-        utilization = [
-            value
+        active_utilization = [
+            (timestamp, value)
             for timestamp, value in metrics.synthesis_utilization
             if timestamp >= utilization_cutoff
         ]
-        if not utilization:
+        if (
+            not metrics.currently_active_audio
+            or len(active_utilization) < AUTO_BUFFER_MIN_ACTIVITY_SAMPLES
+            or active_utilization[-1][0] < now - 1.0
+            or (
+                active_utilization[-1][0] - active_utilization[0][0]
+                < AUTO_BUFFER_ACTIVITY_SPAN_SECONDS
+            )
+        ):
             return None
+        utilization = [
+            value
+            for _timestamp, value in active_utilization
+        ]
         ordered = sorted(utilization)
         percentile_index = max(0, math.ceil(len(ordered) * 0.95) - 1)
         percentile_95 = ordered[percentile_index]
@@ -633,7 +647,6 @@ class SoftwareSynthStream:
         self._metrics_lock = threading.Lock()
         self._shortage_timestamps: deque[float] = deque()
         self._synthesis_utilization: deque[tuple[float, float]] = deque()
-        self._synthesis_durations: deque[tuple[float, float]] = deque()
         self._supply_delay_timestamps: deque[float] = deque()
         self._output_underrun_timestamps: deque[float] = deque()
         self._producer_starved_output_underrun_timestamps: deque[float] = (
@@ -872,7 +885,6 @@ class SoftwareSynthStream:
                         if refresh_deadline > 0.0
                         else 0.0
                     ),
-                    elapsed,
                     active_audio=bool(
                         render_state.voices or render_state.fading_voices
                     ),
@@ -894,7 +906,6 @@ class SoftwareSynthStream:
             deadline = frame_count / max(1, self.sample_rate)
             self._record_synthesis_utilization(
                 elapsed / deadline if deadline > 0.0 else 0.0,
-                elapsed,
                 active_audio=bool(
                     render_state.voices or render_state.fading_voices
                 ),
@@ -996,20 +1007,17 @@ class SoftwareSynthStream:
     def _record_synthesis_utilization(
         self,
         utilization: float,
-        duration_seconds: float | None = None,
         *,
         active_audio: bool = False,
     ) -> None:
         now = time.monotonic()
         with self._metrics_lock:
             utilization = max(0.0, float(utilization))
-            self._synthesis_utilization.append((now, utilization))
-            if duration_seconds is not None:
-                self._synthesis_durations.append(
-                    (now, max(0.0, float(duration_seconds)))
-                )
+            if active_audio:
+                self._synthesis_utilization.append((now, utilization))
             if (
-                utilization >= 1.0
+                active_audio
+                and utilization >= 1.0
                 and now - self._last_supply_delay_at
                 >= AUDIO_SHORTAGE_DEBOUNCE_SECONDS
             ):
@@ -1066,7 +1074,6 @@ class SoftwareSynthStream:
             return AudioSupplyMetrics(
                 shortages=tuple(self._shortage_timestamps),
                 synthesis_utilization=tuple(self._synthesis_utilization),
-                synthesis_durations=tuple(self._synthesis_durations),
                 supply_delays=tuple(self._supply_delay_timestamps),
                 output_underruns=tuple(self._output_underrun_timestamps),
                 producer_starved_output_underruns=tuple(
@@ -1082,7 +1089,6 @@ class SoftwareSynthStream:
         with self._metrics_lock:
             self._shortage_timestamps.clear()
             self._synthesis_utilization.clear()
-            self._synthesis_durations.clear()
             self._supply_delay_timestamps.clear()
             self._output_underrun_timestamps.clear()
             self._producer_starved_output_underrun_timestamps.clear()
@@ -1103,11 +1109,6 @@ class SoftwareSynthStream:
             and self._synthesis_utilization[0][0] < cutoff
         ):
             self._synthesis_utilization.popleft()
-        while (
-            self._synthesis_durations
-            and self._synthesis_durations[0][0] < cutoff
-        ):
-            self._synthesis_durations.popleft()
         while (
             self._supply_delay_timestamps
             and self._supply_delay_timestamps[0] < cutoff
@@ -1764,17 +1765,6 @@ class SoftwareSynthStream:
             )
             self._fading_voices.remove(quietest)
 
-    @staticmethod
-    def _soft_limit(sample: float) -> float:
-        magnitude = abs(sample)
-        if magnitude <= LIMITER_THRESHOLD:
-            return sample
-        limited = LIMITER_THRESHOLD + (1.0 - LIMITER_THRESHOLD) * math.tanh(
-            (magnitude - LIMITER_THRESHOLD) / (1.0 - LIMITER_THRESHOLD)
-        )
-        return math.copysign(limited, sample)
-
-
 def _audio_start_failed(sink) -> bool:  # type: ignore[no-untyped-def]
     return (
         sink.state() == QAudio.State.StoppedState
@@ -2150,6 +2140,8 @@ class SoftwareSynthEngine:
             Callable[[int | None, str], None],
         ] = {}
         self._active_clients: set[int] = set()
+        self._idle_shutdown_timer: threading.Timer | None = None
+        self._idle_shutdown_generation = 0
         self._buffer_policy = AudioBufferAutoPolicy()
         self._qt_policy = QtAudioAutoPolicy()
         self._monitor_stop = threading.Event()
@@ -2162,6 +2154,7 @@ class SoftwareSynthEngine:
 
     def start(self) -> bool:
         with self._lock:
+            self._cancel_idle_shutdown_locked()
             if self._output_worker is not None:
                 return True
             return self._start_sink_locked()
@@ -2211,7 +2204,12 @@ class SoftwareSynthEngine:
         learning_callback: Callable[[int | None, str], None] | None = None,
     ) -> None:
         with self._lock:
+            was_idle = not self._active_clients
+            self._cancel_idle_shutdown_locked()
             self._active_clients.add(int(client_id))
+            if was_idle:
+                self.stream.clear_metrics()
+                self._buffer_policy.reset()
             if callback is not None:
                 self._runtime_callbacks[int(client_id)] = callback
             else:
@@ -2243,6 +2241,8 @@ class SoftwareSynthEngine:
             self._active_clients.discard(int(client_id))
             self._runtime_callbacks.pop(int(client_id), None)
             self._qt_learning_callbacks.pop(int(client_id), None)
+            if not self._active_clients:
+                self._schedule_idle_shutdown_locked()
 
     def shutdown(self) -> None:
         self._monitor_stop.set()
@@ -2250,8 +2250,42 @@ class SoftwareSynthEngine:
         if monitor is not threading.current_thread():
             monitor.join(timeout=1.0)
         with self._lock:
+            self._cancel_idle_shutdown_locked()
             self._stop_output_locked()
             self.stream.close()
+
+    def _cancel_idle_shutdown_locked(self) -> None:
+        self._idle_shutdown_generation += 1
+        timer = self._idle_shutdown_timer
+        self._idle_shutdown_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_idle_shutdown_locked(self) -> None:
+        self._cancel_idle_shutdown_locked()
+        generation = self._idle_shutdown_generation
+        timer = threading.Timer(
+            AUDIO_IDLE_SHUTDOWN_SECONDS,
+            self._stop_idle_output,
+            args=(generation,),
+        )
+        timer.daemon = True
+        self._idle_shutdown_timer = timer
+        timer.start()
+
+    def _stop_idle_output(self, generation: int | None = None) -> None:
+        with self._lock:
+            if (
+                generation is not None
+                and generation != self._idle_shutdown_generation
+            ):
+                return
+            self._idle_shutdown_timer = None
+            if self._active_clients or self._monitor_stop.is_set():
+                return
+            self._stop_output_locked()
+            self.stream.stop_worker()
+            self.stream.clear_metrics()
 
     def _stop_output_locked(self) -> None:
         worker = self._output_worker
@@ -2482,7 +2516,6 @@ class SoftwareSynthEngine:
 
     def _monitor_audio_supply(self) -> None:
         while not self._monitor_stop.wait(0.25):
-            metrics = self.stream.metrics_snapshot()
             runtime_callbacks: tuple[
                 Callable[[int, int, str], None],
                 ...,
@@ -2495,6 +2528,7 @@ class SoftwareSynthEngine:
             with self._lock:
                 if self._output_worker is None or not self._active_clients:
                     continue
+                metrics = self.stream.metrics_snapshot()
                 now = time.monotonic()
                 decision = self._buffer_policy.evaluate(
                     now,
