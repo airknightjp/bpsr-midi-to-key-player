@@ -78,22 +78,20 @@ Item {
         color: fallingNotesBridge.surfaceColor
     }
 
-    Timer {
-        interval: 16
-        repeat: true
+    FrameAnimation {
         running: fallingNotesBridge.animationRunning && root.visible
         onTriggered: root.clockMs = Date.now()
     }
 
     Repeater {
-        model: fallingNotesBridge.impacts
+        model: fallingNotesBridge.impactModel
         delegate: Item {
             id: impactDelegate
-            required property var modelData
-            readonly property int note: Number(modelData.note)
-            readonly property string judgment: String(modelData.judgment)
-            readonly property bool released: Boolean(modelData.released)
-            readonly property real elapsed: root.clockMs - Number(modelData.startedAtMs)
+            required property int note
+            required property string judgment
+            required property bool released
+            required property double startedAtMs
+            readonly property real elapsed: root.clockMs - startedAtMs
             readonly property real progress: Math.max(
                 0,
                 Math.min(1, elapsed / root.impactDuration(judgment))
@@ -179,16 +177,17 @@ Item {
     }
 
     Repeater {
-        model: fallingNotesBridge.laneFades
+        model: fallingNotesBridge.laneFadeModel
         delegate: Rectangle {
-            required property var modelData
+            required property int note
+            required property double startedAtMs
             readonly property real progress: Math.max(
                 0,
-                Math.min(1, (root.clockMs - Number(modelData.startedAtMs)) / 150)
+                Math.min(1, (root.clockMs - startedAtMs) / 150)
             )
-            x: root.noteLeft(Number(modelData.note))
+            x: root.noteLeft(note)
             y: 0
-            width: root.noteWidth(Number(modelData.note))
+            width: root.noteWidth(note)
             height: root.height
             opacity: 0.28 * Math.pow(1.0 - progress, 2)
             gradient: Gradient {
@@ -200,18 +199,22 @@ Item {
         }
     }
 
-    Repeater {
-        model: 53
-        delegate: Rectangle {
-            required property int index
-            x: index * root.whiteWidth
-            y: 0
-            width: index % 7 === 0 ? 1.25 : 0.75
-            height: root.height
-            color: index % 7 === 0
-                   ? fallingNotesBridge.borderColor
-                   : fallingNotesBridge.gridColor
-            opacity: index % 7 === 0 ? 0.59 : 0.69
+    Item {
+        anchors.fill: parent
+
+        Repeater {
+            model: 53
+            delegate: Rectangle {
+                required property int index
+                x: index * root.whiteWidth
+                y: 0
+                width: index % 7 === 0 ? 1.25 : 0.75
+                height: root.height
+                color: index % 7 === 0
+                       ? fallingNotesBridge.borderColor
+                       : fallingNotesBridge.gridColor
+                opacity: index % 7 === 0 ? 0.59 : 0.69
+            }
         }
     }
 

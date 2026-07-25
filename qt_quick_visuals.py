@@ -6,7 +6,17 @@ from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Property, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QModelIndex,
+    QObject,
+    Property,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QColor
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickWidgets import QQuickWidget
@@ -31,6 +41,69 @@ def _load_qml(widget: QQuickWidget, relative: str) -> None:
         return
     messages = "\n".join(error.toString() for error in widget.errors())
     raise RuntimeError(f"Failed to load {relative}:\n{messages}")
+
+
+class _IncrementalRoleModel(QAbstractListModel):
+    def __init__(self, roles: tuple[str, ...], parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict[str, object]] = []
+        self._role_keys = {
+            int(Qt.ItemDataRole.UserRole) + offset: name
+            for offset, name in enumerate(roles)
+        }
+        self._role_names = {
+            role: name.encode("ascii")
+            for role, name in self._role_keys.items()
+        }
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = int(Qt.ItemDataRole.DisplayRole),
+    ) -> object:
+        if not index.isValid() or not 0 <= index.row() < len(self._rows):
+            return None
+        key = self._role_keys.get(int(role))
+        return self._rows[index.row()].get(key) if key is not None else None
+
+    def roleNames(self) -> dict[int, bytes]:
+        return self._role_names
+
+    def sync(self, rows: list[dict[str, object]]) -> None:
+        if rows == self._rows:
+            return
+
+        overlap = 0
+        for count in range(min(len(self._rows), len(rows)), 0, -1):
+            if self._rows[-count:] == rows[:count]:
+                overlap = count
+                break
+
+        if self._rows and rows and overlap == 0:
+            self.beginResetModel()
+            self._rows = list(rows)
+            self.endResetModel()
+            return
+
+        remove_count = len(self._rows) - overlap
+        if remove_count:
+            self.beginRemoveRows(QModelIndex(), 0, remove_count - 1)
+            del self._rows[:remove_count]
+            self.endRemoveRows()
+
+        additions = rows[overlap:]
+        if additions:
+            first = len(self._rows)
+            self.beginInsertRows(
+                QModelIndex(),
+                first,
+                first + len(additions) - 1,
+            )
+            self._rows.extend(additions)
+            self.endInsertRows()
 
 
 class _KeyboardBridge(QObject):
@@ -199,9 +272,12 @@ class PianoKeyboardWidget(QQuickWidget):
         self._last_retrigger_serials: dict[int, int] = {}
         self._retrigger_release_until: dict[int, float] = {}
         self._rendering_enabled = True
+        self._host_active = False
         self._bridge = _KeyboardBridge()
+        self._bridge.set_rendering_enabled(False)
         self.rootContext().setContextProperty("keyboardBridge", self._bridge)
         _load_qml(self, "qml/PianoKeyboard.qml")
+        self.quickWindow().setPersistentSceneGraph(False)
         self._retrigger_timer = QTimer(self)
         self._retrigger_timer.setInterval(16)
         self._retrigger_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -237,13 +313,28 @@ class PianoKeyboardWidget(QQuickWidget):
         self._retrigger_timer.stop()
         self._retrigger_release_until.clear()
         self._bridge.set_released_notes(set())
-        self._bridge.set_rendering_enabled(enabled)
+        self._bridge.set_rendering_enabled(enabled and self._host_active)
         if enabled:
             try:
                 for note, serial in current_retrigger_events:  # type: ignore[union-attr]
                     self._last_retrigger_serials[int(note)] = int(serial)
             except (TypeError, ValueError):
                 pass
+
+    def set_host_active(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._host_active:
+            return
+        self._host_active = active
+        self._retrigger_timer.stop()
+        self._retrigger_release_until.clear()
+        self._bridge.set_released_notes(set())
+        self._bridge.set_rendering_enabled(
+            self._rendering_enabled and self._host_active
+        )
+        if active and self._rendering_enabled:
+            self._bridge.set_active_notes(self._active_notes)
+            self._bridge.set_used_range(self._used_note_range)
 
     def set_active_notes(self, notes: object) -> None:
         if not self._rendering_enabled:
@@ -258,7 +349,8 @@ class PianoKeyboardWidget(QQuickWidget):
             active = frozenset()
         if active != self._active_notes:
             self._active_notes = active
-            self._bridge.set_active_notes(active)
+            if self._host_active:
+                self._bridge.set_active_notes(active)
 
     def set_used_note_range(self, note_range: object) -> None:
         normalized: tuple[int, int] | None = None
@@ -273,7 +365,8 @@ class PianoKeyboardWidget(QQuickWidget):
                 normalized = None
         if normalized != self._used_note_range:
             self._used_note_range = normalized
-            self._bridge.set_used_range(normalized)
+            if self._host_active:
+                self._bridge.set_used_range(normalized)
 
     def set_retrigger_events(self, events: object) -> None:
         if not self._rendering_enabled:
@@ -284,6 +377,10 @@ class PianoKeyboardWidget(QQuickWidget):
                 for note, serial in events  # type: ignore[union-attr]
             )
         except (TypeError, ValueError):
+            return
+        if not self._host_active:
+            for note, serial in retrigger_events:
+                self._last_retrigger_serials[note] = serial
             return
         release_until = time.monotonic() + self.RETRIGGER_RELEASE_SECONDS
         changed = False
@@ -342,6 +439,14 @@ class PianoKeyboardWidget(QQuickWidget):
     def sizeHint(self) -> QSize:
         return QSize(420, self.BASE_HEIGHT)
 
+    def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().showEvent(event)
+        self.set_host_active(True)
+
+    def hideEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self.set_host_active(False)
+        super().hideEvent(event)
+
 
 @dataclass(frozen=True)
 class _RhythmHitImpact:
@@ -388,6 +493,15 @@ class _FallingNotesBridge(QObject):
         self._scheduled = "#ff00a7d6"
         self._live = "#ff0093bd"
         self._rendering_enabled = True
+        self._host_active = False
+        self._impact_model = _IncrementalRoleModel(
+            ("serial", "note", "startedAtMs", "judgment", "released"),
+            self,
+        )
+        self._lane_fade_model = _IncrementalRoleModel(
+            ("serial", "note", "startedAtMs"),
+            self,
+        )
 
     @Property(list, notify=visibleNotesChanged)
     def visibleNotes(self) -> list[dict[str, object]]:
@@ -425,6 +539,10 @@ class _FallingNotesBridge(QObject):
     def impacts(self) -> list[dict[str, object]]:
         return self._impacts
 
+    @Property(QObject, constant=True)
+    def impactModel(self) -> QObject:
+        return self._impact_model
+
     @Property(list, notify=effectsChanged)
     def heldNotes(self) -> list[int]:
         return self._held_notes
@@ -432,6 +550,10 @@ class _FallingNotesBridge(QObject):
     @Property(list, notify=effectsChanged)
     def laneFades(self) -> list[dict[str, object]]:
         return self._lane_fades
+
+    @Property(QObject, constant=True)
+    def laneFadeModel(self) -> QObject:
+        return self._lane_fade_model
 
     @Property(str, notify=colorsChanged)
     def surfaceColor(self) -> str:
@@ -461,6 +583,7 @@ class _FallingNotesBridge(QObject):
     def animationRunning(self) -> bool:
         return (
             self._rendering_enabled
+            and self._host_active
             and (
                 self._running
                 or bool(self._impacts)
@@ -528,6 +651,8 @@ class _FallingNotesBridge(QObject):
         self._impacts = impacts
         self._held_notes = held_notes
         self._lane_fades = lane_fades
+        self._impact_model.sync(impacts)
+        self._lane_fade_model.sync(lane_fades)
         self.effectsChanged.emit()
         self.playbackChanged.emit()
 
@@ -565,6 +690,12 @@ class _FallingNotesBridge(QObject):
         if enabled != self._rendering_enabled:
             self._rendering_enabled = enabled
             self.renderingEnabledChanged.emit()
+            self.playbackChanged.emit()
+
+    def set_host_active(self, active: bool) -> None:
+        active = bool(active)
+        if active != self._host_active:
+            self._host_active = active
             self.playbackChanged.emit()
 
 
@@ -611,9 +742,11 @@ class FallingNotesWidget(QQuickWidget):
         self._scale = 1.0
         self._surface = QColor("#000000")
         self._rendering_enabled = True
+        self._host_active = False
         self._bridge = _FallingNotesBridge()
         self.rootContext().setContextProperty("fallingNotesBridge", self._bridge)
         _load_qml(self, "qml/FallingNotes.qml")
+        self.quickWindow().setPersistentSceneGraph(False)
         self._animation_timer = QTimer(self)
         self._animation_timer.setInterval(100)
         self._animation_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -682,6 +815,35 @@ class FallingNotesWidget(QQuickWidget):
             except (TypeError, ValueError, IndexError):
                 pass
 
+    def set_host_active(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._host_active:
+            return
+        self._host_active = active
+        self._animation_timer.stop()
+        self._bridge.set_host_active(active)
+        if not active:
+            self._hit_impacts.clear()
+            self._held_lane_counts.clear()
+            self._lane_fades.clear()
+            self._bridge.set_visible_notes(())
+            self._sync_effects()
+            return
+        if not self._rendering_enabled:
+            return
+        now = time.monotonic()
+        self._position = self._current_position(now)
+        self._position_anchor = now
+        self._bridge.set_playback(
+            self._position,
+            int(time.time() * 1000),
+            self._speed_ratio,
+            self._playback_running,
+        )
+        self._bridge.set_used_range(self._used_note_range)
+        self._refresh_visible_notes(self._position)
+        self._update_animation_timer()
+
     def set_hit_events(self, events: object) -> None:
         if not self._rendering_enabled:
             return
@@ -704,6 +866,12 @@ class FallingNotesWidget(QQuickWidget):
                     )
                 )
         except (TypeError, ValueError, IndexError):
+            return
+        if not self._host_active:
+            self._last_hit_serial = max(
+                (event[0] for event in pending),
+                default=self._last_hit_serial,
+            )
             return
         now = time.monotonic()
         now_ms = int(time.time() * 1000)
@@ -785,7 +953,8 @@ class FallingNotesWidget(QQuickWidget):
                 normalized = None
         if normalized != self._used_note_range:
             self._used_note_range = normalized
-            self._bridge.set_used_range(normalized)
+            if self._host_active:
+                self._bridge.set_used_range(normalized)
 
     def set_playback_state(
         self,
@@ -799,6 +968,8 @@ class FallingNotesWidget(QQuickWidget):
         self._position_anchor = time.monotonic()
         self._speed_ratio = max(0.1, min(2.0, int(speed_percent) / 100.0))
         self._playback_running = bool(running)
+        if not self._host_active:
+            return
         self._bridge.set_playback(
             self._position,
             int(time.time() * 1000),
@@ -813,7 +984,7 @@ class FallingNotesWidget(QQuickWidget):
         active_notes: object,
         trigger_events: object,
     ) -> None:
-        if not self._rendering_enabled:
+        if not self._rendering_enabled or not self._host_active:
             return
         _ = trigger_events
         try:
@@ -854,27 +1025,35 @@ class FallingNotesWidget(QQuickWidget):
         return self._position + (now - self._position_anchor) * self._speed_ratio
 
     def _advance_animation(self) -> None:
-        if not self._rendering_enabled:
+        if not self._rendering_enabled or not self._host_active:
             self._animation_timer.stop()
             return
         now = time.monotonic()
-        self._hit_impacts = [
+        next_impacts = [
             impact
             for impact in self._hit_impacts
             if now - impact.started_at <= self._impact_duration(impact.judgment)
         ]
-        self._lane_fades = [
+        next_lane_fades = [
             fade
             for fade in self._lane_fades
             if now - fade.started_at <= self.LANE_FADE_SECONDS
         ]
+        effects_changed = (
+            next_impacts != self._hit_impacts
+            or next_lane_fades != self._lane_fades
+        )
+        self._hit_impacts = next_impacts
+        self._lane_fades = next_lane_fades
         self._refresh_visible_notes(self._current_position(now))
-        self._sync_effects()
+        if effects_changed:
+            self._sync_effects()
         self._update_animation_timer()
 
     def _update_animation_timer(self) -> None:
         should_run = (
             self._rendering_enabled
+            and self._host_active
             and (
                 self._playback_running
                 or bool(self._hit_impacts)
@@ -887,6 +1066,8 @@ class FallingNotesWidget(QQuickWidget):
             self._animation_timer.stop()
 
     def _refresh_visible_notes(self, position: float) -> None:
+        if not self._host_active:
+            return
         horizon = self.PREVIEW_SECONDS * self._speed_ratio
         prefetch = max(0.25, horizon * 0.5)
         self._bridge.set_visible_notes(
@@ -1040,3 +1221,11 @@ class FallingNotesWidget(QQuickWidget):
             judgment,
             self.IMPACT_DURATION_SECONDS["GOOD"],
         )
+
+    def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().showEvent(event)
+        self.set_host_active(True)
+
+    def hideEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self.set_host_active(False)
+        super().hideEvent(event)

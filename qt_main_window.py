@@ -2621,14 +2621,33 @@ class MidiMainWindow(QMainWindow):
             self._sync_full_visibility_height()
             self.controller.set_window_geometry(self.width(), self.height())
 
+    def _sync_visual_host_activity(self) -> None:
+        active = self.isVisible() and not self.isMinimized()
+        self.piano_roll.set_host_active(active)
+        self.output_keyboard.set_host_active(active)
+
     def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().showEvent(event)
+        self._sync_visual_host_activity()
         self._update_transport_side_widths(
             self.state.ui_scale_percent / 100
         )
         if not self.isMaximized():
             self._sync_full_visibility_height()
             self.controller.set_window_geometry(self.width(), self.height())
+
+    def hideEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self.piano_roll.set_host_active(False)
+        self.output_keyboard.set_host_active(False)
+        super().hideEvent(event)
+
+    def changeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().changeEvent(event)
+        if (
+            event.type() == QEvent.Type.WindowStateChange
+            and hasattr(self, "piano_roll")
+        ):
+            self._sync_visual_host_activity()
 
     @staticmethod
     def _set_check(check: QCheckBox, checked: bool) -> None:

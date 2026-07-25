@@ -1293,6 +1293,24 @@ class QtUiTests(unittest.TestCase):
         self.assertTrue(keyboard._retrigger_timer.isActive())
         keyboard._retrigger_timer.stop()
 
+    def test_minimized_window_stops_qquick_visual_timers(self) -> None:
+        self.window.show()
+        self.application.processEvents()
+        self.window.piano_roll.set_playback_state(0.0, 100, True)
+        self.assertTrue(self.window.piano_roll._animation_timer.isActive())
+
+        self.window.showMinimized()
+        self.application.processEvents()
+
+        self.assertFalse(self.window.piano_roll._animation_timer.isActive())
+        self.assertFalse(self.window.piano_roll._bridge.animationRunning)
+
+        self.window.showNormal()
+        self.application.processEvents()
+
+        self.assertTrue(self.window.piano_roll._animation_timer.isActive())
+        self.assertTrue(self.window.piano_roll._bridge.animationRunning)
+
     def test_hiding_player_section_compacts_to_current_minimum_height(self) -> None:
         self.window.resize(self.window.width(), 700)
         self.window.show()
@@ -2942,6 +2960,8 @@ class QtUiTests(unittest.TestCase):
 
     def test_falling_note_hit_events_restore_burst_and_lane_effects(self) -> None:
         roll = FallingNotesWidget()
+        roll.show()
+        self.application.processEvents()
 
         with patch("qt_quick_visuals.time.monotonic", return_value=10.0):
             roll.set_hit_events(
@@ -2962,6 +2982,58 @@ class QtUiTests(unittest.TestCase):
         self.assertNotIn(60, roll.held_lane_notes)
         self.assertEqual(roll.lane_fade_count, 1)
         self.assertFalse(hasattr(roll, "set_score"))
+        roll.close()
+
+    def test_falling_note_effect_models_append_without_full_reset(self) -> None:
+        roll = FallingNotesWidget()
+        roll.show()
+        self.application.processEvents()
+        impact_model = roll._bridge.impactModel
+        resets: list[bool] = []
+        inserts: list[tuple[int, int]] = []
+        impact_model.modelReset.connect(lambda: resets.append(True))
+        impact_model.rowsInserted.connect(
+            lambda _parent, first, last: inserts.append((first, last))
+        )
+
+        roll.set_hit_events(((1, 60, "PERFECT", False),))
+        roll.set_hit_events(
+            (
+                (1, 60, "PERFECT", False),
+                (2, 64, "GREAT", False),
+            )
+        )
+
+        self.assertEqual(impact_model.rowCount(), 2)
+        self.assertEqual(resets, [])
+        self.assertEqual(inserts, [(0, 0), (1, 1)])
+        roll.close()
+
+    def test_hidden_falling_notes_stop_and_resync_animation(self) -> None:
+        roll = FallingNotesWidget()
+        roll.resize(1080, 57)
+        roll.set_sequence_notes((PianoRollNote(0.25, 2.0, 60),))
+        roll.show()
+        self.application.processEvents()
+        roll.set_playback_state(0.0, 100, True)
+
+        self.assertTrue(roll._animation_timer.isActive())
+        self.assertTrue(roll._bridge.animationRunning)
+
+        roll.hide()
+        self.application.processEvents()
+
+        self.assertFalse(roll._animation_timer.isActive())
+        self.assertFalse(roll._bridge.animationRunning)
+        self.assertEqual(roll._bridge.visibleNotes, [])
+
+        roll.show()
+        self.application.processEvents()
+
+        self.assertTrue(roll._animation_timer.isActive())
+        self.assertTrue(roll._bridge.animationRunning)
+        self.assertTrue(roll._bridge.visibleNotes)
+        roll.close()
 
     def test_perfect_hit_draws_the_rainbow_burst(self) -> None:
         roll = FallingNotesWidget()
@@ -3024,6 +3096,7 @@ class QtUiTests(unittest.TestCase):
 
         self.assertEqual(roll.status(), roll.Status.Ready)
         self.assertNotEqual(roll.graphics_api_name, "Unknown")
+        self.assertFalse(roll.quickWindow().isPersistentSceneGraph())
         self.assertFalse(hasattr(roll, "_note_body_cache"))
         self.assertFalse(roll.grab().isNull())
         roll.close()
@@ -3077,6 +3150,11 @@ class QtUiTests(unittest.TestCase):
         self.assertIn("fallingNotesBridge.visibleNotes", qml)
         self.assertIn("GradientStop", qml)
         self.assertIn("noteDelegate.approaching ? 0.47", qml)
+        self.assertIn("FrameAnimation {", qml)
+        self.assertNotIn("Timer {", qml)
+        self.assertIn("model: fallingNotesBridge.impactModel", qml)
+        self.assertIn("model: fallingNotesBridge.laneFadeModel", qml)
+        self.assertNotIn("layer.enabled", qml)
 
     def test_short_notes_receive_only_a_visual_minimum_pixel_length(self) -> None:
         roll = FallingNotesWidget()
