@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import multiprocessing
 import os
 import sys
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from app_controller import AppController
+from process_lifecycle import initialize_process_job
 from qt_main_window import MidiMainWindow
 from single_instance import SingleInstance
 from software_synth import shutdown_software_synth
@@ -21,6 +26,7 @@ def consume_update_restart_request() -> bool:
 
 
 def main() -> int:
+    initialize_process_job()
     single_instance = SingleInstance(APP_WINDOW_TITLE)
     if not single_instance.is_primary:
         single_instance.notify_existing()

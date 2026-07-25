@@ -126,7 +126,7 @@ class MidiMainWindow(QMainWindow):
         self._build_ui()
         self._midi_reload_feedback_timer = QTimer(self)
         self._midi_reload_feedback_timer.setSingleShot(True)
-        self._midi_reload_feedback_timer.setInterval(150)
+        self._midi_reload_feedback_timer.setInterval(250)
         self._midi_reload_feedback_timer.timeout.connect(
             lambda: self._set_midi_reload_feedback(False)
         )
@@ -620,7 +620,12 @@ class MidiMainWindow(QMainWindow):
         self.melody_priority_check = self._option_check("melody_priority")
         self.auto_sustain_check = self._option_check("auto_sustain")
         for column, widget in enumerate(
-            (self.play_sound_check, self.auto_fit_check, self.repeat_check)
+            (
+                self.play_sound_check,
+                self.auto_fit_check,
+                self.repeat_check,
+                self.auto_sustain_check,
+            )
         ):
             widget.setProperty("settingsItem", True)
             grid.addWidget(
@@ -635,7 +640,6 @@ class MidiMainWindow(QMainWindow):
                 self.strum_check,
                 self.optimization_check,
                 self.melody_priority_check,
-                self.auto_sustain_check,
             ),
         ):
             widget.setProperty("settingsItem", True)
@@ -645,7 +649,7 @@ class MidiMainWindow(QMainWindow):
                 column,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             )
-        grid.setColumnStretch(4, 1)
+        grid.setColumnStretch(3, 1)
         self.settings_layout.addLayout(grid)
 
     def _option_check(self, name: str) -> QCheckBox:
@@ -1618,6 +1622,8 @@ class MidiMainWindow(QMainWindow):
         icon_size = max(10, round(14 * percent / 100))
         self.tab_bar.setIconSize(QSize(icon_size, icon_size))
         self.tab_bar.setTabIcon(0, make_refresh_icon(palette.text, icon_size))
+        if self.tab_bar.property("reloadFeedback") is True:
+            self._apply_midi_reload_feedback_style()
 
     @staticmethod
     def _set_spacer_width(layout, index: int, width: int) -> None:  # type: ignore[no-untyped-def]
@@ -2394,10 +2400,26 @@ class MidiMainWindow(QMainWindow):
         if self.tab_bar.property("reloadFeedback") is active:
             return
         self.tab_bar.setProperty("reloadFeedback", active)
-        style = self.tab_bar.style()
-        style.unpolish(self.tab_bar)
-        style.polish(self.tab_bar)
+        self._apply_midi_reload_feedback_style()
         self.tab_bar.update(self.tab_bar.tabRect(0))
+
+    def _apply_midi_reload_feedback_style(self) -> None:
+        if self.tab_bar.property("reloadFeedback") is not True:
+            self.tab_bar.setStyleSheet("")
+            return
+        palette = THEMES.get(
+            self.state.color_theme,
+            THEMES["sky_blue"],
+        )
+        self.tab_bar.setStyleSheet(
+            f"""
+            QTabBar#PlayerTabBar::tab {{
+                background: {palette.accent};
+                border-color: {palette.accent_hover};
+                color: {palette.accent_text};
+            }}
+            """
+        )
 
     def _select_midi_row(self, row: int) -> None:
         if (

@@ -42,6 +42,25 @@ class BuildDistributionTests(unittest.TestCase):
         self.assertNotIn('"assets\\fonts;assets\\fonts"', self.script)
         self.assertFalse((self.project_root / "assets" / "fonts").exists())
 
+    def test_build_removes_unused_qml_and_widget_runtimes(self) -> None:
+        for name in (
+            "QtMultimediaWidgets.pyd",
+            "qtvirtualkeyboardplugin.dll",
+            "Qt6MultimediaWidgets.dll",
+            "Qt6VirtualKeyboard.dll",
+            "Qt6Quick.dll",
+            "Qt6Qml.dll",
+            "Qt6QmlMeta.dll",
+            "Qt6QmlModels.dll",
+            "Qt6QmlWorkerScript.dll",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, self.script)
+        self.assertIn(
+            "Remove-Item -LiteralPath $UnusedRuntimePath -Force",
+            self.script,
+        )
+
     def test_current_documentation_requires_the_complete_folder(self) -> None:
         for name in (
             "README.md",

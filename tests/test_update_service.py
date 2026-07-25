@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import stat
 import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -15,7 +17,11 @@ from update_service import (
     ReleaseAsset,
     UPDATE_ERROR_FILE_NAME,
     UPDATE_CHECK_INTERVAL_SECONDS,
-    _POWERSHELL_UPDATER,
+    UPDATE_SUPERVISOR_DIRECTORY_NAME,
+    UPDATE_SUPERVISOR_FILE_NAME,
+    UPDATE_WORKER_FILE_NAME,
+    _POWERSHELL_UPDATE_SUPERVISOR,
+    _POWERSHELL_UPDATE_WORKER,
     automatic_update_check_due,
     is_newer_version,
     launch_update_installer,
@@ -198,7 +204,7 @@ class UpdateServiceTests(unittest.TestCase):
             self.assertFalse(error_path.exists())
             self.assertEqual(read_pending_update_error(temp_dir), "")
 
-    def test_launcher_writes_visible_progress_updater_and_passes_language(
+    def test_launcher_writes_supervisor_and_visible_worker(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -225,17 +231,48 @@ class UpdateServiceTests(unittest.TestCase):
                 )
 
             arguments = start_detached.call_args.args[1]
-            updater_path = Path(arguments[arguments.index("-File") + 1])
+            supervisor_path = Path(
+                arguments[arguments.index("-File") + 1]
+            )
+            worker_path = Path(
+                arguments[arguments.index("-WorkerPath") + 1]
+            )
+            update_root = Path(
+                arguments[arguments.index("-UpdateRoot") + 1]
+            )
             try:
                 self.assertTrue(
-                    updater_path.read_bytes().startswith(b"\xef\xbb\xbf")
+                    supervisor_path.read_bytes().startswith(b"\xef\xbb\xbf")
                 )
-                script = updater_path.read_text(encoding="utf-8-sig")
-                self.assertIn("System.Windows.Forms.ProgressBar", script)
-                self.assertEqual(script.count("$ProgressForm.Show()"), 1)
-                self.assertIn("Set-UpdateProgress 88", script)
-                self.assertIn("Get-FileHash", script)
-                self.assertIn("$BackupStarted", script)
+                self.assertTrue(
+                    worker_path.read_bytes().startswith(b"\xef\xbb\xbf")
+                )
+                self.assertEqual(
+                    supervisor_path,
+                    install_dir
+                    / UPDATE_SUPERVISOR_DIRECTORY_NAME
+                    / UPDATE_SUPERVISOR_FILE_NAME,
+                )
+                self.assertEqual(worker_path.parent, update_root)
+                self.assertEqual(worker_path.name, UPDATE_WORKER_FILE_NAME)
+                worker_script = worker_path.read_text(encoding="utf-8-sig")
+                self.assertIn(
+                    "System.Windows.Forms.ProgressBar",
+                    worker_script,
+                )
+                self.assertEqual(
+                    worker_script.count("$ProgressForm.Show()"),
+                    1,
+                )
+                self.assertIn("Set-UpdateProgress 88", worker_script)
+                self.assertIn("Get-FileHash", worker_script)
+                supervisor_script = supervisor_path.read_text(
+                    encoding="utf-8-sig"
+                )
+                self.assertIn(
+                    "$WorkerProcess.WaitForExit(500)",
+                    supervisor_script,
+                )
                 self.assertEqual(
                     arguments[arguments.index("-Language") + 1],
                     "ja",
@@ -249,21 +286,306 @@ class UpdateServiceTests(unittest.TestCase):
                     "a" * 64,
                 )
             finally:
-                shutil.rmtree(updater_path.parent, ignore_errors=True)
+                shutil.rmtree(update_root, ignore_errors=True)
 
-    def test_updater_preserves_settings_and_restarts_after_progress(self) -> None:
-        self.assertNotIn('"settings.json"', _POWERSHELL_UPDATER)
-        self.assertNotIn("Split-Path -LiteralPath", _POWERSHELL_UPDATER)
-        self.assertIn('$ProgressForm.Show()', _POWERSHELL_UPDATER)
-        self.assertIn("$Request.GetResponse()", _POWERSHELL_UPDATER)
-        self.assertIn("Wait-Process -Id $ProcessId", _POWERSHELL_UPDATER)
-        self.assertIn('$env:BPSR_UPDATE_RESTART = "1"', _POWERSHELL_UPDATER)
-        self.assertIn("Start-Process -FilePath $ExecutablePath", _POWERSHELL_UPDATER)
+    def test_worker_only_downloads_verifies_and_replaces_payload(self) -> None:
+        self.assertNotIn('"settings.json"', _POWERSHELL_UPDATE_WORKER)
+        self.assertIn('$ProgressForm.Show()', _POWERSHELL_UPDATE_WORKER)
+        self.assertIn("$Request.GetResponse()", _POWERSHELL_UPDATE_WORKER)
+        self.assertIn("Get-FileHash", _POWERSHELL_UPDATE_WORKER)
+        self.assertIn(
+            "Wait-Process -Id $ProcessId",
+            _POWERSHELL_UPDATE_WORKER,
+        )
+        self.assertIn(
+            "[IO.File]::WriteAllText(",
+            _POWERSHELL_UPDATE_WORKER,
+        )
+        self.assertNotIn(
+            "Start-UpdatedApplication",
+            _POWERSHELL_UPDATE_WORKER,
+        )
+        self.assertNotIn(
+            "Restore-UpdateBackup",
+            _POWERSHELL_UPDATE_WORKER,
+        )
+        self.assertNotIn(
+            "Remove-UpdateWorkingDirectory",
+            _POWERSHELL_UPDATE_WORKER,
+        )
+
+    def test_supervisor_monitors_rolls_back_cleans_and_restarts(self) -> None:
+        self.assertNotIn('"settings.json"', _POWERSHELL_UPDATE_SUPERVISOR)
+        self.assertNotIn(
+            "$Request.GetResponse()",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "$WorkerProcess.WaitForExit(500)",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "$NoProgressTimeoutSeconds",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "$MaximumRuntimeSeconds",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "$WorkerProcess.Kill()",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "Restore-UpdateBackup",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "Remove-UpdateWorkingDirectory",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "$Attempt -lt 40",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            '$env:BPSR_UPDATE_RESTART = "1"',
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertIn(
+            "Start-Process `\n        -FilePath $ExecutablePath",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
         self.assertIn(
             '$WindowShell.AppActivate("BPSR MIDI to KEY Player")',
-            _POWERSHELL_UPDATER,
+            _POWERSHELL_UPDATE_SUPERVISOR,
         )
-        self.assertIn("$Attempt -lt 150", _POWERSHELL_UPDATER)
+        self.assertIn(
+            "$Attempt -lt 150",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertNotIn(
+            '"-EncodedCommand"',
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertNotIn(
+            '$ProgressForm.Show()',
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+
+    def test_failed_detached_start_removes_temporary_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            install_dir = directory / "app"
+            install_dir.mkdir()
+            update_root = directory / "worker"
+            update_root.mkdir()
+            with (
+                patch(
+                    "update_service.automatic_update_supported",
+                    return_value=True,
+                ),
+                patch(
+                    "update_service.tempfile.mkdtemp",
+                    return_value=str(update_root),
+                ),
+                patch(
+                    "update_service.QProcess.startDetached",
+                    return_value=(False, 0),
+                ),
+            ):
+                self.assertFalse(
+                    launch_update_installer(
+                        available_update(),
+                        install_dir=install_dir,
+                        process_id=99,
+                    )
+                )
+
+            self.assertFalse(update_root.exists())
+            self.assertTrue(
+                (
+                    install_dir
+                    / UPDATE_SUPERVISOR_DIRECTORY_NAME
+                    / UPDATE_SUPERVISOR_FILE_NAME
+                ).is_file()
+            )
+
+    def test_supervisor_does_not_launch_a_second_cleanup_process(
+        self,
+    ) -> None:
+        self.assertIn(
+            "$null = Remove-UpdateWorkingDirectory",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+        self.assertEqual(
+            _POWERSHELL_UPDATE_SUPERVISOR.count(
+                "Start-Process `\n        -FilePath $ExecutablePath"
+            ),
+            1,
+        )
+        self.assertNotIn(
+            "EncodedCommand",
+            _POWERSHELL_UPDATE_SUPERVISOR,
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows updater test")
+    def test_supervisor_stops_stalled_worker_rolls_back_and_cleans(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            install_dir = directory / "app"
+            install_dir.mkdir()
+            executable_path = install_dir / EXECUTABLE_NAME
+            executable_path.write_bytes(b"old executable")
+            internal_dir = install_dir / "_internal"
+            internal_dir.mkdir()
+            (internal_dir / "runtime.bin").write_bytes(b"old runtime")
+            (install_dir / "readme.txt").write_text(
+                "old readme",
+                encoding="utf-8",
+            )
+
+            update_root = directory / "update"
+            update_root.mkdir()
+            worker_path = update_root / UPDATE_WORKER_FILE_NAME
+            worker_path.write_text(
+                r'''
+$InstallDir = $env:BPSR_UPDATE_INSTALL_DIR
+$ProcessId = [int]$env:BPSR_UPDATE_PROCESS_ID
+$BackupDir = Join-Path $InstallDir (".bpsr_update_backup_" + $ProcessId)
+Set-Content -LiteralPath (Join-Path $InstallDir "worker_pid.txt") -Value $PID
+New-Item -ItemType Directory -Path $BackupDir | Out-Null
+foreach ($Entry in @("BPSR_MIDI_to_KEY_Player.exe", "_internal", "readme.txt")) {
+    Move-Item `
+        -LiteralPath (Join-Path $InstallDir $Entry) `
+        -Destination $BackupDir
+}
+[IO.File]::WriteAllText($env:BPSR_UPDATE_PROGRESS_FILE, "started")
+Start-Sleep -Seconds 30
+''',
+                encoding="utf-8-sig",
+                newline="\n",
+            )
+            supervisor_dir = (
+                install_dir / UPDATE_SUPERVISOR_DIRECTORY_NAME
+            )
+            supervisor_dir.mkdir()
+            supervisor_path = (
+                supervisor_dir / UPDATE_SUPERVISOR_FILE_NAME
+            )
+            supervisor_path.write_text(
+                _POWERSHELL_UPDATE_SUPERVISOR,
+                encoding="utf-8-sig",
+                newline="\n",
+            )
+            environment = os.environ.copy()
+            environment["BPSR_UPDATE_HEADLESS"] = "1"
+            command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(supervisor_path),
+                "-WorkerPath",
+                str(worker_path),
+                "-UpdateRoot",
+                str(update_root),
+                "-ProcessId",
+                str(os.getpid()),
+                "-InstallDir",
+                str(install_dir),
+                "-DownloadUrl",
+                "https://github.com/example/update.zip",
+                "-ExpectedSize",
+                "1",
+                "-ExpectedSha256",
+                "a" * 64,
+                "-ArchiveName",
+                "update.zip",
+                "-ExecutableName",
+                EXECUTABLE_NAME,
+                "-ProductDirectoryName",
+                PRODUCT_DIRECTORY_NAME,
+                "-ErrorFileName",
+                UPDATE_ERROR_FILE_NAME,
+                "-Language",
+                "en",
+                "-NoProgressTimeoutSeconds",
+                "1",
+                "-MaximumRuntimeSeconds",
+                "10",
+            ]
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=environment,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+
+            worker_pid_path = install_dir / "worker_pid.txt"
+            worker_pid = int(worker_pid_path.read_text().strip())
+            try:
+                worker_check = subprocess.run(
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-Command",
+                        (
+                            "if (Get-Process -Id "
+                            f"{worker_pid} "
+                            "-ErrorAction SilentlyContinue) { exit 1 }"
+                        ),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(worker_check.returncode, 0)
+                self.assertFalse(update_root.exists())
+                self.assertEqual(
+                    executable_path.read_bytes(),
+                    b"old executable",
+                )
+                self.assertEqual(
+                    (internal_dir / "runtime.bin").read_bytes(),
+                    b"old runtime",
+                )
+                self.assertEqual(
+                    (install_dir / "readme.txt").read_text(
+                        encoding="utf-8"
+                    ),
+                    "old readme",
+                )
+                self.assertIn(
+                    "made no progress",
+                    (
+                        install_dir / UPDATE_ERROR_FILE_NAME
+                    ).read_text(encoding="utf-8-sig"),
+                )
+            finally:
+                subprocess.run(
+                    [
+                        "taskkill.exe",
+                        "/PID",
+                        str(worker_pid),
+                        "/T",
+                        "/F",
+                    ],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
 
 
 if __name__ == "__main__":

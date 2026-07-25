@@ -52,7 +52,8 @@ from global_hotkeys import GlobalHotkeyManager, shortcut_to_hotkey_spec
 from i18n import TEXT, normalize_color_theme, normalize_language
 from keyboard_output import KeyboardOutput
 from live_midi_input import MidiInputKeyboardBridge, list_midi_input_devices
-from midi_parser import MidiEvent, MidiSummary, parse_midi
+from midi_parser import MidiEvent, MidiSummary
+from midi_parser_process import MidiParserProcess
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 from player import MidiKeyboardPlayer
 from rhythm_judgment import RhythmJudge, RhythmJudgment
@@ -163,6 +164,7 @@ class AppController:
             ),
         )
         self.view: ControllerView = NullView()
+        self.midi_parser_process = MidiParserProcess()
         self.events: list[MidiEvent] = []
         self.summary: MidiSummary | None = None
         self.midi_files: list[Path] = []
@@ -498,7 +500,7 @@ class AppController:
         if stop_playback and self._playback_mode_is_active():
             self.stop_playback()
         try:
-            events, summary = parse_midi(path)
+            events, summary = self.midi_parser_process.parse(path)
         except Exception as exc:
             self._message("error", "load_failed_title", str(exc))
             return False
@@ -1633,6 +1635,7 @@ class AppController:
         self._unbind_global_hotkeys()
         self.stop_midi_input()
         self.stop_playback()
+        self.midi_parser_process.shutdown()
         self._save_settings_on_shutdown()
 
     def _apply_live_option(self, name: str) -> None:
@@ -1829,7 +1832,7 @@ class AppController:
                 if cancel.is_set():
                     return
                 try:
-                    _events, summary = parse_midi(path)
+                    _events, summary = self.midi_parser_process.parse(path)
                     duration = self.format_time(summary.duration)
                 except Exception:
                     duration = "--:--"

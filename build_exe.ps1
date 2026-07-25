@@ -87,6 +87,23 @@ if (-not (Test-Path $OutputExe)) {
     throw "Build failed: $OutputExe was not created."
 }
 
+$UnusedRuntimePaths = @(
+    (Join-Path $OutputDir "_internal\PySide6\QtMultimediaWidgets.pyd"),
+    (Join-Path $OutputDir "_internal\PySide6\plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll"),
+    (Join-Path $OutputDir "_internal\Qt6MultimediaWidgets.dll"),
+    (Join-Path $OutputDir "_internal\Qt6VirtualKeyboard.dll"),
+    (Join-Path $OutputDir "_internal\Qt6Quick.dll"),
+    (Join-Path $OutputDir "_internal\Qt6Qml.dll"),
+    (Join-Path $OutputDir "_internal\Qt6QmlMeta.dll"),
+    (Join-Path $OutputDir "_internal\Qt6QmlModels.dll"),
+    (Join-Path $OutputDir "_internal\Qt6QmlWorkerScript.dll")
+)
+foreach ($UnusedRuntimePath in $UnusedRuntimePaths) {
+    if (Test-Path -LiteralPath $UnusedRuntimePath) {
+        Remove-Item -LiteralPath $UnusedRuntimePath -Force
+    }
+}
+
 Copy-Item -LiteralPath "readme.txt" -Destination $OutputReadme -Force
 if (-not (Test-Path $OutputReadme)) {
     throw "Build failed: $OutputReadme was not created."

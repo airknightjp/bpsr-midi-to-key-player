@@ -70,11 +70,20 @@ SOUND_SOURCE_NAMES = {
 RELEASE_NOTES_CONTENT = {
     "en": """v1.5.0
 
-This release improves MIDI library management, performance visualization,
-and playback efficiency.
+This release separates the GUI, software synthesizer, and MIDI parser into
+multiple processes to distribute processing load and improve UI responsiveness
+and audio-output stability. MIDI library management, performance visualization,
+and update handling are also improved.
 
 [Main changes]
 
+- The GUI, software synth/PCM output, and MIDI parsing now run in three
+  separate processes. Heavy MIDI analysis and waveform generation are less
+  likely to block UI processing directly.
+- Audio and MIDI-parser child processes are managed with a Windows Job Object
+  and parent-process watchdog so they terminate with the main application.
+- Qt audio queue and internal Buffer values can now be selected from the menu
+  bar. The defaults are Qt 1024 and Buffer 512.
 - MIDI files are now loaded recursively from the selected folder and all
   subfolders. The MIDI list shows the folder hierarchy and saves adjusted
   column widths.
@@ -90,6 +99,9 @@ and playback efficiency.
   judgments and their visual effects.
 - Reduced unnecessary playback planning, list rebuilding, visual updates,
   and idle audio processing.
+- In-app updates now use separate supervisor and worker processes. A stalled
+  or failed update is stopped, rolled back from backup, and cleaned up before
+  the app restarts.
 - The default countdown is now 0 seconds.
 
 [v1.4.0]
@@ -187,11 +199,21 @@ performance visualization, and automatic sustain generation.
   from the previous location are not migrated automatically.""",
     "ja": """v1.5.0
 
-本バージョンでは、MIDIライブラリ管理、演奏表示、
-再生処理の効率と安定性を改善しました。
+本バージョンでは、GUI、ソフトウェア音源、MIDI解析を
+マルチプロセス化し、処理負荷の分散、操作応答性、
+音声出力の安定性を改善しました。
+MIDIライブラリ管理、演奏表示、更新処理も強化しています。
 
 【主な変更】
 
+- GUI、ソフトウェア音源／PCM出力、MIDI解析を
+  3つのプロセスへ分離しました。
+  重いMIDI解析や波形生成がGUI処理を直接占有しにくくなります。
+- 音声プロセスとMIDI解析プロセスをWindows Job Objectと
+  親プロセス監視で管理し、アプリ本体の終了時に
+  子プロセスが残らないようにしました。
+- Qtの音声待機量と内部Bufferをメニューバーから
+  選択できるようにしました。初期値はQt 1024／Buffer 512です。
 - 選択フォルダ配下のサブフォルダを再帰的に読み込み、
   MIDI一覧へフォルダ階層を表示するようにしました。
   列幅の変更と保存にも対応しました。
@@ -206,6 +228,9 @@ performance visualization, and automatic sustain generation.
   タイミング判定と演出だけを残しました。
 - 不要な再生計画、一覧再構築、描画更新、
   未使用時の音声処理を削減しました。
+- アプリ内更新を監視プロセスと更新プロセスへ分離しました。
+  進捗停止や異常終了を検出した場合は更新処理を終了し、
+  バックアップから旧版を復元して一時ファイルを削除します。
 - カウントダウンの初期値を0秒へ変更しました。
 
 【v1.4.0】
@@ -312,10 +337,18 @@ v1.4.0
   変更しました。旧保存先の設定は自動移行されません。""",
     "zh": """v1.5.0
 
-本版本改进了MIDI文件管理、演奏显示以及播放效率和稳定性。
+本版本将界面、软件合成器和MIDI解析分离到多个进程中，
+以分担处理负载并改善界面响应和音频输出稳定性。
+同时还加强了MIDI文件管理、演奏显示和更新处理。
 
 【主要变更】
 
+- 界面、软件合成器／PCM输出和MIDI解析现在分别运行在
+  三个进程中，较重的MIDI分析与波形生成不易直接阻塞界面处理。
+- 音频进程与MIDI解析进程由Windows Job Object和父进程监控管理，
+  并随主程序退出，避免子进程残留。
+- 可从菜单栏选择Qt音频等待量和内部Buffer，
+  默认值为Qt 1024／Buffer 512。
 - 递归读取所选文件夹及其所有子文件夹中的MIDI文件，
   并在列表中显示文件夹层级，同时保存调整后的列宽。
 - 重新加载时复用未变更的MIDI信息，仅处理新增、删除或修改的文件。
@@ -324,6 +357,8 @@ v1.4.0
 - 当本应用或其子窗口获得焦点时，不发送键盘输入。
 - 删除日志标签页、分数和连击显示，保留时序判定及其视觉效果。
 - 减少不必要的播放规划、列表重建、绘制更新和空闲音频处理。
+- 应用内更新改为监控进程与更新进程分离。
+  检测到更新停滞或异常退出时，会终止更新、从备份恢复并删除临时文件。
 - 默认倒计时改为0秒。
 
 【v1.4.0】

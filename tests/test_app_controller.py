@@ -945,7 +945,11 @@ class AppControllerTests(unittest.TestCase):
             )
             with (
                 patch.object(controller, "_start_metadata_scan"),
-                patch("app_controller.parse_midi", return_value=([], summary)),
+                patch.object(
+                    controller.midi_parser_process,
+                    "parse",
+                    return_value=([], summary),
+                ),
             ):
                 controller.load_midi_folder(temporary_directory, save_folder=False)
 
@@ -1042,8 +1046,9 @@ class AppControllerTests(unittest.TestCase):
                 tracks=(MidiTrackSummary(index=0, channels=(0,)),),
             )
             with (
-                patch(
-                    "app_controller.parse_midi",
+                patch.object(
+                    controller.midi_parser_process,
+                    "parse",
                     return_value=([], summary),
                 ) as parse_midi,
                 patch.object(controller, "_start_metadata_scan") as metadata_scan,
@@ -1074,7 +1079,11 @@ class AppControllerTests(unittest.TestCase):
                 tracks=(MidiTrackSummary(index=0, channels=(0,)),),
             )
             with (
-                patch("app_controller.parse_midi", return_value=([], summary)),
+                patch.object(
+                    controller.midi_parser_process,
+                    "parse",
+                    return_value=([], summary),
+                ),
                 patch.object(controller, "_start_metadata_scan") as metadata_scan,
             ):
                 controller.load_midi_folder(root)
@@ -1351,7 +1360,11 @@ class AppControllerTests(unittest.TestCase):
             events = [MidiEvent(0.0, "note_on", 0, 60, 80, track=0)]
 
             with (
-                patch("app_controller.parse_midi", return_value=(events, summary)),
+                patch.object(
+                    controller.midi_parser_process,
+                    "parse",
+                    return_value=(events, summary),
+                ),
                 patch.object(controller, "stop_playback") as stop_playback,
             ):
                 controller.select_midi(0)

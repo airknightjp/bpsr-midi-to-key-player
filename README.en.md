@@ -4,6 +4,8 @@
 
 > **Multilingual UI:** Supports Japanese, English, and Chinese.
 
+> **Multiprocess load distribution:** The GUI, software synthesizer, and MIDI parser run in three separate processes so heavy MIDI analysis and waveform generation are less likely to block UI interaction directly.
+
 BPSR MIDI to KEY Player is a Windows desktop tool that converts MIDI files and USB MIDI keyboard input into keyboard events.
 
 It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ordinary keyboard keys and sent to the currently focused application. The app also supports MIDI sound playback, track/channel selection, realtime input conversion, note range adjustment, custom key bindings, global shortcuts, themes, and task tray storage.
@@ -35,7 +37,8 @@ The `_internal` folder contains files required by the application. Do not move t
 - Toggle each track/channel combination, with immediate changes during playback.
 - Convert sustain pedal CC64 to the Space key.
 - Select Piano, Electric Piano, Organ, or Synth as the software sound source.
-- Automatically tune the Qt audio queue and internal Buffer for the current environment.
+- Run the GUI, software synth/PCM output, and MIDI parsing in separate processes to distribute processing load.
+- Select the Qt audio queue and internal Buffer from the menu bar. Defaults are Qt 1024 and Buffer 512.
 - Show final output notes on a full A0-C8 keyboard and falling-note rhythm display.
 - Control Previous, Play/Pause, Next, Continuous playback, and Repeat one.
 - Configure a countdown before MIDI input conversion starts.
@@ -74,6 +77,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - The release ZIP size, SHA-256 digest, archive structure, and path safety are verified before installation.
 - The local `settings.json` is preserved. After a successful update, the app restarts automatically and returns to the foreground.
 - If an update fails, the previous application files are restored and the error is reported on the next launch.
+- A dedicated supervisor process monitors update progress. If the updater stalls or exits abnormally, it is stopped, the backup is restored, and temporary files are removed.
 - No GitHub credentials or access tokens are included in the application.
 
 ## Software Synth and Audio Output
@@ -83,9 +87,19 @@ MIDI sound playback and realtime preview sound use an in-app software synthesize
 - Select from Piano, Electric Piano, Organ, and Synth.
 - Play up to 64 simultaneous voices.
 - Prefer the output device's recommended audio format, with fallback to Float32, Int16, or Int32 when needed.
-- Automatically tune the Qt audio queue and internal Buffer by monitoring audio starvation, output underruns, and synthesis load.
-- Learn the smallest stable Qt value for the current audio environment and reuse it on the next launch.
-- Show the current values as `Qt ... | Buffer ...` at the right end of the menu bar.
+- Select the Qt audio queue and internal Buffer from menu-bar drop-downs to suit the current environment.
+- The defaults are `Qt 1024` and `Buffer 512`. Selected values are saved to `settings.json`.
+- The current values are shown as `Qt ... | Buffer ...` in the menu bar.
+
+## Multiprocess Architecture
+
+Normal operation is divided across three processes:
+
+- **Main process:** Qt UI, settings, playback control, realtime MIDI input, key conversion, and SendInput.
+- **Audio process:** Software synthesis, waveform generation, PCM buffer management, and Qt audio output.
+- **MIDI parser process:** MIDI events, duration, tracks/channels, and note-range analysis.
+
+Separating audio generation and MIDI parsing from the GUI prevents their heavier work from concentrating on the UI process during large-file analysis or multi-note playback. Child processes are managed with a Windows Job Object and parent-process watchdog so they terminate with the main application.
 
 ## Performance Display
 

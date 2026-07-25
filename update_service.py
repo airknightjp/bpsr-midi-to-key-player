@@ -24,6 +24,9 @@ RELEASES_API_URL = (
 PRODUCT_DIRECTORY_NAME = "BPSR_MIDI_to_KEY_Player"
 EXECUTABLE_NAME = "BPSR_MIDI_to_KEY_Player.exe"
 UPDATE_ERROR_FILE_NAME = ".bpsr_update_error.txt"
+UPDATE_SUPERVISOR_DIRECTORY_NAME = ".bpsr_updater"
+UPDATE_SUPERVISOR_FILE_NAME = "update_supervisor.ps1"
+UPDATE_WORKER_FILE_NAME = "update_worker.ps1"
 CHECK_TIMEOUT_MS = 8_000
 UPDATE_CHECK_INTERVAL_SECONDS = 60 * 60
 _VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -234,47 +237,69 @@ def launch_update_installer(
     update_root = Path(
         tempfile.mkdtemp(prefix="BPSR_MIDI_to_KEY_Player_update_")
     )
-    updater_path = update_root / "apply_update.ps1"
-    updater_path.write_text(
-        _POWERSHELL_UPDATER,
-        encoding="utf-8-sig",
-        newline="\n",
-    )
-    arguments = [
-        "-NoProfile",
-        "-WindowStyle",
-        "Hidden",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(updater_path),
-        "-ProcessId",
-        str(process_id if process_id is not None else os.getpid()),
-        "-InstallDir",
-        str(destination),
-        "-DownloadUrl",
-        download_url,
-        "-ExpectedSize",
-        str(update.asset.size),
-        "-ExpectedSha256",
-        update.asset.sha256.lower(),
-        "-ArchiveName",
-        update.asset.name,
-        "-ExecutableName",
-        EXECUTABLE_NAME,
-        "-ProductDirectoryName",
-        PRODUCT_DIRECTORY_NAME,
-        "-ErrorFileName",
-        UPDATE_ERROR_FILE_NAME,
-        "-Language",
-        language if language in {"en", "ja", "zh"} else "en",
-    ]
-    result = QProcess.startDetached(
-        "powershell.exe",
-        arguments,
-        str(destination),
-    )
-    started = bool(result[0]) if isinstance(result, tuple) else bool(result)
+    try:
+        worker_path = update_root / UPDATE_WORKER_FILE_NAME
+        worker_path.write_text(
+            _POWERSHELL_UPDATE_WORKER,
+            encoding="utf-8-sig",
+            newline="\n",
+        )
+        supervisor_directory = (
+            destination / UPDATE_SUPERVISOR_DIRECTORY_NAME
+        )
+        supervisor_directory.mkdir(parents=True, exist_ok=True)
+        supervisor_path = supervisor_directory / UPDATE_SUPERVISOR_FILE_NAME
+        supervisor_path.write_text(
+            _POWERSHELL_UPDATE_SUPERVISOR,
+            encoding="utf-8-sig",
+            newline="\n",
+        )
+        arguments = [
+            "-NoProfile",
+            "-WindowStyle",
+            "Hidden",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(supervisor_path),
+            "-WorkerPath",
+            str(worker_path),
+            "-UpdateRoot",
+            str(update_root),
+            "-ProcessId",
+            str(process_id if process_id is not None else os.getpid()),
+            "-InstallDir",
+            str(destination),
+            "-DownloadUrl",
+            download_url,
+            "-ExpectedSize",
+            str(update.asset.size),
+            "-ExpectedSha256",
+            update.asset.sha256.lower(),
+            "-ArchiveName",
+            update.asset.name,
+            "-ExecutableName",
+            EXECUTABLE_NAME,
+            "-ProductDirectoryName",
+            PRODUCT_DIRECTORY_NAME,
+            "-ErrorFileName",
+            UPDATE_ERROR_FILE_NAME,
+            "-Language",
+            language if language in {"en", "ja", "zh"} else "en",
+        ]
+        result = QProcess.startDetached(
+            "powershell.exe",
+            arguments,
+            str(destination),
+        )
+        started = (
+            bool(result[0])
+            if isinstance(result, tuple)
+            else bool(result)
+        )
+    except Exception:
+        shutil.rmtree(update_root, ignore_errors=True)
+        raise
     if not started:
         shutil.rmtree(update_root, ignore_errors=True)
     return started
@@ -366,7 +391,9 @@ def _verify_directory_is_writable(directory: Path) -> None:
         ) from exc
 
 
-_POWERSHELL_UPDATER = r'''param(
+_POWERSHELL_UPDATE_SUPERVISOR = r'''param(
+    [Parameter(Mandatory = $true)][string]$WorkerPath,
+    [Parameter(Mandatory = $true)][string]$UpdateRoot,
     [Parameter(Mandatory = $true)][int]$ProcessId,
     [Parameter(Mandatory = $true)][string]$InstallDir,
     [Parameter(Mandatory = $true)][string]$DownloadUrl,
@@ -376,22 +403,290 @@ _POWERSHELL_UPDATER = r'''param(
     [Parameter(Mandatory = $true)][string]$ExecutableName,
     [Parameter(Mandatory = $true)][string]$ProductDirectoryName,
     [Parameter(Mandatory = $true)][string]$ErrorFileName,
-    [Parameter(Mandatory = $true)][string]$Language
+    [Parameter(Mandatory = $true)][string]$Language,
+    [int]$NoProgressTimeoutSeconds = 180,
+    [int]$MaximumRuntimeSeconds = 900
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressFilePath = Join-Path $UpdateRoot "progress.heartbeat"
+$ResultFilePath = Join-Path $UpdateRoot "worker_result.txt"
+$BackupDir = Join-Path $InstallDir (".bpsr_update_backup_" + $ProcessId)
+$ExecutablePath = Join-Path $InstallDir $ExecutableName
+$ErrorFilePath = Join-Path $InstallDir $ErrorFileName
+$ManagedEntries = @($ExecutableName, "_internal", "readme.txt")
+$WorkerProcess = $null
+$FailureMessage = ""
+$Headless = $env:BPSR_UPDATE_HEADLESS -eq "1"
+
+function Restore-UpdateBackup {
+    if (-not (Test-Path -LiteralPath $BackupDir)) {
+        return
+    }
+    foreach ($Entry in $ManagedEntries) {
+        $BackupPath = Join-Path $BackupDir $Entry
+        if (-not (Test-Path -LiteralPath $BackupPath)) {
+            continue
+        }
+        $CurrentPath = Join-Path $InstallDir $Entry
+        Remove-Item `
+            -LiteralPath $CurrentPath `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $BackupPath -Destination $CurrentPath -Force
+    }
+    Remove-Item `
+        -LiteralPath $BackupDir `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+}
+
+function Write-UpdateError {
+    param([string]$Message)
+    try {
+        Set-Content `
+            -LiteralPath $ErrorFilePath `
+            -Value ("Automatic update failed: " + $Message) `
+            -Encoding UTF8
+    }
+    catch {
+    }
+}
+
+function Stop-UpdateWorker {
+    if ($null -eq $WorkerProcess) {
+        return $true
+    }
+    for ($Attempt = 0; $Attempt -lt 10; $Attempt++) {
+        try {
+            if ($WorkerProcess.HasExited) {
+                return $true
+            }
+            $WorkerProcess.Kill()
+            if ($WorkerProcess.WaitForExit(500)) {
+                return $true
+            }
+        }
+        catch {
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    try {
+        return $WorkerProcess.HasExited
+    }
+    catch {
+        return $false
+    }
+}
+
+function Remove-UpdateWorkingDirectory {
+    for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
+        if (-not (Test-Path -LiteralPath $UpdateRoot)) {
+            return $true
+        }
+        try {
+            Remove-Item `
+                -LiteralPath $UpdateRoot `
+                -Recurse `
+                -Force `
+                -ErrorAction Stop
+        }
+        catch {
+        }
+        if (-not (Test-Path -LiteralPath $UpdateRoot)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Start-UpdatedApplication {
+    $OriginalProcess = Get-Process `
+        -Id $ProcessId `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $OriginalProcess) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $ExecutablePath)) {
+        return
+    }
+    $env:BPSR_UPDATE_RESTART = "1"
+    Start-Process `
+        -FilePath $ExecutablePath `
+        -WorkingDirectory $InstallDir | Out-Null
+    if ($Headless) {
+        return
+    }
+    try {
+        $WindowShell = New-Object -ComObject WScript.Shell
+        for ($Attempt = 0; $Attempt -lt 150; $Attempt++) {
+            Start-Sleep -Milliseconds 100
+            if ($WindowShell.AppActivate("BPSR MIDI to KEY Player")) {
+                break
+            }
+        }
+    }
+    catch {
+    }
+}
+
+try {
+    Remove-Item `
+        -LiteralPath $ProgressFilePath `
+        -Force `
+        -ErrorAction SilentlyContinue
+    Remove-Item `
+        -LiteralPath $ResultFilePath `
+        -Force `
+        -ErrorAction SilentlyContinue
+
+    $WorkerStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $WorkerStartInfo.FileName = "powershell.exe"
+    $WorkerStartInfo.Arguments = (
+        '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
+        $WorkerPath +
+        '"'
+    )
+    $WorkerStartInfo.UseShellExecute = $false
+    $WorkerStartInfo.CreateNoWindow = $true
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_PROCESS_ID"] = [string]$ProcessId
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_INSTALL_DIR"] = $InstallDir
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_DOWNLOAD_URL"] = $DownloadUrl
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_EXPECTED_SIZE"] = [string]$ExpectedSize
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_EXPECTED_SHA256"] = $ExpectedSha256
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_ARCHIVE_NAME"] = $ArchiveName
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_EXECUTABLE_NAME"] = $ExecutableName
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_PRODUCT_DIRECTORY"] = $ProductDirectoryName
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_LANGUAGE"] = $Language
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_PROGRESS_FILE"] = $ProgressFilePath
+    $WorkerStartInfo.EnvironmentVariables["BPSR_UPDATE_RESULT_FILE"] = $ResultFilePath
+    $WorkerProcess = [Diagnostics.Process]::Start($WorkerStartInfo)
+    if ($null -eq $WorkerProcess) {
+        throw "The update worker could not be started."
+    }
+
+    $StartedUtc = [DateTime]::UtcNow
+    $LastProgressUtc = $StartedUtc
+    while (-not $WorkerProcess.WaitForExit(500)) {
+        if (Test-Path -LiteralPath $ProgressFilePath) {
+            try {
+                $ProgressUtc = (
+                    Get-Item -LiteralPath $ProgressFilePath
+                ).LastWriteTimeUtc
+                if ($ProgressUtc -gt $LastProgressUtc) {
+                    $LastProgressUtc = $ProgressUtc
+                }
+            }
+            catch {
+            }
+        }
+        $NowUtc = [DateTime]::UtcNow
+        if (
+            ($NowUtc - $LastProgressUtc).TotalSeconds -gt
+            $NoProgressTimeoutSeconds
+        ) {
+            $FailureMessage = "The update made no progress for too long."
+            $null = Stop-UpdateWorker
+            break
+        }
+        if (
+            ($NowUtc - $StartedUtc).TotalSeconds -gt
+            $MaximumRuntimeSeconds
+        ) {
+            $FailureMessage = "The update exceeded its maximum runtime."
+            $null = Stop-UpdateWorker
+            break
+        }
+    }
+
+    if ($FailureMessage -eq "" -and -not $WorkerProcess.HasExited) {
+        $FailureMessage = "The update worker did not stop."
+    }
+    if (
+        $FailureMessage -eq "" -and
+        $WorkerProcess.ExitCode -ne 0
+    ) {
+        if (Test-Path -LiteralPath $ResultFilePath) {
+            $FailureMessage = (
+                Get-Content -LiteralPath $ResultFilePath -Raw
+            ).Trim()
+        }
+        if ($FailureMessage -eq "") {
+            $FailureMessage = (
+                "The update worker exited with code " +
+                $WorkerProcess.ExitCode +
+                "."
+            )
+        }
+    }
+    if ($FailureMessage -ne "") {
+        throw $FailureMessage
+    }
+
+    Remove-Item `
+        -LiteralPath $BackupDir `
+        -Recurse `
+        -Force `
+        -ErrorAction SilentlyContinue
+    Remove-Item `
+        -LiteralPath $ErrorFilePath `
+        -Force `
+        -ErrorAction SilentlyContinue
+}
+catch {
+    $FailureMessage = $_.Exception.Message
+    if (
+        $null -ne $WorkerProcess -and
+        -not $WorkerProcess.HasExited
+    ) {
+        $null = Stop-UpdateWorker
+    }
+    try {
+        Restore-UpdateBackup
+    }
+    catch {
+        $FailureMessage += " Rollback failed: " + $_.Exception.Message
+    }
+    Write-UpdateError $FailureMessage
+}
+finally {
+    if ($null -ne $WorkerProcess) {
+        $null = Stop-UpdateWorker
+        $WorkerProcess.Dispose()
+    }
+    $null = Remove-UpdateWorkingDirectory
+    Start-UpdatedApplication
+}
+'''
+
+
+_POWERSHELL_UPDATE_WORKER = r'''
+$ErrorActionPreference = "Stop"
+$ProcessId = [int]$env:BPSR_UPDATE_PROCESS_ID
+$InstallDir = $env:BPSR_UPDATE_INSTALL_DIR
+$DownloadUrl = $env:BPSR_UPDATE_DOWNLOAD_URL
+$ExpectedSize = [long]$env:BPSR_UPDATE_EXPECTED_SIZE
+$ExpectedSha256 = $env:BPSR_UPDATE_EXPECTED_SHA256
+$ArchiveName = $env:BPSR_UPDATE_ARCHIVE_NAME
+$ExecutableName = $env:BPSR_UPDATE_EXECUTABLE_NAME
+$ProductDirectoryName = $env:BPSR_UPDATE_PRODUCT_DIRECTORY
+$Language = $env:BPSR_UPDATE_LANGUAGE
+$ProgressFilePath = $env:BPSR_UPDATE_PROGRESS_FILE
+$ResultFilePath = $env:BPSR_UPDATE_RESULT_FILE
 $UpdateRoot = [IO.Path]::GetDirectoryName($MyInvocation.MyCommand.Path)
 $ZipPath = Join-Path $UpdateRoot $ArchiveName
 $StagingDir = Join-Path $UpdateRoot "staging"
 $BackupDir = Join-Path $InstallDir (".bpsr_update_backup_" + $ProcessId)
 $ExecutablePath = Join-Path $InstallDir $ExecutableName
-$ErrorFilePath = Join-Path $InstallDir $ErrorFileName
 $ManagedEntries = @($ExecutableName, "_internal", "readme.txt")
-$BackupStarted = $false
 $Headless = $env:BPSR_UPDATE_HEADLESS -eq "1"
 $ProgressForm = $null
 $ProgressLabel = $null
 $ProgressBar = $null
+$ExitCode = 0
 
 if (-not $Headless) {
     Add-Type -AssemblyName System.Windows.Forms
@@ -468,6 +763,14 @@ if (-not $Headless) {
 
 function Set-UpdateProgress {
     param([int]$Value, [string]$Message)
+    try {
+        [IO.File]::WriteAllText(
+            $ProgressFilePath,
+            ([DateTime]::UtcNow.Ticks.ToString() + "|" + $Value)
+        )
+    }
+    catch {
+    }
     if ($null -ne $ProgressForm) {
         $ProgressBar.Value = [Math]::Max(0, [Math]::Min(100, $Value))
         $ProgressLabel.Text = $Message
@@ -612,7 +915,6 @@ try {
     Set-UpdateProgress 76 $Texts.Backup
     Remove-Item -LiteralPath $BackupDir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $BackupDir | Out-Null
-    $BackupStarted = $true
     foreach ($Entry in $ManagedEntries) {
         $CurrentPath = Join-Path $InstallDir $Entry
         if (Test-Path -LiteralPath $CurrentPath) {
@@ -631,62 +933,28 @@ try {
         throw "The updated executable was not installed."
     }
 
-    Remove-Item -LiteralPath $BackupDir -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ErrorFilePath -Force -ErrorAction SilentlyContinue
     Set-UpdateProgress 100 $Texts.Restarting
     Start-Sleep -Milliseconds 300
 }
 catch {
     $FailureMessage = $_.Exception.Message
-    try {
-        if ($BackupStarted) {
-            foreach ($Entry in $ManagedEntries) {
-                $FailedPath = Join-Path $InstallDir $Entry
-                Remove-Item -LiteralPath $FailedPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            foreach ($Entry in $ManagedEntries) {
-                $BackupPath = Join-Path $BackupDir $Entry
-                if (Test-Path -LiteralPath $BackupPath) {
-                    Move-Item -LiteralPath $BackupPath -Destination $InstallDir
-                }
-            }
-        }
-    }
-    catch {
-    }
+    $ExitCode = 1
     Set-UpdateProgress 100 $Texts.Failed
-    $Message = "Automatic update failed: " + $FailureMessage
     try {
-        Set-Content -LiteralPath $ErrorFilePath -Value $Message -Encoding UTF8
+        Set-Content `
+            -LiteralPath $ResultFilePath `
+            -Value $FailureMessage `
+            -Encoding UTF8
     }
     catch {
     }
     Start-Sleep -Milliseconds 1000
 }
 finally {
-    Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
     if ($null -ne $ProgressForm) {
         $ProgressForm.Close()
         $ProgressForm.Dispose()
     }
-    if (Test-Path -LiteralPath $ExecutablePath) {
-        $env:BPSR_UPDATE_RESTART = "1"
-        Start-Process -FilePath $ExecutablePath -WorkingDirectory $InstallDir | Out-Null
-        if (-not $Headless) {
-            try {
-                $WindowShell = New-Object -ComObject WScript.Shell
-                for ($Attempt = 0; $Attempt -lt 150; $Attempt++) {
-                    Start-Sleep -Milliseconds 100
-                    if ($WindowShell.AppActivate("BPSR MIDI to KEY Player")) {
-                        break
-                    }
-                }
-            }
-            catch {
-            }
-        }
-    }
 }
+exit $ExitCode
 '''

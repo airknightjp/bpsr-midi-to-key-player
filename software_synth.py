@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import multiprocessing
+import os
 import queue
 import threading
 import time
@@ -36,6 +38,10 @@ from audio_buffer import (
     normalize_qt_audio_frames,
 )
 from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
+from process_lifecycle import (
+    register_child_process,
+    start_parent_process_watchdog,
+)
 
 SAMPLE_RATE = 44_100
 WAVETABLE_SIZE = 2_048
@@ -2443,15 +2449,580 @@ class SoftwareSynthEngine:
         return _audio_start_failed(sink)
 
 
+class _AudioProcessCommandReceiver(QObject):
+    commands_received = Signal(object)
+
+    def __init__(self, command_queue) -> None:  # type: ignore[no-untyped-def]
+        super().__init__()
+        self._command_queue = command_queue
+        self._thread = threading.Thread(
+            target=self._receive_commands,
+            name="SoftwareSynthProcessCommands",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _receive_commands(self) -> None:
+        while True:
+            try:
+                command = self._command_queue.get()
+            except (EOFError, OSError):
+                return
+            batch = [command]
+            while len(batch) < 256:
+                try:
+                    batch.append(self._command_queue.get_nowait())
+                except queue.Empty:
+                    break
+                except (EOFError, OSError):
+                    break
+            self.commands_received.emit(batch)
+            if any(item[1] == "shutdown" for item in batch):
+                return
+
+
+class _AudioProcessController(QObject):
+    def __init__(self, response_queue) -> None:  # type: ignore[no-untyped-def]
+        super().__init__()
+        self.response_queue = response_queue
+        self.engine = SoftwareSynthEngine()
+
+    @Slot(object)
+    def handle_commands(self, commands: object) -> None:
+        for request_id, action, arguments in commands:  # type: ignore[union-attr]
+            try:
+                result = self._handle_command(
+                    str(action),
+                    tuple(arguments),
+                )
+            except Exception as exc:
+                if request_id is not None:
+                    self._respond(
+                        int(request_id),
+                        False,
+                        None,
+                        str(exc) or exc.__class__.__name__,
+                    )
+                else:
+                    self.response_queue.put(
+                        (
+                            "process_error",
+                            str(exc) or exc.__class__.__name__,
+                        )
+                    )
+                continue
+            if request_id is not None:
+                self._respond(int(request_id), True, result, "")
+            if action == "shutdown":
+                QTimer.singleShot(0, QCoreApplication.quit)
+                return
+
+    def _handle_command(
+        self,
+        action: str,
+        arguments: tuple[object, ...],
+    ) -> object:
+        if action == "configure":
+            changed = self.engine.configure_audio_settings(
+                *map(int, arguments)
+            )
+            return changed, self.engine.last_error
+        if action == "start":
+            started = self.engine.start()
+            return started, self.engine.last_error
+        if action == "register":
+            client_id = int(arguments[0])
+            self.engine.register_client(
+                client_id,
+                lambda qt, buffer, response, chunk, fallback, reason, cid=client_id: (
+                    self.response_queue.put(
+                        (
+                            "runtime",
+                            cid,
+                            qt,
+                            buffer,
+                            response,
+                            chunk,
+                            fallback,
+                            reason,
+                        )
+                    )
+                ),
+            )
+            return True
+        if action == "unregister":
+            self.engine.unregister_client(int(arguments[0]))
+            return True
+        if action == "note_on":
+            self.engine.stream.note_on(
+                int(arguments[0]),
+                int(arguments[1]),
+                int(arguments[2]),
+                int(arguments[3]),
+                str(arguments[4]),
+            )
+            return True
+        if action == "note_off":
+            self.engine.stream.note_off(
+                int(arguments[0]),
+                int(arguments[1]),
+                int(arguments[2]),
+            )
+            return True
+        if action == "sustain":
+            self.engine.stream.set_sustain(
+                int(arguments[0]),
+                int(arguments[1]),
+                bool(arguments[2]),
+            )
+            return True
+        if action == "release_all":
+            self.engine.stream.release_all(
+                int(arguments[0]),
+                (
+                    None
+                    if arguments[1] is None
+                    else int(arguments[1])
+                ),
+                immediate=bool(arguments[2]),
+                release_seconds=(
+                    None
+                    if arguments[3] is None
+                    else float(arguments[3])
+                ),
+            )
+            return True
+        if action == "metrics":
+            return self.engine.stream.metrics_snapshot()
+        if action == "shutdown":
+            self.engine.shutdown()
+            return True
+        if action == "ping":
+            return True
+        raise ValueError(f"Unsupported audio process command: {action}")
+
+    def _respond(
+        self,
+        request_id: int,
+        ok: bool,
+        result: object,
+        error: str,
+    ) -> None:
+        self.response_queue.put(
+            ("response", request_id, bool(ok), result, str(error))
+        )
+
+
+def _software_synth_process_main(
+    command_queue,  # type: ignore[no-untyped-def]
+    response_queue,  # type: ignore[no-untyped-def]
+    ready_event,  # type: ignore[no-untyped-def]
+    parent_pid: int,
+) -> None:
+    start_parent_process_watchdog(parent_pid, 1.0)
+    application = QCoreApplication([])
+    controller = _AudioProcessController(response_queue)
+    receiver = _AudioProcessCommandReceiver(command_queue)
+    receiver.commands_received.connect(
+        controller.handle_commands,
+        Qt.ConnectionType.QueuedConnection,
+    )
+    receiver.start()
+    ready_event.set()
+    try:
+        application.exec()
+    finally:
+        controller.engine.shutdown()
+        response_queue.put(("stopped",))
+
+
+class _PendingAudioProcessRequest:
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.ok = False
+        self.result: object = None
+        self.error = ""
+
+
+class SoftwareSynthProcessHost:
+    """Parent-process proxy for the isolated software synthesizer."""
+
+    def __init__(self) -> None:
+        self._context = multiprocessing.get_context("spawn")
+        self._lifecycle_lock = threading.RLock()
+        self._pending_lock = threading.Lock()
+        self._callback_lock = threading.Lock()
+        self._command_queue = None
+        self._response_queue = None
+        self._process: multiprocessing.Process | None = None
+        self._listener_thread: threading.Thread | None = None
+        self._next_request_id = 0
+        self._next_client_id = 0
+        self._pending: dict[int, _PendingAudioProcessRequest] = {}
+        self._runtime_callbacks: dict[
+            int,
+            Callable[[int, int, int, int, int, str], None],
+        ] = {}
+        self.qt_frames = DEFAULT_QT_AUDIO_FRAMES
+        self.buffer_frames = DEFAULT_AUDIO_BUFFER_FRAMES
+        self.response_frames = DEFAULT_AUDIO_RESPONSE_FRAMES
+        self.chunk_frames = DEFAULT_AUDIO_CHUNK_FRAMES
+        self.fallback_interval_ms = DEFAULT_AUDIO_FALLBACK_INTERVAL_MS
+        self.last_error = ""
+
+    @property
+    def stream(self) -> SoftwareSynthProcessHost:
+        return self
+
+    def configure_audio_settings(
+        self,
+        qt_frames: int,
+        buffer_frames: int,
+        response_frames: int,
+        chunk_frames: int,
+        fallback_interval_ms: int,
+    ) -> bool:
+        ok, result, error = self._request(
+            "configure",
+            (
+                qt_frames,
+                buffer_frames,
+                response_frames,
+                chunk_frames,
+                fallback_interval_ms,
+            ),
+        )
+        if not ok:
+            self.last_error = error
+            return False
+        changed, detail = result  # type: ignore[misc]
+        self.last_error = str(detail)
+        return bool(changed)
+
+    def start(self) -> bool:
+        ok, result, error = self._request("start")
+        if not ok:
+            self.last_error = error
+            return False
+        started, detail = result  # type: ignore[misc]
+        self.last_error = str(detail)
+        return bool(started)
+
+    def new_client_id(self) -> int:
+        with self._lifecycle_lock:
+            self._next_client_id += 1
+            return self._next_client_id
+
+    def register_client(
+        self,
+        client_id: int,
+        callback: (
+            Callable[[int, int, int, int, int, str], None] | None
+        ),
+    ) -> None:
+        client_id = int(client_id)
+        with self._callback_lock:
+            if callback is None:
+                self._runtime_callbacks.pop(client_id, None)
+            else:
+                self._runtime_callbacks[client_id] = callback
+        ok, _result, error = self._request(
+            "register",
+            (client_id,),
+        )
+        if not ok:
+            with self._callback_lock:
+                self._runtime_callbacks.pop(client_id, None)
+            raise RuntimeError(error)
+
+    def unregister_client(self, client_id: int) -> None:
+        client_id = int(client_id)
+        self._send("unregister", (client_id,))
+        with self._callback_lock:
+            self._runtime_callbacks.pop(client_id, None)
+
+    def note_on(
+        self,
+        client_id: int,
+        channel: int,
+        note: int,
+        velocity: int,
+        source: str,
+    ) -> None:
+        self._send(
+            "note_on",
+            (client_id, channel, note, velocity, source),
+        )
+
+    def note_off(
+        self,
+        client_id: int,
+        channel: int,
+        note: int,
+    ) -> None:
+        self._send("note_off", (client_id, channel, note))
+
+    def set_sustain(
+        self,
+        client_id: int,
+        channel: int,
+        enabled: bool,
+    ) -> None:
+        self._send("sustain", (client_id, channel, bool(enabled)))
+
+    def release_all(
+        self,
+        client_id: int,
+        channel: int | None = None,
+        *,
+        immediate: bool = False,
+        release_seconds: float | None = None,
+    ) -> None:
+        self._send(
+            "release_all",
+            (
+                client_id,
+                channel,
+                bool(immediate),
+                release_seconds,
+            ),
+        )
+
+    def metrics_snapshot(self) -> AudioSupplyMetrics:
+        ok, result, _error = self._request("metrics")
+        if ok and isinstance(result, AudioSupplyMetrics):
+            return result
+        return AudioSupplyMetrics((), ())
+
+    def shutdown(self) -> None:
+        with self._lifecycle_lock:
+            process = self._process
+        if process is None:
+            return
+        if process.is_alive():
+            self._request("shutdown", timeout=3.0)
+            process.join(timeout=3.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1.0)
+        self._close_process_resources(process)
+
+    def _request(
+        self,
+        action: str,
+        arguments: tuple[object, ...] = (),
+        *,
+        timeout: float = 5.0,
+    ) -> tuple[bool, object, str]:
+        if not self._ensure_process():
+            return False, None, self.last_error
+        with self._pending_lock:
+            self._next_request_id += 1
+            request_id = self._next_request_id
+            pending = _PendingAudioProcessRequest()
+            self._pending[request_id] = pending
+        command_queue = self._command_queue
+        assert command_queue is not None
+        try:
+            command_queue.put((request_id, action, arguments))
+        except (OSError, ValueError) as exc:
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
+            return False, None, str(exc)
+        if not pending.event.wait(max(0.1, float(timeout))):
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
+            return (
+                False,
+                None,
+                f"Audio process did not respond to {action}",
+            )
+        return pending.ok, pending.result, pending.error
+
+    def _send(
+        self,
+        action: str,
+        arguments: tuple[object, ...] = (),
+    ) -> bool:
+        if not self._ensure_process():
+            return False
+        command_queue = self._command_queue
+        assert command_queue is not None
+        try:
+            command_queue.put((None, action, arguments))
+            return True
+        except (OSError, ValueError) as exc:
+            self.last_error = str(exc)
+            return False
+
+    def _ensure_process(self) -> bool:
+        with self._lifecycle_lock:
+            process = self._process
+            if process is not None and process.is_alive():
+                return True
+            if process is not None:
+                self._close_process_resources(process)
+            command_queue = self._context.Queue()
+            response_queue = self._context.Queue()
+            ready_event = self._context.Event()
+            process = self._context.Process(
+                target=_software_synth_process_main,
+                args=(
+                    command_queue,
+                    response_queue,
+                    ready_event,
+                    os.getpid(),
+                ),
+                name="SoftwareSynthProcess",
+                daemon=True,
+            )
+            try:
+                process.start()
+                if process.pid is None:
+                    raise RuntimeError(
+                        "Software synthesizer process has no PID"
+                    )
+                register_child_process(process.pid)
+            except Exception as exc:
+                self.last_error = str(exc)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=1.0)
+                command_queue.close()
+                response_queue.close()
+                return False
+            self._command_queue = command_queue
+            self._response_queue = response_queue
+            self._process = process
+            listener = threading.Thread(
+                target=self._listen,
+                args=(process, response_queue),
+                name="SoftwareSynthProcessResponses",
+                daemon=True,
+            )
+            self._listener_thread = listener
+            listener.start()
+        if not ready_event.wait(5.0):
+            self.last_error = "Software synthesizer process did not start"
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+            self._close_process_resources(process)
+            return False
+        self.last_error = ""
+        return True
+
+    def _listen(
+        self,
+        process: multiprocessing.Process,
+        response_queue,  # type: ignore[no-untyped-def]
+    ) -> None:
+        while True:
+            try:
+                message = response_queue.get(timeout=0.1)
+            except queue.Empty:
+                if not process.is_alive():
+                    break
+                continue
+            except (EOFError, OSError, ValueError):
+                break
+            message_type = message[0]
+            if message_type == "response":
+                self._complete_request(
+                    int(message[1]),
+                    bool(message[2]),
+                    message[3],
+                    str(message[4]),
+                )
+            elif message_type == "runtime":
+                self._notify_runtime(message)
+            elif message_type == "process_error":
+                self.last_error = str(message[1])
+            elif message_type == "stopped":
+                break
+        self._fail_pending("Software synthesizer process stopped")
+
+    def _complete_request(
+        self,
+        request_id: int,
+        ok: bool,
+        result: object,
+        error: str,
+    ) -> None:
+        with self._pending_lock:
+            pending = self._pending.pop(request_id, None)
+        if pending is None:
+            return
+        pending.ok = bool(ok)
+        pending.result = result
+        pending.error = str(error)
+        pending.event.set()
+
+    def _notify_runtime(self, message: tuple[object, ...]) -> None:
+        client_id = int(message[1])
+        self.qt_frames = int(message[2])
+        self.buffer_frames = int(message[3])
+        self.response_frames = int(message[4])
+        self.chunk_frames = int(message[5])
+        self.fallback_interval_ms = int(message[6])
+        with self._callback_lock:
+            callback = self._runtime_callbacks.get(client_id)
+        if callback is None:
+            return
+        try:
+            callback(
+                int(message[2]),
+                int(message[3]),
+                int(message[4]),
+                int(message[5]),
+                int(message[6]),
+                str(message[7]),
+            )
+        except Exception:
+            pass
+
+    def _fail_pending(self, error: str) -> None:
+        with self._pending_lock:
+            pending_requests = tuple(self._pending.values())
+            self._pending.clear()
+        for pending in pending_requests:
+            pending.error = str(error)
+            pending.event.set()
+
+    def _close_process_resources(
+        self,
+        process: multiprocessing.Process,
+    ) -> None:
+        with self._lifecycle_lock:
+            if self._process is not process:
+                return
+            command_queue = self._command_queue
+            response_queue = self._response_queue
+            self._process = None
+            self._command_queue = None
+            self._response_queue = None
+            self._listener_thread = None
+        for target_queue in (command_queue, response_queue):
+            if target_queue is None:
+                continue
+            try:
+                target_queue.close()
+            except (OSError, ValueError):
+                pass
+        self._fail_pending("Software synthesizer process stopped")
+
+
 _engine_lock = threading.Lock()
-_engine: SoftwareSynthEngine | None = None
+_engine: SoftwareSynthProcessHost | None = None
 
 
-def shared_software_synth() -> SoftwareSynthEngine:
+def shared_software_synth() -> SoftwareSynthProcessHost:
     global _engine
     with _engine_lock:
         if _engine is None:
-            _engine = SoftwareSynthEngine()
+            _engine = SoftwareSynthProcessHost()
         return _engine
 
 
@@ -2492,7 +3063,7 @@ class SoftwareSynthClient:
         self.chunk_frames = tuning.chunk_frames
         self.fallback_interval_ms = tuning.fallback_interval_ms
         self.on_runtime_changed = on_runtime_changed
-        self._engine: SoftwareSynthEngine | None = None
+        self._engine: SoftwareSynthProcessHost | None = None
         self._client_id: int | None = None
         self._last_error = ""
 
@@ -2531,7 +3102,7 @@ class SoftwareSynthClient:
 
     def close(self) -> None:
         if self._engine is not None and self._client_id is not None:
-            self._engine.stream.release_all(
+            self._engine.release_all(
                 self._client_id,
                 release_seconds=STOP_RELEASE_SECONDS,
             )
@@ -2606,7 +3177,7 @@ class SoftwareSynthClient:
 
     def note_on(self, channel: int, note: int, velocity: int) -> None:
         if self._engine is not None and self._client_id is not None:
-            self._engine.stream.note_on(
+            self._engine.note_on(
                 self._client_id,
                 channel,
                 note,
@@ -2616,12 +3187,12 @@ class SoftwareSynthClient:
 
     def note_off(self, channel: int, note: int) -> None:
         if self._engine is not None and self._client_id is not None:
-            self._engine.stream.note_off(self._client_id, channel, note)
+            self._engine.note_off(self._client_id, channel, note)
 
     def set_sustain(self, channel: int, enabled: bool) -> None:
         if self._engine is not None and self._client_id is not None:
-            self._engine.stream.set_sustain(self._client_id, channel, enabled)
+            self._engine.set_sustain(self._client_id, channel, enabled)
 
     def release_all(self, channel: int | None = None) -> None:
         if self._engine is not None and self._client_id is not None:
-            self._engine.stream.release_all(self._client_id, channel)
+            self._engine.release_all(self._client_id, channel)

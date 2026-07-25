@@ -981,7 +981,11 @@ class QtUiTests(unittest.TestCase):
                 ),
             )
 
-        with patch("app_controller.parse_midi", side_effect=parse_selected):
+        with patch.object(
+            self.controller.midi_parser_process,
+            "parse",
+            side_effect=parse_selected,
+        ):
             QTest.mouseClick(
                 self.window.midi_table.viewport(),
                 Qt.MouseButton.LeftButton,
@@ -1339,15 +1343,19 @@ class QtUiTests(unittest.TestCase):
             self.window.tab_bar.property("reloadFeedback"),
             True,
         )
+        palette = THEMES[self.controller.state.color_theme]
+        self.assertIn(palette.accent, self.window.tab_bar.styleSheet())
+        self.assertIn(palette.accent_text, self.window.tab_bar.styleSheet())
         self.window.tab_bar.tabBarDoubleClicked.emit(1)
 
         self.assertEqual(calls, [True])
         self.assertTrue(self.window._midi_reload_feedback_timer.isActive())
-        QTest.qWait(180)
+        QTest.qWait(300)
         self.assertIs(
             self.window.tab_bar.property("reloadFeedback"),
             False,
         )
+        self.assertEqual(self.window.tab_bar.styleSheet(), "")
 
     def test_midi_list_tab_has_reload_icon_and_track_header_stays_hidden(self) -> None:
         self.window.show()
@@ -2560,29 +2568,43 @@ class QtUiTests(unittest.TestCase):
     def test_settings_items_use_two_left_aligned_rows(self) -> None:
         self.window.show()
         self.application.processEvents()
-        common_items = (self.window.play_sound_check, self.window.auto_fit_check, self.window.repeat_check)
+        common_items = (
+            self.window.play_sound_check,
+            self.window.auto_fit_check,
+            self.window.repeat_check,
+            self.window.auto_sustain_check,
+        )
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
             self.window.optimization_check,
             self.window.melody_priority_check,
-            self.window.auto_sustain_check,
         )
 
         self.assertTrue(all(item.property("settingsItem") for item in common_items + performance_items))
         self.assertIn('margin-left: 6px', self.window.styleSheet())
         self.assertEqual(len({item.geometry().top() for item in common_items}), 1)
         self.assertEqual(len({item.geometry().top() for item in performance_items}), 1)
+        for previous, current in zip(common_items, common_items[1:]):
+            self.assertLess(
+                previous.geometry().right(),
+                current.geometry().left(),
+            )
         self.assertLess(common_items[-1].geometry().right(), self.window.settings_panel.width())
         self.assertLess(performance_items[-1].geometry().right(), self.window.settings_panel.width())
 
     def test_performance_settings_fit_in_every_language_and_scale(self) -> None:
+        common_items = (
+            self.window.play_sound_check,
+            self.window.auto_fit_check,
+            self.window.repeat_check,
+            self.window.auto_sustain_check,
+        )
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
             self.window.optimization_check,
             self.window.melody_priority_check,
-            self.window.auto_sustain_check,
         )
         self.window.show()
         for language in ("en", "ja", "zh"):
@@ -2592,18 +2614,16 @@ class QtUiTests(unittest.TestCase):
                     self.controller.set_option("ui_scale_percent", scale)
                     self.application.processEvents()
 
-                    for previous, current in zip(
-                        performance_items,
-                        performance_items[1:],
-                    ):
+                    for items in (common_items, performance_items):
+                        for previous, current in zip(items, items[1:]):
+                            self.assertLess(
+                                previous.geometry().right(),
+                                current.geometry().left(),
+                            )
                         self.assertLess(
-                            previous.geometry().right(),
-                            current.geometry().left(),
+                            items[-1].geometry().right(),
+                            self.window.settings_panel.width(),
                         )
-                    self.assertLess(
-                        performance_items[-1].geometry().right(),
-                        self.window.settings_panel.width(),
-                    )
 
     def test_settings_checkbox_rows_have_vertical_clearance(self) -> None:
         self.window.show()
@@ -2614,6 +2634,7 @@ class QtUiTests(unittest.TestCase):
                 self.window.play_sound_check,
                 self.window.auto_fit_check,
                 self.window.repeat_check,
+                self.window.auto_sustain_check,
             )
         )
         second_row_top = min(
@@ -2623,7 +2644,6 @@ class QtUiTests(unittest.TestCase):
                 self.window.strum_check,
                 self.window.optimization_check,
                 self.window.melody_priority_check,
-                self.window.auto_sustain_check,
             )
         )
         self.assertGreater(second_row_top - first_row_bottom - 1, 0)
