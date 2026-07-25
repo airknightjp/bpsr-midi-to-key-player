@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from audio_buffer import DEFAULT_AUDIO_BUFFER_FRAMES, DEFAULT_QT_AUDIO_FRAMES
+from audio_buffer import (
+    DEFAULT_AUDIO_BUFFER_FRAMES,
+    DEFAULT_AUDIO_CHUNK_FRAMES,
+    DEFAULT_AUDIO_FALLBACK_INTERVAL_MS,
+    DEFAULT_AUDIO_RESPONSE_FRAMES,
+    DEFAULT_QT_AUDIO_FRAMES,
+)
 from config import (
     DEFAULT_INPUT_CONVERSION_MODE,
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
@@ -29,6 +35,7 @@ class TrackChannelItem:
     track: int
     channel: int
     enabled: bool = True
+    melody: bool = False
 
 
 @dataclass
@@ -42,6 +49,7 @@ class AppState:
     midi_input_running: bool = False
     input_conversion_mode: str = DEFAULT_INPUT_CONVERSION_MODE
     active_output_notes: frozenset[int] = field(default_factory=frozenset)
+    melody_output_notes: frozenset[int] = field(default_factory=frozenset)
     output_note_retrigger_events: tuple[tuple[int, int], ...] = ()
     output_note_retrigger_serial: int = 0
     realtime_output_notes: frozenset[int] = field(default_factory=frozenset)
@@ -61,6 +69,9 @@ class AppState:
     sound_source: str = "piano"
     audio_qt_frames: int = DEFAULT_QT_AUDIO_FRAMES
     audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
+    audio_response_frames: int = DEFAULT_AUDIO_RESPONSE_FRAMES
+    audio_chunk_frames: int = DEFAULT_AUDIO_CHUNK_FRAMES
+    audio_fallback_interval_ms: int = DEFAULT_AUDIO_FALLBACK_INTERVAL_MS
     playback_speed_percent: int = 100
     sound_playback_mode: str = DEFAULT_SOUND_PLAYBACK_MODE
     play_sound: bool = True
@@ -71,6 +82,7 @@ class AppState:
     octave_shift: int = 0
     humanize_timing: bool = False
     chord_optimization: bool = False
+    melody_priority: bool = False
     chord_strum: bool = False
     auto_sustain: bool = False
     sustain_key: str = "space"

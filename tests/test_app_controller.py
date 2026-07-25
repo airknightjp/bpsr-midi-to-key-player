@@ -255,7 +255,6 @@ class AppControllerTests(unittest.TestCase):
             playback_speed_percent=137,
             transpose_semitones=4,
             octave_shift=-1,
-            automatic_audio_buffer_frames=2_048,
             hide_release_notes_on_startup=True,
         )
 
@@ -263,7 +262,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.midi_sound_volume, 64)
         self.assertEqual(controller.state.sound_source, "organ")
         self.assertEqual(controller.state.audio_qt_frames, 1_024)
-        self.assertEqual(controller.state.audio_buffer_frames, 2_048)
+        self.assertEqual(controller.state.audio_buffer_frames, 512)
         self.assertEqual(controller.state.playback_speed_percent, 137)
         self.assertEqual(controller.state.transpose_semitones, 4)
         self.assertEqual(controller.state.octave_shift, -1)
@@ -805,6 +804,11 @@ class AppControllerTests(unittest.TestCase):
                 "set_chord_optimization",
                 ("player", "sound_player"),
             ),
+            (
+                "melody_priority",
+                "set_melody_priority",
+                ("player", "sound_player"),
+            ),
         )
 
         for option, method_name, target_names in cases:
@@ -854,7 +858,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(sound_player.sound_source, "electric_piano")
         self.assertEqual(realtime_output.sound_source, "electric_piano")
 
-    def test_automatic_audio_runtime_change_persists_buffer_state(self) -> None:
+    def test_audio_runtime_change_updates_display_state(self) -> None:
         controller = self.make_controller()
         view = RecordingView()
         controller.attach_view(view)
@@ -862,56 +866,55 @@ class AppControllerTests(unittest.TestCase):
         controller._queue_worker_message(
             (
                 "audio_runtime",
-                480,
+                512,
                 1_024,
+                128,
+                512,
+                8,
             )
         )
         controller.process_pending_events()
 
-        self.assertEqual(controller.state.audio_qt_frames, 480)
+        self.assertEqual(controller.state.audio_qt_frames, 512)
         self.assertEqual(controller.state.audio_buffer_frames, 1_024)
+        self.assertEqual(controller.state.audio_response_frames, 128)
+        self.assertEqual(controller.state.audio_chunk_frames, 512)
+        self.assertEqual(controller.state.audio_fallback_interval_ms, 8)
+        self.assertFalse(
+            hasattr(
+                controller.current_settings(),
+                "automatic_audio_buffer_frames",
+            )
+        )
+
+    def test_manual_audio_settings_are_applied_and_saved(self) -> None:
+        controller = self.make_controller()
+        controller.sound_player = MagicMock()
+        controller.realtime_sound_output = MagicMock()
+
+        controller.set_option("audio_qt_frames", 512)
+        controller.set_option("audio_buffer_frames", 256)
+
+        self.assertEqual(controller.state.audio_qt_frames, 512)
+        self.assertEqual(controller.state.audio_buffer_frames, 256)
+        self.assertEqual(controller.current_settings().audio_qt_frames, 512)
         self.assertEqual(
-            controller.current_settings().automatic_audio_buffer_frames,
+            controller.current_settings().audio_buffer_frames,
+            256,
+        )
+        controller.sound_player.set_audio_settings.assert_called_with(
+            512,
+            256,
+            256,
             1_024,
+            4,
         )
-    def test_learned_qt_minimum_is_persisted_through_settings(self) -> None:
-        controller = self.make_controller(
-            minimum_stable_qt_frames=1_024,
-            qt_audio_environment="old-device|48000|2|Float",
-        )
-        view = RecordingView()
-        controller.attach_view(view)
-
-        controller._queue_worker_message(
-            ("qt_learning", 512, "device|48000|2|Float")
-        )
-        controller.process_pending_events()
-
-        current = controller.current_settings()
-        self.assertEqual(current.minimum_stable_qt_frames, 512)
-        self.assertEqual(
-            current.qt_audio_environment,
-            "device|48000|2|Float",
-        )
-
-    def test_changed_audio_environment_clears_learned_qt_minimum(self) -> None:
-        controller = self.make_controller(
-            minimum_stable_qt_frames=512,
-            qt_audio_environment="old-device|48000|2|Float",
-        )
-        view = RecordingView()
-        controller.attach_view(view)
-
-        controller._queue_worker_message(
-            ("qt_learning", None, "new-device|44100|2|Int16")
-        )
-        controller.process_pending_events()
-
-        current = controller.current_settings()
-        self.assertIsNone(current.minimum_stable_qt_frames)
-        self.assertEqual(
-            current.qt_audio_environment,
-            "new-device|44100|2|Int16",
+        controller.realtime_sound_output.set_audio_settings.assert_called_with(
+            512,
+            256,
+            256,
+            1_024,
+            4,
         )
 
     def test_track_channel_toggle_updates_source_snapshots(self) -> None:
@@ -951,6 +954,42 @@ class AppControllerTests(unittest.TestCase):
             [TrackChannelItem(0, 0, True), TrackChannelItem(0, 1, True)],
         )
         self.assertEqual(controller.enabled_sources(), {(0, 0), (0, 1)})
+
+    def test_melody_track_channel_is_detected_when_chord_optimization_is_off(
+        self,
+    ) -> None:
+        controller = self.make_controller(chord_optimization=False)
+        controller.events = [
+            MidiEvent(0.0, "note_on", 0, 48, 70, track=0),
+            MidiEvent(0.0, "note_on", 0, 52, 70, track=0),
+            MidiEvent(0.0, "note_on", 0, 55, 70, track=0),
+            MidiEvent(0.0, "note_on", 1, 72, 95, track=1),
+            MidiEvent(0.5, "note_on", 0, 50, 70, track=0),
+            MidiEvent(0.5, "note_on", 0, 53, 70, track=0),
+            MidiEvent(0.5, "note_on", 0, 57, 70, track=0),
+            MidiEvent(0.5, "note_on", 1, 74, 95, track=1),
+        ]
+        summary = MidiSummary(
+            path=Path("song.mid"),
+            duration=1.0,
+            channels=(0, 1),
+            event_count=len(controller.events),
+            tracks=(
+                MidiTrackSummary(index=0, channels=(0,)),
+                MidiTrackSummary(index=1, channels=(1,)),
+            ),
+        )
+
+        controller._set_track_channels(summary)
+
+        self.assertFalse(controller.state.chord_optimization)
+        self.assertEqual(
+            controller.state.track_channels,
+            [
+                TrackChannelItem(0, 0, True, False),
+                TrackChannelItem(1, 1, True, True),
+            ],
+        )
 
     def test_folder_load_recursively_lists_midi_with_folder_hierarchy(self) -> None:
         controller = self.make_controller()
@@ -1075,6 +1114,7 @@ class AppControllerTests(unittest.TestCase):
             octave_shift=-1,
             humanize_timing=True,
             chord_optimization=True,
+            melody_priority=True,
             repeat_prevention=True,
             sound_source="organ",
         )
@@ -1093,6 +1133,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(player.kwargs["octave_shift"], -1)
         self.assertTrue(player.kwargs["humanize_timing"])
         self.assertTrue(player.kwargs["chord_optimization"])
+        self.assertTrue(player.kwargs["melody_priority"])
         self.assertTrue(player.kwargs["repeat_prevention"])
         self.assertEqual(player.play_args[1]["countdown_seconds"], 4)
 

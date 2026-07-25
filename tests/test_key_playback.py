@@ -306,6 +306,37 @@ class KeyPlaybackTests(unittest.TestCase):
         player._optimization_planner.wait(timeout=1.0)
         self.assertEqual(player._chord_optimization_plan_speed, 73)
 
+    def test_melody_priority_change_rebuilds_keyboard_optimization_plan(
+        self,
+    ) -> None:
+        player = MidiKeyboardPlayer(
+            output=FakeOutput(),
+            chord_optimization=True,
+            melody_priority=False,
+        )
+        events = [
+            MidiEvent(0.0, "note_on", 0, 36, 70, track=0),
+            MidiEvent(0.0, "note_on", 0, 64, 70, track=0),
+            MidiEvent(0.0, "note_on", 0, 79, 70, track=0),
+            MidiEvent(0.0, "note_on", 1, 96, 100, track=1),
+        ]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        self.assertFalse(player._chord_optimization_plan_melody_priority)
+        self.assertEqual(
+            player.current_chord_optimization_plan().target_for(events[-1]),
+            (True, 72),
+        )
+
+        player.set_melody_priority(True)
+        player._optimization_planner.wait(timeout=1.0)
+
+        self.assertTrue(player._chord_optimization_plan_melody_priority)
+        self.assertEqual(
+            player.current_chord_optimization_plan().target_for(events[-1]),
+            (True, 96),
+        )
+
     def test_optimized_note_still_uses_rapid_repeat_prevention(self) -> None:
         output = FakeOutput()
         player = MidiKeyboardPlayer(

@@ -39,12 +39,13 @@ from note_visualization import PianoRollNote
 from qt_main_window import KeyBindingsDialog, MidiMainWindow
 from qt_components import (
     ContentPanel,
+    FallingNotesWidget,
     InteractiveIconButton,
+    PianoKeyboardWidget,
     ThemedBackground,
     TrackChannelButton,
     make_feature_icon,
 )
-from qt_quick_visuals import FallingNotesWidget, PianoKeyboardWidget
 from qt_styles import THEMES, build_stylesheet
 from settings import AppSettings
 from update_service import AvailableUpdate, ReleaseAsset
@@ -1293,24 +1294,6 @@ class QtUiTests(unittest.TestCase):
         self.assertTrue(keyboard._retrigger_timer.isActive())
         keyboard._retrigger_timer.stop()
 
-    def test_minimized_window_stops_qquick_visual_timers(self) -> None:
-        self.window.show()
-        self.application.processEvents()
-        self.window.piano_roll.set_playback_state(0.0, 100, True)
-        self.assertTrue(self.window.piano_roll._animation_timer.isActive())
-
-        self.window.showMinimized()
-        self.application.processEvents()
-
-        self.assertFalse(self.window.piano_roll._animation_timer.isActive())
-        self.assertFalse(self.window.piano_roll._bridge.animationRunning)
-
-        self.window.showNormal()
-        self.application.processEvents()
-
-        self.assertTrue(self.window.piano_roll._animation_timer.isActive())
-        self.assertTrue(self.window.piano_roll._bridge.animationRunning)
-
     def test_hiding_player_section_compacts_to_current_minimum_height(self) -> None:
         self.window.resize(self.window.width(), 700)
         self.window.show()
@@ -2111,6 +2094,21 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(enabled_sample.name(), palette.accent)
         self.assertEqual(disabled_sample.name(), palette.canvas)
 
+    def test_detected_melody_track_channel_has_a_distinct_emphasis(self) -> None:
+        self.controller.state.track_channels = [
+            TrackChannelItem(0, 0, True, False),
+            TrackChannelItem(1, 1, True, True),
+        ]
+        self.controller._notify()
+        self.application.processEvents()
+        accompaniment = self.window.track_channels.cellWidget(0, 0)
+        melody = self.window.track_channels.cellWidget(1, 0)
+
+        self.assertIsInstance(accompaniment, TrackChannelButton)
+        self.assertIsInstance(melody, TrackChannelButton)
+        self.assertFalse(accompaniment.font().bold())
+        self.assertTrue(melody.font().bold())
+
     def test_view_section_actions_are_direct_menu_items(self) -> None:
         view_action = next(
             action for action in self.window.menuBar().actions() if action.text() == "View"
@@ -2567,6 +2565,7 @@ class QtUiTests(unittest.TestCase):
             self.window.humanize_check,
             self.window.strum_check,
             self.window.optimization_check,
+            self.window.melody_priority_check,
             self.window.auto_sustain_check,
         )
 
@@ -2576,6 +2575,35 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(len({item.geometry().top() for item in performance_items}), 1)
         self.assertLess(common_items[-1].geometry().right(), self.window.settings_panel.width())
         self.assertLess(performance_items[-1].geometry().right(), self.window.settings_panel.width())
+
+    def test_performance_settings_fit_in_every_language_and_scale(self) -> None:
+        performance_items = (
+            self.window.humanize_check,
+            self.window.strum_check,
+            self.window.optimization_check,
+            self.window.melody_priority_check,
+            self.window.auto_sustain_check,
+        )
+        self.window.show()
+        for language in ("en", "ja", "zh"):
+            for scale in (100, 200):
+                with self.subTest(language=language, scale=scale):
+                    self.controller.set_option("language", language)
+                    self.controller.set_option("ui_scale_percent", scale)
+                    self.application.processEvents()
+
+                    for previous, current in zip(
+                        performance_items,
+                        performance_items[1:],
+                    ):
+                        self.assertLess(
+                            previous.geometry().right(),
+                            current.geometry().left(),
+                        )
+                    self.assertLess(
+                        performance_items[-1].geometry().right(),
+                        self.window.settings_panel.width(),
+                    )
 
     def test_settings_checkbox_rows_have_vertical_clearance(self) -> None:
         self.window.show()
@@ -2594,6 +2622,7 @@ class QtUiTests(unittest.TestCase):
                 self.window.humanize_check,
                 self.window.strum_check,
                 self.window.optimization_check,
+                self.window.melody_priority_check,
                 self.window.auto_sustain_check,
             )
         )
@@ -2607,6 +2636,7 @@ class QtUiTests(unittest.TestCase):
             "humanize_timing",
             "chord_strum",
             "chord_optimization",
+            "melody_priority",
             "auto_sustain",
         ):
             self.controller.set_option(option, True)
@@ -2620,6 +2650,7 @@ class QtUiTests(unittest.TestCase):
             self.window.humanize_check,
             self.window.strum_check,
             self.window.optimization_check,
+            self.window.melody_priority_check,
             self.window.auto_sustain_check,
         )
         self.assertTrue(all(check.isEnabled() for check in detailed_settings))
@@ -2628,6 +2659,7 @@ class QtUiTests(unittest.TestCase):
             self.window.humanize_check,
             self.window.strum_check,
             self.window.optimization_check,
+            self.window.melody_priority_check,
         )
         self.assertTrue(all(check.property("unsupported") for check in unsupported))
 
@@ -2805,7 +2837,7 @@ class QtUiTests(unittest.TestCase):
 
         self.assertEqual(
             self.window.piano_roll.sequence_notes,
-            (PianoRollNote(1.0, 2.0, 60),),
+            (PianoRollNote(1.0, 2.0, 60, melody=True),),
         )
 
     def test_live_checkbox_change_rebuilds_the_falling_note_sequence(self) -> None:
@@ -2844,7 +2876,10 @@ class QtUiTests(unittest.TestCase):
             self.application.processEvents()
 
         self.assertTrue(self.controller.state.auto_sustain)
-        self.assertEqual(plain, (PianoRollNote(0.0, 0.5, 60),))
+        self.assertEqual(
+            plain,
+            (PianoRollNote(0.0, 0.5, 60, melody=True),),
+        )
         self.assertEqual(self.window.piano_roll.sequence_notes, plain)
         set_sequence_notes.assert_not_called()
 
@@ -2881,15 +2916,24 @@ class QtUiTests(unittest.TestCase):
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        roll.set_playback_state(0.0, 100, False)
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_playback_state(0.0, 100, False)
         roll.show()
-        QTest.qWait(40)
+        self.application.processEvents()
+        with patch.object(
+            roll,
+            "_draw_note_span",
+            wraps=roll._draw_note_span,
+        ) as draw_span:
+            roll.grab()
 
-        self.assertEqual(
-            roll._bridge.visibleNotes,
-            [{"start": 0.25, "end": 0.75, "note": 60}],
+        draw_span.assert_called_once()
+        top = draw_span.call_args.args[3]
+        bottom = draw_span.call_args.args[4]
+        self.assertAlmostEqual(
+            bottom - top,
+            (0.75 - 0.25) / roll.PREVIEW_SECONDS * (roll.height() - 1),
         )
-        self.assertEqual(roll.status(), roll.Status.Ready)
         roll.close()
 
     def test_falling_notes_queries_only_the_visible_time_window(self) -> None:
@@ -2960,10 +3004,8 @@ class QtUiTests(unittest.TestCase):
 
     def test_falling_note_hit_events_restore_burst_and_lane_effects(self) -> None:
         roll = FallingNotesWidget()
-        roll.show()
-        self.application.processEvents()
 
-        with patch("qt_quick_visuals.time.monotonic", return_value=10.0):
+        with patch("qt_components.time.monotonic", return_value=10.0):
             roll.set_hit_events(
                 (
                     (1, 60, "PERFECT", False),
@@ -2977,77 +3019,34 @@ class QtUiTests(unittest.TestCase):
             roll.held_lane_notes,
             frozenset((60, 62, 64)),
         )
-        with patch("qt_quick_visuals.time.monotonic", return_value=11.0):
+        with patch("qt_components.time.monotonic", return_value=11.0):
             roll.set_hit_events(((4, 60, "PERFECT", True),))
         self.assertNotIn(60, roll.held_lane_notes)
         self.assertEqual(roll.lane_fade_count, 1)
         self.assertFalse(hasattr(roll, "set_score"))
-        roll.close()
-
-    def test_falling_note_effect_models_append_without_full_reset(self) -> None:
-        roll = FallingNotesWidget()
-        roll.show()
-        self.application.processEvents()
-        impact_model = roll._bridge.impactModel
-        resets: list[bool] = []
-        inserts: list[tuple[int, int]] = []
-        impact_model.modelReset.connect(lambda: resets.append(True))
-        impact_model.rowsInserted.connect(
-            lambda _parent, first, last: inserts.append((first, last))
-        )
-
-        roll.set_hit_events(((1, 60, "PERFECT", False),))
-        roll.set_hit_events(
-            (
-                (1, 60, "PERFECT", False),
-                (2, 64, "GREAT", False),
-            )
-        )
-
-        self.assertEqual(impact_model.rowCount(), 2)
-        self.assertEqual(resets, [])
-        self.assertEqual(inserts, [(0, 0), (1, 1)])
-        roll.close()
-
-    def test_hidden_falling_notes_stop_and_resync_animation(self) -> None:
-        roll = FallingNotesWidget()
-        roll.resize(1080, 57)
-        roll.set_sequence_notes((PianoRollNote(0.25, 2.0, 60),))
-        roll.show()
-        self.application.processEvents()
-        roll.set_playback_state(0.0, 100, True)
-
-        self.assertTrue(roll._animation_timer.isActive())
-        self.assertTrue(roll._bridge.animationRunning)
-
-        roll.hide()
-        self.application.processEvents()
-
-        self.assertFalse(roll._animation_timer.isActive())
-        self.assertFalse(roll._bridge.animationRunning)
-        self.assertEqual(roll._bridge.visibleNotes, [])
-
-        roll.show()
-        self.application.processEvents()
-
-        self.assertTrue(roll._animation_timer.isActive())
-        self.assertTrue(roll._bridge.animationRunning)
-        self.assertTrue(roll._bridge.visibleNotes)
-        roll.close()
 
     def test_perfect_hit_draws_the_rainbow_burst(self) -> None:
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.show()
-        QTest.qWait(40)
-        before = roll.grab().toImage()
+        self.application.processEvents()
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_hit_events(((1, 60, "PERFECT", False),))
+        roll._animation_timer.stop()
 
-        roll.set_hit_events(((1, 60, "PERFECT", False),))
-        QTest.qWait(40)
-        after = roll.grab().toImage()
+        with patch(
+            "qt_components.time.monotonic",
+            return_value=10.05,
+        ), patch.object(
+            roll,
+            "_draw_impact_burst",
+            wraps=roll._draw_impact_burst,
+        ) as draw_burst:
+            roll.grab()
 
-        self.assertEqual(roll._bridge.impacts[0]["judgment"], "PERFECT")
-        self.assertNotEqual(before, after)
+        draw_burst.assert_called_once()
+        self.assertTrue(draw_burst.call_args.kwargs["rainbow"])
+        self.assertEqual(draw_burst.call_args.args[5:], (1.5, 17, 2, 7))
         roll.close()
 
     def test_falling_note_ignores_removed_miss_effect(self) -> None:
@@ -3074,31 +3073,74 @@ class QtUiTests(unittest.TestCase):
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 2.0, 60),))
         roll.show()
-        roll.set_playback_state(0.0, 100, False)
-        QTest.qWait(40)
-        approaching = roll.grab().toImage()
+        self.application.processEvents()
 
-        roll.set_playback_state(0.5, 100, False)
-        QTest.qWait(40)
-        held = roll.grab().toImage()
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_playback_state(0.0, 100, False)
+        with patch.object(
+            roll,
+            "_draw_light_bar",
+            wraps=roll._draw_light_bar,
+        ) as approaching_head:
+            roll.grab()
+        self.assertEqual(approaching_head.call_count, 1)
 
-        self.assertNotEqual(approaching, held)
-        self.assertEqual(roll._bridge.position, 0.5)
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_playback_state(0.5, 100, False)
+        with patch.object(
+            roll,
+            "_draw_light_bar",
+            wraps=roll._draw_light_bar,
+        ) as held_head, patch.object(
+            roll,
+            "_minimum_note_body_height",
+            wraps=roll._minimum_note_body_height,
+        ) as held_minimum:
+            roll.grab()
+        held_head.assert_not_called()
+        held_minimum.assert_not_called()
         roll.close()
 
-    def test_falling_notes_use_qquickwidget_scene_graph(self) -> None:
+    def test_falling_note_assets_are_cached_and_reused(self) -> None:
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        roll.set_playback_state(0.0, 100, False)
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_playback_state(0.0, 100, False)
         roll.show()
-        QTest.qWait(40)
+        self.application.processEvents()
 
-        self.assertEqual(roll.status(), roll.Status.Ready)
-        self.assertNotEqual(roll.graphics_api_name, "Unknown")
-        self.assertFalse(roll.quickWindow().isPersistentSceneGraph())
-        self.assertFalse(hasattr(roll, "_note_body_cache"))
-        self.assertFalse(roll.grab().isNull())
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.grab()
+        first_body_ids = tuple(
+            sorted(pixmap.cacheKey() for pixmap in roll._note_body_cache.values())
+        )
+        first_bar_ids = tuple(
+            sorted(pixmap.cacheKey() for pixmap in roll._light_bar_cache.values())
+        )
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.grab()
+
+        self.assertTrue(first_body_ids)
+        self.assertTrue(first_bar_ids)
+        self.assertEqual(
+            first_body_ids,
+            tuple(
+                sorted(
+                    pixmap.cacheKey()
+                    for pixmap in roll._note_body_cache.values()
+                )
+            ),
+        )
+        self.assertEqual(
+            first_bar_ids,
+            tuple(
+                sorted(
+                    pixmap.cacheKey()
+                    for pixmap in roll._light_bar_cache.values()
+                )
+            ),
+        )
         roll.close()
 
     def test_falling_note_assets_preserve_subpixel_vertical_motion(self) -> None:
@@ -3108,12 +3150,11 @@ class QtUiTests(unittest.TestCase):
         roll.show()
         self.application.processEvents()
 
-        roll.set_playback_state(0.0, 100, False)
-        QTest.qWait(40)
-        first = roll.grab().toImage()
-        roll.set_playback_state(0.005, 100, False)
-        QTest.qWait(40)
-        second = roll.grab().toImage()
+        with patch("qt_components.time.monotonic", return_value=10.0):
+            roll.set_playback_state(0.0, 100, False)
+            first = roll.grab().toImage()
+            roll.set_playback_state(0.005, 100, False)
+            second = roll.grab().toImage()
 
         self.assertTrue(
             any(
@@ -3128,33 +3169,35 @@ class QtUiTests(unittest.TestCase):
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
         roll.set_sequence_notes((PianoRollNote(0.25, 0.75, 60),))
-        with patch("qt_quick_visuals.time.monotonic", return_value=10.0):
+        with patch("qt_components.time.monotonic", return_value=10.0):
             roll.set_playback_state(0.0, 100, True)
         roll._animation_timer.stop()
 
         with patch.object(roll, "update") as update, patch(
-            "qt_quick_visuals.time.monotonic",
+            "qt_components.time.monotonic",
             return_value=10.01,
         ):
             roll.set_playback_state(0.01, 100, True)
 
         update.assert_not_called()
 
-    def test_falling_note_trail_is_rendered_by_qml(self) -> None:
-        qml = (
-            Path(qt_main_window.__file__).resolve().parent
-            / "qml"
-            / "FallingNotes.qml"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("fallingNotesBridge.visibleNotes", qml)
-        self.assertIn("GradientStop", qml)
-        self.assertIn("noteDelegate.approaching ? 0.47", qml)
-        self.assertIn("FrameAnimation {", qml)
-        self.assertNotIn("Timer {", qml)
-        self.assertIn("model: fallingNotesBridge.impactModel", qml)
-        self.assertIn("model: fallingNotesBridge.laneFadeModel", qml)
-        self.assertNotIn("layer.enabled", qml)
+    def test_falling_note_trail_uses_the_strengthened_opacity(self) -> None:
+        self.assertEqual(
+            FallingNotesWidget.APPROACHING_TRAIL_GLOW_STOPS,
+            ((0.0, 0), (0.55, 31), (1.0, 120)),
+        )
+        self.assertEqual(
+            FallingNotesWidget.APPROACHING_TRAIL_CORE_STOPS,
+            ((0.0, 16), (0.62, 189), (1.0, 255)),
+        )
+        self.assertEqual(
+            FallingNotesWidget.HELD_TRAIL_GLOW_STOPS,
+            ((0.0, 0), (0.60, 31), (0.88, 57), (1.0, 0)),
+        )
+        self.assertEqual(
+            FallingNotesWidget.HELD_TRAIL_CORE_STOPS,
+            ((0.0, 16), (0.58, 189), (0.88, 150), (1.0, 0)),
+        )
 
     def test_short_notes_receive_only_a_visual_minimum_pixel_length(self) -> None:
         roll = FallingNotesWidget()
@@ -3247,11 +3290,16 @@ class QtUiTests(unittest.TestCase):
 
     def test_full_keyboard_renders_final_output_note_state(self) -> None:
         self.controller.state.active_output_notes = frozenset((21, 61, 108))
+        self.controller.state.melody_output_notes = frozenset((61,))
         self.controller._notify()
 
         self.assertEqual(
             self.window.output_keyboard.active_notes,
             frozenset((21, 61, 108)),
+        )
+        self.assertEqual(
+            self.window.output_keyboard._melody_notes,
+            frozenset((61,)),
         )
 
     def test_final_output_range_updates_keyboard_and_falling_notes(self) -> None:
@@ -3286,7 +3334,7 @@ class QtUiTests(unittest.TestCase):
 
         keyboard.set_used_note_range((48, 72))
         roll.set_used_note_range((48, 72))
-        QTest.qWait(40)
+        self.application.processEvents()
         keyboard_ranged = keyboard.grab().toImage()
         roll_ranged = roll.grab().toImage()
 
@@ -3337,11 +3385,11 @@ class QtUiTests(unittest.TestCase):
         keyboard = PianoKeyboardWidget()
         keyboard.resize(420, 76)
         keyboard.show()
-        QTest.qWait(40)
+        self.application.processEvents()
         released = keyboard.grab().toImage()
 
         keyboard.set_active_notes((48,))
-        QTest.qWait(40)
+        self.application.processEvents()
         pressed = keyboard.grab().toImage()
 
         white_notes = [
@@ -3356,17 +3404,16 @@ class QtUiTests(unittest.TestCase):
 
     def test_three_octave_keyboard_visibly_releases_and_represses_a_retriggered_key(self) -> None:
         keyboard = PianoKeyboardWidget()
-        keyboard.resize(420, 57)
         keyboard.show()
-        QTest.qWait(40)
+        self.application.processEvents()
         released = keyboard.grab().toImage()
 
         keyboard.set_active_notes((48,))
-        QTest.qWait(40)
+        self.application.processEvents()
         held = keyboard.grab().toImage()
 
         keyboard.set_retrigger_events(((48, 1),))
-        QTest.qWait(20)
+        self.application.processEvents()
         visually_released = keyboard.grab().toImage()
 
         self.assertEqual(
@@ -3396,17 +3443,16 @@ class QtUiTests(unittest.TestCase):
 
     def test_three_octave_keyboard_retriggers_every_note_in_a_chord(self) -> None:
         keyboard = PianoKeyboardWidget()
-        keyboard.resize(420, 57)
         keyboard.show()
-        QTest.qWait(40)
+        self.application.processEvents()
         released = keyboard.grab().toImage()
 
         notes = (48, 52, 55)
         keyboard.set_active_notes(notes)
-        QTest.qWait(40)
+        self.application.processEvents()
         held = keyboard.grab().toImage()
         keyboard.set_retrigger_events(((48, 1), (52, 2), (55, 3)))
-        QTest.qWait(20)
+        self.application.processEvents()
         visually_released = keyboard.grab().toImage()
 
         white_notes = [
@@ -3461,6 +3507,7 @@ class QtUiTests(unittest.TestCase):
             self.window.humanize_check,
             self.window.strum_check,
             self.window.optimization_check,
+            self.window.melody_priority_check,
             self.window.auto_sustain_check,
         )
         content_top = min(item.geometry().top() for item in items)
@@ -3625,17 +3672,18 @@ class QtUiTests(unittest.TestCase):
         self.controller.state.audio_buffer_frames = 1_024
         self.controller._notify()
         self.application.processEvents()
+        self.assertEqual(self.window.audio_qt_combo.currentData(), 256)
         self.assertEqual(
-            self.window.audio_runtime_label.text(),
-            "Qt 256 | Buffer 1024",
+            self.window.audio_buffer_combo.currentData(),
+            1_024,
         )
         self.assertEqual(
-            self.window.audio_runtime_label.property("caption"),
+            self.window.audio_qt_label.property("caption"),
             self.window.volume_control.label.property("caption"),
         )
-        runtime_center = self.window.audio_runtime_label.mapTo(
+        runtime_center = self.window.audio_runtime_widget.mapTo(
             self.window,
-            self.window.audio_runtime_label.rect().center(),
+            self.window.audio_runtime_widget.rect().center(),
         )
         menu_center = self.window.menuBar().mapTo(
             self.window,
@@ -3647,27 +3695,18 @@ class QtUiTests(unittest.TestCase):
             delta=1,
         )
         self.assertEqual(
-            self.window.audio_runtime_label.mapTo(
+            self.window.audio_runtime_widget.mapTo(
                 self.window.menuBar(),
-                QPoint(self.window.audio_runtime_label.width(), 0),
+                QPoint(self.window.audio_runtime_widget.width(), 0),
             ).x(),
             self.window.menuBar().rect().right(),
         )
 
         self.controller.set_option("language", "ja")
-        self.assertEqual(self.window.sound_source_label.text(), "音源")
-        self.assertEqual(
-            self.window.audio_runtime_label.text(),
-            "Qt 256 | Buffer 1024",
-        )
-        self.assertEqual(
-            self.window.sound_source_combo.itemText(
-                self.window.sound_source_combo.findData("electric_piano")
-            ),
-            "エレクトリックピアノ",
-        )
+        self.assertEqual(self.window.audio_qt_label.text(), "Qt")
+        self.assertEqual(self.window.audio_buffer_label.text(), "Buffer")
 
-    def test_audio_runtime_display_fits_at_every_language_and_scale(self) -> None:
+    def test_audio_settings_are_selectable_at_every_language_and_scale(self) -> None:
         self.window.show()
         for language in ("en", "ja", "zh"):
             for scale in (100, 150, 200):
@@ -3675,39 +3714,45 @@ class QtUiTests(unittest.TestCase):
                     self.controller.set_option("language", language)
                     self.controller.set_option("ui_scale_percent", scale)
                     self.application.processEvents()
-                    volume_right = self.window.volume_control.mapTo(
-                        self.window,
-                        QPoint(self.window.volume_control.width(), 0),
-                    ).x()
-                    speed_left = self.window.speed_control.mapTo(
-                        self.window,
-                        QPoint(0, 0),
-                    ).x()
-                    self.assertGreater(
-                        self.window.volume_control.width(),
-                        0,
-                    )
-                    self.assertGreater(self.window.speed_control.width(), 0)
-                    self.assertLess(volume_right, speed_left)
                     self.assertEqual(
                         self.window.menuBar().cornerWidget(
                             Qt.Corner.TopRightCorner
                         ),
-                        self.window.audio_runtime_label,
-                    )
-                    self.assertLessEqual(
-                        self.window.audio_runtime_label.sizeHint().width(),
-                        self.window.audio_runtime_label.width(),
+                        self.window.audio_runtime_widget,
                     )
                     self.assertEqual(
-                        self.window.audio_runtime_label.contentsMargins().right(),
+                        self.window.audio_runtime_layout.contentsMargins().right(),
                         round(8 * scale / 100),
                     )
-                    self.assertLess(
-                        self.window.sound_source_label.geometry().right(),
-                        self.window.sound_source_combo.geometry().left(),
+                    self.assertGreater(self.window.audio_qt_combo.width(), 0)
+                    self.assertGreater(
+                        self.window.audio_buffer_combo.width(),
+                        0,
+                    )
+                    expected_menu_height = round(24 * scale / 100)
+                    self.assertEqual(
+                        self.window.audio_runtime_widget.height(),
+                        expected_menu_height,
+                    )
+                    self.assertEqual(
+                        self.window.audio_qt_combo.height(),
+                        round(20 * scale / 100),
+                    )
+                    self.assertEqual(
+                        self.window.audio_buffer_combo.height(),
+                        round(20 * scale / 100),
+                    )
+                    self.assertLessEqual(
+                        self.window.menuBar().height(),
+                        round(26 * scale / 100),
                     )
 
+        qt_index = self.window.audio_qt_combo.findData(512)
+        buffer_index = self.window.audio_buffer_combo.findData(2_048)
+        self.window.audio_qt_combo.setCurrentIndex(qt_index)
+        self.window.audio_buffer_combo.setCurrentIndex(buffer_index)
+        self.assertEqual(self.controller.state.audio_qt_frames, 512)
+        self.assertEqual(self.controller.state.audio_buffer_frames, 2_048)
     def test_volume_knob_mirrors_octave_knob_around_window_center(self) -> None:
         self.window.show()
         for language in ("en", "ja", "zh"):

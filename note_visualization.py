@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, plan_auto_sustain
 from chord_optimization import ChordOptimizationPlan
 from config import PIANO_NOTE_MAX, PIANO_NOTE_MIN, fit_note_to_base_range, shift_midi_note
+from melody_detection import detect_melody_source
 from midi_parser import MidiEvent
 from playback_timing import PlaybackTimeline, prepare_playback_events
 from repeat_guard import RAPID_REPEAT_MIN_INTERVAL_SECONDS
@@ -18,6 +19,7 @@ class PianoRollNote:
     start: float
     end: float
     note: int
+    melody: bool = False
 
 
 def build_output_note_range(
@@ -69,6 +71,7 @@ def build_piano_roll_notes(
     playback_speed_percent: int = 100,
 ) -> tuple[PianoRollNote, ...]:
     ordered = list(events)
+    melody_source = detect_melody_source(ordered)
     planned_events = plan_auto_sustain(ordered) if auto_sustain else ordered
     random_source = random.Random(0)
     prepared_events = prepare_playback_events(
@@ -82,8 +85,14 @@ def build_piano_roll_notes(
     )
     timeline = PlaybackTimeline(0.0, random_source)
     fallback_end = max((event.time for event in planned_events), default=0.0)
-    active: dict[tuple[int, int, int], deque[tuple[float, int | None]]] = defaultdict(deque)
-    sustained: dict[tuple[int, int], list[tuple[float, int | None]]] = defaultdict(list)
+    active: dict[
+        tuple[int, int, int],
+        deque[tuple[float, int | None, bool]],
+    ] = defaultdict(deque)
+    sustained: dict[
+        tuple[int, int],
+        list[tuple[float, int | None, bool]],
+    ] = defaultdict(list)
     manual_sustain_sources: set[tuple[int, int]] = set()
     auto_sustain_sources: set[tuple[int, int]] = set()
     suppressed_note_offs: dict[tuple[int, int, int], int] = defaultdict(int)
@@ -144,6 +153,7 @@ def build_piano_roll_notes(
                 (
                     event_time,
                     note,
+                    source == melody_source,
                 )
             )
         elif event.kind == "note_off" and event.note is not None:
@@ -155,13 +165,13 @@ def build_piano_roll_notes(
             pending = active.get(owner)
             if not pending:
                 continue
-            start, note = pending.popleft()
+            start, note, melody = pending.popleft()
             if not pending:
                 active.pop(owner, None)
             if source in manual_sustain_sources or source in auto_sustain_sources:
-                sustained[source].append((start, note))
+                sustained[source].append((start, note, melody))
             else:
-                _append_note(notes, start, event_time, note)
+                _append_note(notes, start, event_time, note, melody)
         elif event.kind == "sustain" and event.value is not None:
             _update_sustain(
                 source,
@@ -188,11 +198,11 @@ def build_piano_roll_notes(
             )
 
     for pending in active.values():
-        for start, note in pending:
-            _append_note(notes, start, fallback_end, note)
+        for start, note, melody in pending:
+            _append_note(notes, start, fallback_end, note, melody)
     for pending in sustained.values():
-        for start, note in pending:
-            _append_note(notes, start, fallback_end, note)
+        for start, note, melody in pending:
+            _append_note(notes, start, fallback_end, note, melody)
 
     return tuple(sorted(notes, key=lambda item: (item.start, item.note, item.end)))
 
@@ -202,7 +212,10 @@ def _update_sustain(
     enabled: bool,
     target_sources: set[tuple[int, int]],
     other_sources: set[tuple[int, int]],
-    sustained: dict[tuple[int, int], list[tuple[float, int | None]]],
+    sustained: dict[
+        tuple[int, int],
+        list[tuple[float, int | None, bool]],
+    ],
     notes: list[PianoRollNote],
     event_time: float,
 ) -> None:
@@ -212,8 +225,8 @@ def _update_sustain(
     target_sources.discard(source)
     if source in other_sources:
         return
-    for start, note in sustained.pop(source, ()):
-        _append_note(notes, start, event_time, note)
+    for start, note, melody in sustained.pop(source, ()):
+        _append_note(notes, start, event_time, note, melody)
 
 
 def _append_note(
@@ -221,6 +234,7 @@ def _append_note(
     start: float,
     end: float,
     note: int | None,
+    melody: bool,
 ) -> None:
     if note is not None:
         notes.append(
@@ -228,6 +242,7 @@ def _append_note(
                 start=start,
                 end=max(start, end),
                 note=note,
+                melody=melody,
             )
         )
 

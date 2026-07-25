@@ -11,10 +11,14 @@ from typing import Callable, Protocol
 
 from audio_buffer import (
     normalize_audio_buffer_frames,
+    normalize_audio_chunk_frames,
+    normalize_audio_fallback_interval_ms,
+    normalize_audio_response_frames,
     normalize_qt_audio_frames,
 )
 from app_state import AppState, MidiListRow, TrackChannelItem
 from chord_optimization import ChordOptimizationPlan
+from melody_detection import detect_melody_source
 from config import (
     INPUT_CONVERSION_MIDI_FILE,
     INPUT_CONVERSION_REALTIME,
@@ -111,6 +115,7 @@ class AppController:
             octave_shift=self.settings.octave_shift,
             humanize_timing=self.settings.humanize_timing,
             chord_optimization=self.settings.chord_optimization,
+            melody_priority=self.settings.melody_priority,
             chord_strum=self.settings.chord_strum,
             auto_sustain=self.settings.auto_sustain,
             repeat_prevention=self.settings.repeat_prevention,
@@ -141,8 +146,20 @@ class AppController:
                 self.settings.section_visibility
             ),
             panel_order=normalize_panel_order(self.settings.panel_order),
+            audio_qt_frames=normalize_qt_audio_frames(
+                self.settings.audio_qt_frames
+            ),
             audio_buffer_frames=normalize_audio_buffer_frames(
-                self.settings.automatic_audio_buffer_frames
+                self.settings.audio_buffer_frames
+            ),
+            audio_response_frames=normalize_audio_response_frames(
+                self.settings.audio_response_frames
+            ),
+            audio_chunk_frames=normalize_audio_chunk_frames(
+                self.settings.audio_chunk_frames
+            ),
+            audio_fallback_interval_ms=normalize_audio_fallback_interval_ms(
+                self.settings.audio_fallback_interval_ms
             ),
         )
         self.view: ControllerView = NullView()
@@ -158,10 +175,6 @@ class AppController:
         self._midi_metadata_complete: set[Path] = set()
         self.last_midi_folder = self.settings.last_midi_folder
         self.last_update_check_at = self.settings.last_update_check_at
-        self.minimum_stable_qt_frames = (
-            self.settings.minimum_stable_qt_frames
-        )
-        self.qt_audio_environment = self.settings.qt_audio_environment
         self.key_bindings = normalized_key_bindings(self.settings.key_bindings)
         self.enabled_sources_snapshot: frozenset[tuple[int, int]] = frozenset()
         self.enabled_channels_snapshot: frozenset[int] = frozenset()
@@ -181,6 +194,7 @@ class AppController:
         self.position_generation = 0
         self.midi_input_id = 0
         self._active_output_notes_by_source: dict[tuple[str, int], set[int]] = {}
+        self._melody_output_notes_by_source: dict[tuple[str, int], set[int]] = {}
         self._output_note_visible_until: dict[int, float] = {}
         self._output_note_release_due: dict[int, float] = {}
         self._realtime_note_visible_until: dict[int, float] = {}
@@ -674,6 +688,11 @@ class AppController:
             on_output_note=lambda note, pressed, pid=playback_id: self._queue_worker_message(
                 ("key_output_note", pid, note, pressed)
             ),
+            on_melody_output_note=lambda note, pressed, pid=playback_id: (
+                self._queue_worker_message(
+                    ("key_melody_output_note", pid, note, pressed)
+                )
+            ),
             enabled_channels=self.enabled_channels,
             enabled_sources=self.enabled_sources,
             auto_fit_note_range=self.state.auto_fit_note_range,
@@ -681,6 +700,7 @@ class AppController:
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
             chord_optimization=self.state.chord_optimization,
+            melody_priority=self.state.melody_priority,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -791,24 +811,40 @@ class AppController:
                 if report_playback
                 else None
             ),
+            on_melody_output_note=(
+                lambda note, pressed, pid=playback_id: self._queue_worker_message(
+                    ("sound_melody_output_note", pid, note, pressed)
+                )
+                if report_playback
+                else None
+            ),
             enabled_channels=self.enabled_channels,
             enabled_sources=self.enabled_sources,
             volume=self.state.midi_sound_volume,
             sound_source=self.state.sound_source,
-            on_audio_runtime_changed=lambda qt_frames, buffer_frames, _reason: self._queue_worker_message(
-                ("audio_runtime", qt_frames, buffer_frames)
+            on_audio_runtime_changed=lambda qt_frames, buffer_frames, response_frames, chunk_frames, fallback_interval_ms, _reason: self._queue_worker_message(
+                (
+                    "audio_runtime",
+                    qt_frames,
+                    buffer_frames,
+                    response_frames,
+                    chunk_frames,
+                    fallback_interval_ms,
+                )
             ),
+            audio_qt_frames=self.state.audio_qt_frames,
             audio_buffer_frames=self.state.audio_buffer_frames,
-            minimum_stable_qt_frames=self.minimum_stable_qt_frames,
-            qt_audio_environment=self.qt_audio_environment,
-            on_qt_learning_changed=lambda frames, environment: self._queue_worker_message(
-                ("qt_learning", frames, environment)
+            audio_response_frames=self.state.audio_response_frames,
+            audio_chunk_frames=self.state.audio_chunk_frames,
+            audio_fallback_interval_ms=(
+                self.state.audio_fallback_interval_ms
             ),
             auto_fit_note_range=self.state.auto_fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
             chord_optimization=self.state.chord_optimization,
+            melody_priority=self.state.melody_priority,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -929,14 +965,22 @@ class AppController:
         self.realtime_sound_output = RealtimeMidiSoundOutput(
             volume=self.state.midi_sound_volume,
             sound_source=self.state.sound_source,
-            on_audio_runtime_changed=lambda qt_frames, buffer_frames, _reason: self._queue_worker_message(
-                ("audio_runtime", qt_frames, buffer_frames)
+            on_audio_runtime_changed=lambda qt_frames, buffer_frames, response_frames, chunk_frames, fallback_interval_ms, _reason: self._queue_worker_message(
+                (
+                    "audio_runtime",
+                    qt_frames,
+                    buffer_frames,
+                    response_frames,
+                    chunk_frames,
+                    fallback_interval_ms,
+                )
             ),
+            audio_qt_frames=self.state.audio_qt_frames,
             audio_buffer_frames=self.state.audio_buffer_frames,
-            minimum_stable_qt_frames=self.minimum_stable_qt_frames,
-            qt_audio_environment=self.qt_audio_environment,
-            on_qt_learning_changed=lambda frames, environment: self._queue_worker_message(
-                ("qt_learning", frames, environment)
+            audio_response_frames=self.state.audio_response_frames,
+            audio_chunk_frames=self.state.audio_chunk_frames,
+            audio_fallback_interval_ms=(
+                self.state.audio_fallback_interval_ms
             ),
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
@@ -1013,6 +1057,7 @@ class AppController:
             "auto_fit_note_range",
             "humanize_timing",
             "chord_optimization",
+            "melody_priority",
             "chord_strum",
             "auto_sustain",
             "repeat_prevention",
@@ -1031,6 +1076,12 @@ class AppController:
             )
         elif name == "midi_sound_volume":
             self.state.midi_sound_volume = self._clamp_int(value, 0, 100, 80)
+        elif name == "audio_qt_frames":
+            self.state.audio_qt_frames = normalize_qt_audio_frames(value)
+        elif name == "audio_buffer_frames":
+            self.state.audio_buffer_frames = normalize_audio_buffer_frames(
+                value
+            )
         elif name == "playback_speed_percent":
             self.state.playback_speed_percent = self._clamp_int(
                 value, MIN_PLAYBACK_SPEED_PERCENT, MAX_PLAYBACK_SPEED_PERCENT, 100
@@ -1244,36 +1295,30 @@ class AppController:
                     except (TypeError, ValueError):
                         qt_frames = self.state.audio_qt_frames
                     buffer_frames = normalize_audio_buffer_frames(message[2])
-                    buffer_changed = (
-                        buffer_frames != self.state.audio_buffer_frames
+                    response_frames = normalize_audio_response_frames(
+                        message[3]
+                    )
+                    chunk_frames = normalize_audio_chunk_frames(message[4])
+                    fallback_interval_ms = (
+                        normalize_audio_fallback_interval_ms(message[5])
                     )
                     if (
                         qt_frames != self.state.audio_qt_frames
-                        or buffer_changed
+                        or buffer_frames != self.state.audio_buffer_frames
+                        or response_frames
+                        != self.state.audio_response_frames
+                        or chunk_frames != self.state.audio_chunk_frames
+                        or fallback_interval_ms
+                        != self.state.audio_fallback_interval_ms
                     ):
                         self.state.audio_qt_frames = qt_frames
                         self.state.audio_buffer_frames = buffer_frames
-                        changed = True
-                        if buffer_changed:
-                            self.request_save()
-                    continue
-                if kind == "qt_learning":
-                    minimum_stable_qt_frames = (
-                        normalize_qt_audio_frames(message[1])
-                        if message[1] is not None
-                        else None
-                    )
-                    audio_environment = str(message[2])
-                    if (
-                        minimum_stable_qt_frames
-                        != self.minimum_stable_qt_frames
-                        or audio_environment != self.qt_audio_environment
-                    ):
-                        self.minimum_stable_qt_frames = (
-                            minimum_stable_qt_frames
+                        self.state.audio_response_frames = response_frames
+                        self.state.audio_chunk_frames = chunk_frames
+                        self.state.audio_fallback_interval_ms = (
+                            fallback_interval_ms
                         )
-                        self.qt_audio_environment = audio_environment
-                        self.request_save()
+                        changed = True
                     continue
                 if kind == "hotkey":
                     if message[1] == "play":
@@ -1293,6 +1338,8 @@ class AppController:
                     "key_output_note",
                     "sound_output_note",
                     "sound_output_remap",
+                    "key_melody_output_note",
+                    "sound_melody_output_note",
                 }:
                     if int(message[1]) != self.playback_id:
                         continue
@@ -1437,6 +1484,20 @@ class AppController:
                         released_output_notes.discard(note)
                     else:
                         released_output_notes.add(note)
+                elif kind in {
+                    "key_melody_output_note",
+                    "sound_melody_output_note",
+                }:
+                    source_kind = (
+                        "key"
+                        if kind == "key_melody_output_note"
+                        else "sound"
+                    )
+                    changed = self._set_melody_output_note_state(
+                        (source_kind, int(message[1])),
+                        int(message[2]),
+                        bool(message[3]),
+                    ) or changed
             if completed_sound_mode is not None:
                 changed = (
                     self._continue_sound_after_end(completed_sound_mode)
@@ -1518,6 +1579,7 @@ class AppController:
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
             chord_optimization=self.state.chord_optimization,
+            melody_priority=self.state.melody_priority,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -1553,9 +1615,13 @@ class AppController:
                 self.state.section_visibility
             ),
             last_update_check_at=self.last_update_check_at,
-            automatic_audio_buffer_frames=self.state.audio_buffer_frames,
-            minimum_stable_qt_frames=self.minimum_stable_qt_frames,
-            qt_audio_environment=self.qt_audio_environment,
+            audio_qt_frames=self.state.audio_qt_frames,
+            audio_buffer_frames=self.state.audio_buffer_frames,
+            audio_response_frames=self.state.audio_response_frames,
+            audio_chunk_frames=self.state.audio_chunk_frames,
+            audio_fallback_interval_ms=(
+                self.state.audio_fallback_interval_ms
+            ),
         )
 
     def shutdown(self) -> None:
@@ -1583,6 +1649,16 @@ class AppController:
             for target in (self.sound_player, self.realtime_sound_output):
                 if target:
                     target.set_sound_source(self.state.sound_source)
+        elif name in {"audio_qt_frames", "audio_buffer_frames"}:
+            for target in (self.sound_player, self.realtime_sound_output):
+                if target:
+                    target.set_audio_settings(
+                        self.state.audio_qt_frames,
+                        self.state.audio_buffer_frames,
+                        self.state.audio_response_frames,
+                        self.state.audio_chunk_frames,
+                        self.state.audio_fallback_interval_ms,
+                    )
         elif name == "playback_speed_percent":
             if self.player:
                 self.player.set_playback_speed(self.state.playback_speed_percent)
@@ -1598,6 +1674,11 @@ class AppController:
                 self.player.set_chord_optimization(self.state.chord_optimization)
             if self.sound_player:
                 self.sound_player.set_chord_optimization(self.state.chord_optimization)
+        elif name == "melody_priority":
+            if self.player:
+                self.player.set_melody_priority(self.state.melody_priority)
+            if self.sound_player:
+                self.sound_player.set_melody_priority(self.state.melody_priority)
         elif name == "chord_strum":
             if self.player:
                 self.player.set_chord_strum(self.state.chord_strum)
@@ -1650,9 +1731,15 @@ class AppController:
         ]
         if not sources:
             sources = [(0, channel) for channel in summary.channels]
+        melody_source = detect_melody_source(self.events)
         self._set_enabled_sources(sources)
         self.state.track_channels = [
-            TrackChannelItem(track=track, channel=channel, enabled=True)
+            TrackChannelItem(
+                track=track,
+                channel=channel,
+                enabled=True,
+                melody=(track, channel) == melody_source,
+            )
             for track, channel in sources
         ]
 
@@ -2034,6 +2121,34 @@ class AppController:
         self.state.realtime_output_notes = next_notes
         return True
 
+    def _set_melody_output_note_state(
+        self,
+        source: tuple[str, int],
+        note: int,
+        pressed: bool,
+    ) -> bool:
+        if not PIANO_NOTE_MIN <= note <= PIANO_NOTE_MAX:
+            return False
+        source_notes = self._melody_output_notes_by_source.setdefault(
+            source,
+            set(),
+        )
+        if pressed:
+            source_notes.add(note)
+        else:
+            source_notes.discard(note)
+            if not source_notes:
+                self._melody_output_notes_by_source.pop(source, None)
+        next_notes = (
+            frozenset().union(*self._melody_output_notes_by_source.values())
+            if self._melody_output_notes_by_source
+            else frozenset()
+        )
+        if next_notes == self.state.melody_output_notes:
+            return False
+        self.state.melody_output_notes = next_notes
+        return True
+
     def _expire_output_note_releases(self) -> bool:
         if not self._output_note_release_due and not self._realtime_note_release_due:
             return False
@@ -2102,15 +2217,28 @@ class AppController:
             self.state.realtime_output_retrigger_events = ()
         if source_kind is None:
             self._active_output_notes_by_source.clear()
+            self._melody_output_notes_by_source.clear()
             remaining: set[int] = set()
+            remaining_melody: set[int] = set()
         else:
             for source in [
                 item for item in self._active_output_notes_by_source if item[0] == source_kind
             ]:
                 self._active_output_notes_by_source.pop(source, None)
+            for source in [
+                item
+                for item in self._melody_output_notes_by_source
+                if item[0] == source_kind
+            ]:
+                self._melody_output_notes_by_source.pop(source, None)
             remaining = (
                 set().union(*self._active_output_notes_by_source.values())
                 if self._active_output_notes_by_source
+                else set()
+            )
+            remaining_melody = (
+                set().union(*self._melody_output_notes_by_source.values())
+                if self._melody_output_notes_by_source
                 else set()
             )
         realtime_changed = self._sync_realtime_output_notes()
@@ -2133,12 +2261,16 @@ class AppController:
             if note in remaining
         }
         next_notes = frozenset(remaining)
+        next_melody_notes = frozenset(remaining_melody)
+        melody_changed = self.state.melody_output_notes != next_melody_notes
+        self.state.melody_output_notes = next_melody_notes
         if self.state.active_output_notes == next_notes:
             return (
                 had_retrigger
                 or had_realtime_events
                 or had_realtime_retrigger
                 or realtime_changed
+                or melody_changed
             )
         self.state.active_output_notes = next_notes
         return True

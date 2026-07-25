@@ -24,6 +24,7 @@ from config import (
     shift_midi_note,
 )
 from keyboard_output import KeyboardOutput
+from melody_detection import MelodySource, detect_melody_source
 from midi_parser import MidiEvent
 from playback_timing import PlaybackClock, PlaybackTimeline, prepare_playback_events
 from repeat_guard import RapidRepeatGuard
@@ -35,6 +36,7 @@ PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
 CountdownCallback = Callable[[int], None]
 OutputNoteCallback = Callable[[int, bool], None]
+MelodyOutputNoteCallback = Callable[[int, bool], None]
 EnabledChannelsCallback = Callable[[], set[int]]
 EnabledSourcesCallback = Callable[[], set[tuple[int, int]]]
 NoteOwner = tuple[int, int, int]
@@ -49,6 +51,7 @@ class MidiKeyboardPlayer:
         on_position: PositionCallback | None = None,
         on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
+        on_melody_output_note: MelodyOutputNoteCallback | None = None,
         enabled_channels: EnabledChannelsCallback | None = None,
         enabled_sources: EnabledSourcesCallback | None = None,
         auto_fit_note_range: bool = False,
@@ -56,6 +59,7 @@ class MidiKeyboardPlayer:
         octave_shift: int = 0,
         humanize_timing: bool = False,
         chord_optimization: bool = False,
+        melody_priority: bool = False,
         chord_strum: bool = False,
         auto_sustain: bool = False,
         repeat_prevention: bool = False,
@@ -71,6 +75,9 @@ class MidiKeyboardPlayer:
         self.on_position = on_position or (lambda _position: None)
         self.on_optimization_progress = on_optimization_progress or (lambda _progress: None)
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
+        self.on_melody_output_note = (
+            on_melody_output_note or (lambda _note, _pressed: None)
+        )
         self.enabled_channels = enabled_channels
         self.enabled_sources = enabled_sources
         self.auto_fit_note_range = auto_fit_note_range
@@ -84,6 +91,7 @@ class MidiKeyboardPlayer:
         )
         self.humanize_timing = humanize_timing
         self.chord_optimization = chord_optimization
+        self.melody_priority = bool(melody_priority)
         self.chord_strum = chord_strum
         self.auto_sustain = auto_sustain
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
@@ -110,9 +118,11 @@ class MidiKeyboardPlayer:
         self._chord_optimization_plan_speed: int | None = None
         self._chord_optimization_plan_transpose: int | None = None
         self._chord_optimization_plan_octave: int | None = None
+        self._chord_optimization_plan_melody_priority: bool | None = None
         self._chord_optimization_plan_dirty = True
         self._optimization_generation = 0
         self._current_events: list[MidiEvent] | None = None
+        self._melody_source: MelodySource | None = None
         self._optimization_planner = ChordOptimizationPlanner(
             request_provider=self._optimization_request,
             request_is_current=self._optimization_request_is_current,
@@ -132,6 +142,10 @@ class MidiKeyboardPlayer:
                 or self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
                 or self._chord_optimization_plan_transpose != self.transpose_semitones
                 or self._chord_optimization_plan_octave != self.note_octave_shift
+                or (
+                    self._chord_optimization_plan_melody_priority
+                    != self.melody_priority
+                )
             ):
                 return None
             return self._chord_optimization_plan
@@ -153,6 +167,7 @@ class MidiKeyboardPlayer:
         self._repeat_guard.reset()
         with self._config_lock:
             self._current_events = events
+            self._melody_source = detect_melody_source(events)
             self._mark_chord_optimization_dirty_locked()
         self._thread = threading.Thread(
             target=self._run,
@@ -219,6 +234,16 @@ class MidiKeyboardPlayer:
             self._schedule_chord_optimization()
         else:
             self.on_optimization_progress(None)
+
+    def set_melody_priority(self, enabled: bool) -> None:
+        with self._config_lock:
+            enabled = bool(enabled)
+            if self.melody_priority == enabled:
+                return
+            self.melody_priority = enabled
+            self._mark_chord_optimization_dirty_locked()
+        self._release_requested.set()
+        self._schedule_chord_optimization()
 
     def request_chord_optimization_refresh(self) -> None:
         with self._config_lock:
@@ -473,14 +498,19 @@ class MidiKeyboardPlayer:
             plan_auto_fit = self._chord_optimization_plan_auto_fit
             plan_transpose = self._chord_optimization_plan_transpose
             plan_octave = self._chord_optimization_plan_octave
+            plan_melody_priority = (
+                self._chord_optimization_plan_melody_priority
+            )
             transpose_semitones = self.transpose_semitones
             octave_shift = self.note_octave_shift
+            melody_priority = self.melody_priority
         if (
             chord_optimization
             and plan is not None
             and plan_auto_fit == auto_fit_note_range
             and plan_transpose == transpose_semitones
             and plan_octave == octave_shift
+            and plan_melody_priority == melody_priority
         ):
             planned, target = plan.target_for(event)
             if planned:
@@ -497,6 +527,10 @@ class MidiKeyboardPlayer:
                 self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
                 or self._chord_optimization_plan_transpose != self.transpose_semitones
                 or self._chord_optimization_plan_octave != self.note_octave_shift
+                or (
+                    self._chord_optimization_plan_melody_priority
+                    != self.melody_priority
+                )
             ):
                 return None
             plan = self._chord_optimization_plan
@@ -545,6 +579,7 @@ class MidiKeyboardPlayer:
                     "transpose_semitones": self.transpose_semitones,
                     "octave_shift": self.note_octave_shift,
                     "playback_speed_percent": self.playback_speed_percent,
+                    "prioritize_melody": self.melody_priority,
                     "event_enabled": self._event_is_enabled,
                 },
             )
@@ -577,6 +612,9 @@ class MidiKeyboardPlayer:
                 request.options["transpose_semitones"]
             )
             self._chord_optimization_plan_octave = int(request.options["octave_shift"])
+            self._chord_optimization_plan_melody_priority = bool(
+                request.options["prioritize_melody"]
+            )
             self._chord_optimization_plan_dirty = False
             return True
 
@@ -625,7 +663,7 @@ class MidiKeyboardPlayer:
         self.output.press(key)
         self._active_key_owner[key] = owner
         self._active_key_note[key] = output_note
-        self._emit_output_note(output_note, True)
+        self._emit_output_note(output_note, True, owner)
 
     def _release_note_key(self, key: str, owner: NoteOwner) -> None:
         current_owner = self._active_key_owner.get(key)
@@ -633,25 +671,47 @@ class MidiKeyboardPlayer:
             output_note = self._active_key_note.get(key)
             self.output.release(key)
             if output_note is not None:
-                self._emit_output_note(output_note, False)
+                self._emit_output_note(output_note, False, current_owner)
             time.sleep(0.01)
             self.output.press(key)
             if output_note is not None:
-                self._emit_output_note(output_note, True)
+                self._emit_output_note(output_note, True, current_owner)
             return
         self._active_key_owner.pop(key, None)
         self.output.release(key)
-        self._emit_key_released(key)
+        self._emit_key_released(key, current_owner)
         self._remove_active_key(key)
 
-    def _emit_key_released(self, key: str) -> None:
+    def _emit_key_released(
+        self,
+        key: str,
+        owner: NoteOwner | None = None,
+    ) -> None:
         output_note = self._active_key_note.get(key)
         if output_note is not None:
-            self._emit_output_note(output_note, False)
+            self._emit_output_note(
+                output_note,
+                False,
+                owner or self._active_key_owner.get(key),
+            )
 
-    def _emit_output_note(self, note: int, pressed: bool) -> None:
+    def _emit_output_note(
+        self,
+        note: int,
+        pressed: bool,
+        owner: NoteOwner | None = None,
+    ) -> None:
         try:
             self.on_output_note(note, pressed)
+        except Exception:
+            pass
+        if owner is None:
+            return
+        source = (0 if owner[0] < 0 else owner[0], owner[1])
+        if source != self._melody_source:
+            return
+        try:
+            self.on_melody_output_note(note, pressed)
         except Exception:
             pass
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
 import math
+from bisect import bisect_right
+from dataclasses import dataclass
 
 from PySide6.QtCore import (
     QEvent,
@@ -27,6 +30,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -47,6 +51,10 @@ from PySide6.QtWidgets import (
 )
 
 from app_state import TrackChannelItem
+from config import PIANO_NOTE_MAX, PIANO_NOTE_MIN
+from note_visualization import PianoRollNote
+
+
 PANEL_DRAG_MIME_TYPE = "application/x-bpsr-panel-id"
 
 
@@ -817,6 +825,1949 @@ class ThemedBackground(QWidget):
         self._ocean_pixmap = ocean_pixmap
 
 
+class PianoKeyboardWidget(QWidget):
+    NOTE_MIN = PIANO_NOTE_MIN
+    NOTE_MAX = PIANO_NOTE_MAX
+    BASE_HEIGHT = 57
+    WHITE_PITCH_CLASSES = frozenset((0, 2, 4, 5, 7, 9, 11))
+    BLACK_BOUNDARIES = {1: 1, 3: 2, 6: 4, 8: 5, 10: 6}
+    RETRIGGER_RELEASE_SECONDS = 0.05
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("OutputPianoKeyboard")
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._active_notes: frozenset[int] = frozenset()
+        self._melody_notes: frozenset[int] = frozenset()
+        self._used_note_range: tuple[int, int] | None = None
+        self._surface = QColor("#ffffff")
+        self._border = QColor("#9aa5b1")
+        self._text = QColor("#5d6878")
+        self._black = QColor("#202632")
+        self._accent = QColor("#00a7d6")
+        self._accent_border = QColor("#0093bd")
+        self._accent_text = QColor("#ffffff")
+        self._melody_accent = QColor("#d04855")
+        self._melody_border = QColor("#a52f3b")
+        self._unused_surface = self._surface.darker(118)
+        self._unused_black = self._black.lighter(145)
+        self._unused_text = QColor(self._text)
+        self._unused_text.setAlpha(120)
+        self._white_notes = tuple(
+            note
+            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if note % 12 in self.WHITE_PITCH_CLASSES
+        )
+        white_indexes = {
+            note: index for index, note in enumerate(self._white_notes)
+        }
+        self._black_note_positions = tuple(
+            (note, white_indexes[note - 1] + 1)
+            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if (
+                note % 12 in self.BLACK_BOUNDARIES
+                and note - 1 in white_indexes
+            )
+        )
+        self._label_specs = tuple(
+            (
+                index,
+                note,
+                (
+                    f"A{note // 12 - 1}"
+                    if note == self.NOTE_MIN
+                    else f"C{note // 12 - 1}"
+                ),
+            )
+            for index, note in enumerate(self._white_notes)
+            if note == self.NOTE_MIN or note % 12 == 0
+        )
+        self._white_key_fills: tuple[QColor, ...] = ()
+        self._black_key_fills: tuple[QColor, ...] = ()
+        self._label_colors: tuple[QColor, ...] = ()
+        self._refresh_note_range_colors()
+        self._last_retrigger_serials: dict[int, int] = {}
+        self._retrigger_release_until: dict[int, float] = {}
+        self._retrigger_timer = QTimer(self)
+        self._retrigger_timer.setInterval(16)
+        self._retrigger_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._retrigger_timer.timeout.connect(self._advance_retrigger_release)
+        self._rendering_enabled = True
+        self.apply_scale(1.0)
+
+    @property
+    def active_notes(self) -> frozenset[int]:
+        return self._active_notes
+
+    @property
+    def used_note_range(self) -> tuple[int, int] | None:
+        return self._used_note_range
+
+    @property
+    def rendering_enabled(self) -> bool:
+        return self._rendering_enabled
+
+    def set_rendering_enabled(
+        self,
+        enabled: bool,
+        *,
+        current_retrigger_events: object = (),
+    ) -> None:
+        enabled = bool(enabled)
+        if self._rendering_enabled == enabled:
+            return
+        self._rendering_enabled = enabled
+        self._retrigger_timer.stop()
+        self._retrigger_release_until.clear()
+        if enabled:
+            try:
+                for note, serial in current_retrigger_events:  # type: ignore[union-attr]
+                    self._last_retrigger_serials[int(note)] = int(serial)
+            except (TypeError, ValueError):
+                pass
+            self.update()
+
+    def set_active_notes(self, notes: object) -> None:
+        if not self._rendering_enabled:
+            return
+        try:
+            active = frozenset(
+                int(note)
+                for note in notes  # type: ignore[union-attr]
+                if self.NOTE_MIN <= int(note) <= self.NOTE_MAX
+            )
+        except (TypeError, ValueError):
+            active = frozenset()
+        if active != self._active_notes:
+            self._active_notes = active
+            self.update()
+
+    def set_melody_notes(self, notes: object) -> None:
+        if not self._rendering_enabled:
+            return
+        try:
+            melody = frozenset(
+                int(note)
+                for note in notes  # type: ignore[union-attr]
+                if self.NOTE_MIN <= int(note) <= self.NOTE_MAX
+            )
+        except (TypeError, ValueError):
+            melody = frozenset()
+        if melody != self._melody_notes:
+            self._melody_notes = melody
+            self.update()
+
+    def set_used_note_range(self, note_range: object) -> None:
+        normalized: tuple[int, int] | None = None
+        if note_range is not None:
+            try:
+                low, high = note_range  # type: ignore[misc]
+                low = max(self.NOTE_MIN, min(self.NOTE_MAX, int(low)))
+                high = max(self.NOTE_MIN, min(self.NOTE_MAX, int(high)))
+                if low <= high:
+                    normalized = (low, high)
+            except (TypeError, ValueError):
+                normalized = None
+        if normalized != self._used_note_range:
+            self._used_note_range = normalized
+            self._refresh_note_range_colors()
+            self.update()
+
+    def _note_is_used(self, note: int) -> bool:
+        return (
+            self._used_note_range is None
+            or self._used_note_range[0] <= note <= self._used_note_range[1]
+        )
+
+    def _refresh_note_range_colors(self) -> None:
+        self._white_key_fills = tuple(
+            self._surface if self._note_is_used(note) else self._unused_surface
+            for note in self._white_notes
+        )
+        self._black_key_fills = tuple(
+            self._black if self._note_is_used(note) else self._unused_black
+            for note, _position in self._black_note_positions
+        )
+        self._label_colors = tuple(
+            self._text if self._note_is_used(note) else self._unused_text
+            for _index, note, _text in self._label_specs
+        )
+
+    def set_retrigger_events(self, events: object) -> None:
+        if not self._rendering_enabled:
+            return
+        try:
+            retrigger_events = tuple(
+                (int(note), int(serial))
+                for note, serial in events  # type: ignore[union-attr]
+            )
+        except (TypeError, ValueError):
+            return
+        release_until = time.monotonic() + self.RETRIGGER_RELEASE_SECONDS
+        changed = False
+        for note, serial in retrigger_events:
+            if self._last_retrigger_serials.get(note) == serial:
+                continue
+            self._last_retrigger_serials[note] = serial
+            if not self.NOTE_MIN <= note <= self.NOTE_MAX:
+                continue
+            self._retrigger_release_until[note] = release_until
+            changed = True
+        if not changed:
+            return
+        if not self._retrigger_timer.isActive():
+            self._retrigger_timer.start()
+        self.update()
+
+    def _advance_retrigger_release(self) -> None:
+        if not self._rendering_enabled:
+            self._retrigger_timer.stop()
+            return
+        now = time.monotonic()
+        expired = [
+            note
+            for note, until in self._retrigger_release_until.items()
+            if now >= until
+        ]
+        for note in expired:
+            self._retrigger_release_until.pop(note, None)
+        if not self._retrigger_release_until:
+            self._retrigger_timer.stop()
+        self.update()
+
+    def set_colors(
+        self,
+        surface: str,
+        border: str,
+        text: str,
+        accent: str,
+        accent_border: str,
+        accent_text: str,
+        melody_accent: str | None = None,
+        melody_border: str | None = None,
+    ) -> None:
+        self._surface = QColor(surface)
+        self._border = QColor(border)
+        self._text = QColor(text)
+        self._accent = QColor(accent)
+        self._accent_border = QColor(accent_border)
+        self._accent_text = QColor(accent_text)
+        self._melody_accent = QColor(melody_accent or accent)
+        self._melody_border = QColor(melody_border or accent_border)
+        self._unused_surface = self._surface.darker(118)
+        self._unused_black = self._black.lighter(145)
+        self._unused_text = QColor(self._text)
+        self._unused_text.setAlpha(120)
+        self._refresh_note_range_colors()
+        self.update()
+
+    def apply_scale(self, scale: float) -> None:
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(16777215)
+        self.setFixedHeight(max(1, round(self.BASE_HEIGHT * scale)))
+
+    def sizeHint(self) -> QSize:
+        return QSize(420, self.BASE_HEIGHT)
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width = max(1.0, float(self.width() - 1))
+        height = max(1.0, float(self.height() - 1))
+        painter.fillRect(self.rect(), self._surface)
+        white_notes = self._white_notes
+        white_width = width / len(white_notes)
+        border_pen = QPen(self._border, 1.0)
+        label_font = painter.font()
+        label_font.setPixelSize(
+            max(7, min(12, round(min(height * 0.16, white_width * 0.9))))
+        )
+
+        for index, (note, fill) in enumerate(
+            zip(white_notes, self._white_key_fills, strict=True)
+        ):
+            key_rect = QRectF(index * white_width + 0.5, 0.5, white_width, height)
+            active = (
+                note in self._active_notes
+                and note not in self._retrigger_release_until
+            )
+            melody = active and note in self._melody_notes
+            painter.fillRect(
+                key_rect,
+                (
+                    self._melody_accent
+                    if melody
+                    else self._accent if active else fill
+                ),
+            )
+            painter.setPen(
+                QPen(
+                    self._melody_border if melody else self._accent_border,
+                    1.0,
+                )
+                if active
+                else border_pen
+            )
+            painter.drawRect(key_rect)
+
+        for (index, _note, label_text), label_color in zip(
+            self._label_specs,
+            self._label_colors,
+            strict=True,
+        ):
+            painter.setFont(label_font)
+            painter.setPen(label_color)
+            key_center = (index + 0.5) * white_width
+            label_width = min(
+                width,
+                max(
+                    1.0,
+                    float(
+                        painter.fontMetrics().horizontalAdvance(label_text)
+                        + 2
+                    ),
+                ),
+            )
+            label_left = max(
+                0.5,
+                min(width - label_width, key_center - label_width / 2),
+            )
+            label_rect = QRectF(
+                label_left,
+                0.5,
+                label_width,
+                height,
+            )
+            painter.drawText(
+                label_rect.adjusted(0, 0, 0, -2),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                label_text,
+            )
+
+        black_width = white_width * 0.62
+        black_height = height * 0.60
+        for (note, position), fill in zip(
+            self._black_note_positions,
+            self._black_key_fills,
+            strict=True,
+        ):
+            center_x = position * white_width
+            key_rect = QRectF(center_x - black_width / 2, 0.5, black_width, black_height)
+            active = (
+                note in self._active_notes
+                and note not in self._retrigger_release_until
+            )
+            melody = active and note in self._melody_notes
+            painter.fillRect(
+                key_rect,
+                (
+                    self._melody_accent
+                    if melody
+                    else self._accent if active else fill
+                ),
+            )
+            painter.setPen(
+                QPen(
+                    (
+                        self._melody_border
+                        if melody
+                        else self._accent_border if active else self._border
+                    ),
+                    1.0,
+                )
+            )
+            painter.drawRect(key_rect)
+        painter.end()
+
+
+@dataclass(frozen=True)
+class _RhythmHitImpact:
+    serial: int
+    note: int
+    started_at: float
+    judgment: str
+    released: bool
+
+
+@dataclass(frozen=True)
+class _RhythmLaneFade:
+    serial: int
+    note: int
+    started_at: float
+
+
+class FallingNotesWidget(QWidget):
+    NOTE_MIN = PIANO_NOTE_MIN
+    NOTE_MAX = PIANO_NOTE_MAX
+    BASE_HEIGHT = PianoKeyboardWidget.BASE_HEIGHT
+    PREVIEW_SECONDS = 1.0
+    IMPACT_DURATION_SECONDS = {
+        "PERFECT": 0.24,
+        "GREAT": 0.18,
+        "GOOD": 0.12,
+    }
+    IMPACT_SIZE_SCALE = 1.0
+    IMPACT_OPACITY = 1.0
+    PERFECT_IMPACT_OPACITY = 0.50
+    PERFECT_RELEASE_IMPACT_OPACITY = 0.20
+    RELEASE_IMPACT_SIZE_SCALE = 0.60
+    RELEASE_IMPACT_OPACITY = 0.70
+    RELEASE_IMPACT_PARTICLE_SCALE = 0.50
+    LANE_FADE_SECONDS = 0.15
+    HELD_LANE_OPACITY = 0.28
+    APPROACHING_TRAIL_GLOW_STOPS = ((0.0, 0), (0.55, 31), (1.0, 120))
+    APPROACHING_TRAIL_CORE_STOPS = ((0.0, 16), (0.62, 189), (1.0, 255))
+    HELD_TRAIL_GLOW_STOPS = ((0.0, 0), (0.60, 31), (0.88, 57), (1.0, 0))
+    HELD_TRAIL_CORE_STOPS = ((0.0, 16), (0.58, 189), (0.88, 150), (1.0, 0))
+    WHITE_PITCH_CLASSES = PianoKeyboardWidget.WHITE_PITCH_CLASSES
+    BLACK_PITCH_CLASSES = frozenset((1, 3, 6, 8, 10))
+    LIGHT_BAR_INTENSITY_STEPS = 12
+    IMPACT_PROGRESS_STEPS = 24
+    SUBPIXEL_STEPS = 4
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("FallingNotes")
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._sequence_notes: tuple[PianoRollNote, ...] = ()
+        self._used_note_range: tuple[int, int] | None = None
+        self._sequence_starts: tuple[float, ...] = ()
+        self._sequence_by_end: tuple[PianoRollNote, ...] = ()
+        self._sequence_ends: tuple[float, ...] = ()
+        self._sequence_end_entries: tuple[tuple[float, int], ...] = ()
+        self._active_sequence_indexes: set[int] = set()
+        self._active_start_cursor = 0
+        self._active_end_cursor = 0
+        self._active_query_position: float | None = None
+        self._position = 0.0
+        self._position_anchor = time.monotonic()
+        self._speed_ratio = 1.0
+        self._playback_running = False
+        self._frame_position = 0.0
+        self._frame_visible_notes: tuple[PianoRollNote, ...] = ()
+        self._frame_visible_lanes: frozenset[int] = frozenset()
+        self._hit_impacts: list[_RhythmHitImpact] = []
+        self._held_lane_counts: dict[int, int] = {}
+        self._lane_fades: list[_RhythmLaneFade] = []
+        self._last_hit_serial = 0
+        self._surface = QColor("#000000")
+        self._border = QColor("#9aa5b1")
+        self._grid = QColor("#d5dde7")
+        self._scheduled = QColor("#00a7d6")
+        self._melody_scheduled = QColor("#d04855")
+        self._live = QColor("#0093bd")
+        self._scale = 1.0
+        self._static_layer: QPixmap | None = None
+        self._grid_layer: QPixmap | None = None
+        self._frame_layer: QPixmap | None = None
+        self._note_rect_cache_width = -1.0
+        self._note_rect_cache: dict[int, tuple[float, float]] = {}
+        self._note_body_cache: dict[tuple[object, ...], QPixmap] = {}
+        self._light_bar_cache: dict[tuple[object, ...], QPixmap] = {}
+        self._impact_cache: dict[tuple[object, ...], QPixmap] = {}
+        self._pending_effect_notes: set[int] = set()
+        self._animation_timer = QTimer(self)
+        self._animation_timer.setInterval(16)
+        self._animation_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._animation_timer.timeout.connect(self._advance_animation)
+        self._rendering_enabled = True
+        self.apply_scale(1.0)
+
+    @property
+    def sequence_notes(self) -> tuple[PianoRollNote, ...]:
+        return self._sequence_notes
+
+    @property
+    def used_note_range(self) -> tuple[int, int] | None:
+        return self._used_note_range
+
+    @property
+    def rendering_enabled(self) -> bool:
+        return self._rendering_enabled
+
+    @property
+    def live_trail_count(self) -> int:
+        return 0
+
+    @property
+    def hit_impact_count(self) -> int:
+        return len(self._hit_impacts)
+
+    @property
+    def held_lane_notes(self) -> frozenset[int]:
+        return frozenset(self._held_lane_counts)
+
+    @property
+    def lane_fade_count(self) -> int:
+        return len(self._lane_fades)
+
+    def set_rendering_enabled(
+        self,
+        enabled: bool,
+        *,
+        latest_hit_events: object = (),
+    ) -> None:
+        enabled = bool(enabled)
+        if self._rendering_enabled == enabled:
+            return
+        self._rendering_enabled = enabled
+        self._animation_timer.stop()
+        self._pending_effect_notes.clear()
+        self._hit_impacts.clear()
+        self._held_lane_counts.clear()
+        self._lane_fades.clear()
+        self._frame_visible_notes = ()
+        self._frame_visible_lanes = frozenset()
+        self._playback_running = False
+        self._reset_active_sequence_cache()
+        if enabled:
+            try:
+                serials = [
+                    int(tuple(event)[0])
+                    for event in latest_hit_events  # type: ignore[union-attr]
+                    if tuple(event)
+                ]
+                self._last_hit_serial = max(
+                    serials,
+                    default=self._last_hit_serial,
+                )
+            except (TypeError, ValueError, IndexError):
+                pass
+            self.update()
+
+    def set_hit_events(self, events: object) -> None:
+        if not self._rendering_enabled:
+            return
+        try:
+            source = (
+                events
+                if isinstance(events, (list, tuple))
+                else tuple(events)  # type: ignore[arg-type]
+            )
+            pending: list[tuple[int, int, str, bool]] = []
+            for raw_event in reversed(source):
+                values = tuple(raw_event)
+                if len(values) not in {3, 4}:
+                    continue
+                serial = int(values[0])
+                if serial <= self._last_hit_serial:
+                    break
+                pending.append(
+                    (
+                        serial,
+                        int(values[1]),
+                        str(values[2]).upper(),
+                        bool(values[3]) if len(values) == 4 else False,
+                    )
+                )
+        except (TypeError, ValueError, IndexError):
+            return
+        now = time.monotonic()
+        changed_notes: set[int] = set()
+        for serial, note, judgment, released in reversed(pending):
+            self._last_hit_serial = serial
+            if (
+                not self.NOTE_MIN <= note <= self.NOTE_MAX
+                or judgment not in {"PERFECT", "GREAT", "GOOD"}
+            ):
+                continue
+            if released:
+                self._release_held_lane(note)
+                self._lane_fades.append(
+                    _RhythmLaneFade(
+                        serial=serial,
+                        note=note,
+                        started_at=now,
+                    )
+                )
+            else:
+                self._held_lane_counts[note] = (
+                    self._held_lane_counts.get(note, 0) + 1
+                )
+            self._hit_impacts.append(
+                _RhythmHitImpact(
+                    serial=serial,
+                    note=note,
+                    started_at=now,
+                    judgment=judgment,
+                    released=released,
+                )
+            )
+            changed_notes.add(note)
+        if not changed_notes:
+            return
+        self._hit_impacts = self._hit_impacts[-64:]
+        self._lane_fades = self._lane_fades[-64:]
+        self._update_animation_timer()
+        if self._animation_timer.isActive():
+            self._pending_effect_notes.update(changed_notes)
+        else:
+            self._update_note_lanes(
+                changed_notes,
+                include_effect_margin=True,
+            )
+
+    def _release_held_lane(self, note: int) -> None:
+        active_count = self._held_lane_counts.get(note, 0)
+        if active_count <= 1:
+            self._held_lane_counts.pop(note, None)
+        else:
+            self._held_lane_counts[note] = active_count - 1
+
+    def set_sequence_notes(self, notes: tuple[PianoRollNote, ...]) -> None:
+        if not self._rendering_enabled:
+            return
+        normalized = tuple(sorted(notes, key=lambda item: (item.start, item.note, item.end)))
+        if normalized != self._sequence_notes:
+            self._sequence_notes = normalized
+            self._sequence_starts = tuple(note.start for note in normalized)
+            self._sequence_end_entries = tuple(
+                sorted(
+                    (
+                        (note.end, index)
+                        for index, note in enumerate(normalized)
+                    ),
+                    key=lambda item: (
+                        item[0],
+                        normalized[item[1]].start,
+                        normalized[item[1]].note,
+                    ),
+                )
+            )
+            self._sequence_by_end = tuple(
+                normalized[index]
+                for _end, index in self._sequence_end_entries
+            )
+            self._sequence_ends = tuple(end for end, _index in self._sequence_end_entries)
+            self._reset_active_sequence_cache()
+            self._frame_visible_notes = ()
+            self._frame_visible_lanes = frozenset()
+            self.update()
+
+    def set_used_note_range(self, note_range: object) -> None:
+        normalized: tuple[int, int] | None = None
+        if note_range is not None:
+            try:
+                low, high = note_range  # type: ignore[misc]
+                low = max(self.NOTE_MIN, min(self.NOTE_MAX, int(low)))
+                high = max(self.NOTE_MIN, min(self.NOTE_MAX, int(high)))
+                if low <= high:
+                    normalized = (low, high)
+            except (TypeError, ValueError):
+                normalized = None
+        if normalized != self._used_note_range:
+            self._used_note_range = normalized
+            self._static_layer = None
+            self._grid_layer = None
+            self._frame_layer = None
+            self.update()
+
+    def set_playback_state(
+        self,
+        position: float,
+        speed_percent: int,
+        running: bool,
+    ) -> None:
+        if not self._rendering_enabled:
+            return
+        was_running = self._playback_running
+        self._position = max(0.0, float(position))
+        self._position_anchor = time.monotonic()
+        self._speed_ratio = max(0.1, min(2.0, int(speed_percent) / 100.0))
+        self._playback_running = bool(running)
+        self._update_animation_timer()
+        if self._playback_running and was_running:
+            return
+        dirty_notes = self._prepare_animation_frame(self._position_anchor)
+        self._update_note_lanes(dirty_notes)
+
+    def set_live_state(
+        self,
+        active_notes: object,
+        trigger_events: object,
+    ) -> None:
+        if not self._rendering_enabled:
+            return
+        _ = trigger_events
+        try:
+            active = {
+                int(note)
+                for note in active_notes  # type: ignore[union-attr]
+            }
+        except (TypeError, ValueError):
+            return
+        stale = set(self._held_lane_counts).difference(active)
+        if not stale:
+            return
+        for note in stale:
+            self._held_lane_counts.pop(note, None)
+        self._update_animation_timer()
+        self._update_note_lanes(stale)
+
+    def set_colors(
+        self,
+        surface: str,
+        border: str,
+        grid: str,
+        scheduled: str,
+        live: str,
+        melody_scheduled: str | None = None,
+    ) -> None:
+        self._surface = QColor(surface)
+        self._border = QColor(border)
+        self._grid = QColor(grid)
+        self._scheduled = QColor(scheduled)
+        self._melody_scheduled = QColor(melody_scheduled or scheduled)
+        self._live = QColor(live)
+        self._invalidate_render_cache()
+        self.update()
+
+    def apply_scale(self, scale: float) -> None:
+        self._scale = max(0.5, float(scale))
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(16777215)
+        self.setFixedHeight(max(1, round(self.BASE_HEIGHT * scale)))
+        self._invalidate_render_cache()
+
+    def sizeHint(self) -> QSize:
+        return QSize(420, self.BASE_HEIGHT)
+
+    def _current_position(self, now: float) -> float:
+        if not self._playback_running:
+            return self._position
+        return self._position + (now - self._position_anchor) * self._speed_ratio
+
+    def _advance_animation(self) -> None:
+        if not self._rendering_enabled:
+            self._animation_timer.stop()
+            return
+        now = time.monotonic()
+        effect_notes = set(self._pending_effect_notes) | {
+            impact.note for impact in self._hit_impacts
+        } | {
+            fade.note for fade in self._lane_fades
+        }
+        self._pending_effect_notes.clear()
+        self._hit_impacts = [
+            impact
+            for impact in self._hit_impacts
+            if now - impact.started_at
+            <= self._impact_duration(impact.judgment)
+        ]
+        self._lane_fades = [
+            fade
+            for fade in self._lane_fades
+            if now - fade.started_at <= self.LANE_FADE_SECONDS
+        ]
+        effect_notes.update(impact.note for impact in self._hit_impacts)
+        effect_notes.update(fade.note for fade in self._lane_fades)
+        moving_notes = self._prepare_animation_frame(now)
+        self._update_animation_timer()
+        self._update_note_lanes(moving_notes)
+        self._update_note_lanes(
+            effect_notes,
+            include_effect_margin=True,
+        )
+
+    def _update_animation_timer(self) -> None:
+        should_run = (
+            self._rendering_enabled
+            and (
+                self._playback_running
+                or bool(self._hit_impacts)
+                or bool(self._lane_fades)
+            )
+        )
+        if should_run and not self._animation_timer.isActive():
+            self._animation_timer.start()
+        elif not should_run and self._animation_timer.isActive():
+            self._animation_timer.stop()
+
+    def _prepare_animation_frame(self, now: float) -> set[int]:
+        position = self._current_position(now)
+        song_horizon = self.PREVIEW_SECONDS * self._speed_ratio
+        visible_notes = self._visible_sequence_notes(position, song_horizon)
+        visible_lanes = frozenset(note.note for note in visible_notes)
+        dirty_lanes = set(self._frame_visible_lanes | visible_lanes)
+        self._frame_position = position
+        self._frame_visible_notes = visible_notes
+        self._frame_visible_lanes = visible_lanes
+        return dirty_lanes
+
+    def _note_rect(self, note: int, width: float) -> tuple[float, float] | None:
+        if abs(self._note_rect_cache_width - width) > 0.01:
+            self._rebuild_note_rect_cache(width)
+        return self._note_rect_cache.get(int(note))
+
+    def _rebuild_note_rect_cache(self, width: float) -> None:
+        white_notes = tuple(
+            value
+            for value in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if value % 12 in self.WHITE_PITCH_CLASSES
+        )
+        white_width = width / len(white_notes)
+        white_indexes = {
+            note: index for index, note in enumerate(white_notes)
+        }
+        cache: dict[int, tuple[float, float]] = {}
+        for note in range(self.NOTE_MIN, self.NOTE_MAX + 1):
+            if note in white_indexes:
+                center = (white_indexes[note] + 0.5) * white_width
+                note_width = white_width
+            elif (
+                note % 12 in self.BLACK_PITCH_CLASSES
+                and note - 1 in white_indexes
+            ):
+                center = (white_indexes[note - 1] + 1) * white_width
+                note_width = white_width * 0.62
+            else:
+                continue
+            cache[note] = (center - note_width / 2, note_width)
+        self._note_rect_cache_width = width
+        self._note_rect_cache = cache
+
+    def _invalidate_render_cache(self) -> None:
+        self._static_layer = None
+        self._grid_layer = None
+        self._frame_layer = None
+        self._note_body_cache.clear()
+        self._light_bar_cache.clear()
+        self._impact_cache.clear()
+        self._note_rect_cache_width = -1.0
+        self._note_rect_cache.clear()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self._invalidate_render_cache()
+        super().resizeEvent(event)
+
+    def _ensure_static_layer(self, width: float, height: float) -> QPixmap:
+        if (
+            self._static_layer is not None
+            and self._grid_layer is not None
+            and self._frame_layer is not None
+            and self._static_layer.size() == self.size()
+        ):
+            return self._static_layer
+        layer = QPixmap(self.size())
+        layer.fill(self._surface)
+        painter = QPainter(layer)
+        painter.end()
+        grid_layer = QPixmap(self.size())
+        grid_layer.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(grid_layer)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        white_notes = tuple(
+            note
+            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if note % 12 in self.WHITE_PITCH_CLASSES
+        )
+        white_width = width / len(white_notes)
+        lane_color = QColor(self._grid)
+        lane_color.setAlpha(175)
+        painter.setPen(QPen(lane_color, max(0.8, 0.75 * self._scale)))
+        for index in range(len(white_notes) + 1):
+            x = index * white_width + 0.5
+            painter.drawLine(QPointF(x, 0.5), QPointF(x, height))
+        octave_color = QColor(self._border)
+        octave_color.setAlpha(150)
+        painter.setPen(QPen(octave_color, max(1.0, self._scale)))
+        for index, note in enumerate(white_notes):
+            if note == self.NOTE_MIN or note % 12 == 0:
+                x = index * white_width + 0.5
+                painter.drawLine(QPointF(x, 0.5), QPointF(x, height))
+        if self._used_note_range is not None:
+            low_rect = self._note_rect(self._used_note_range[0], width)
+            high_rect = self._note_rect(self._used_note_range[1], width)
+            if low_rect is not None and high_rect is not None:
+                used_left = max(0.0, low_rect[0])
+                used_right = min(width, high_rect[0] + high_rect[1])
+                unused_overlay = QColor(self._surface)
+                unused_overlay.setAlpha(205)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(unused_overlay)
+                if used_left > 0:
+                    painter.drawRect(QRectF(0, 0, used_left, height))
+                if used_right < width:
+                    painter.drawRect(
+                        QRectF(
+                            used_right,
+                            0,
+                            width - used_right,
+                            height,
+                        )
+                    )
+        painter.end()
+        frame_layer = QPixmap(self.size())
+        frame_layer.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(frame_layer)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(self._border, 1.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(0.5, 0.5, width, height))
+        hit_line = QLinearGradient(0.5, 0.0, width, 0.0)
+        for position, alpha in ((0.0, 35), (0.5, 185), (1.0, 35)):
+            color = QColor(self._live)
+            color.setAlpha(alpha)
+            hit_line.setColorAt(position, color)
+        painter.setPen(QPen(hit_line, 1.5 * self._scale))
+        painter.drawLine(
+            QPointF(0.5, height - 0.5),
+            QPointF(width, height - 0.5),
+        )
+        painter.end()
+        self._static_layer = layer
+        self._grid_layer = grid_layer
+        self._frame_layer = frame_layer
+        return layer
+
+    def _update_note_lanes(
+        self,
+        notes: set[int],
+        *,
+        include_effect_margin: bool = False,
+    ) -> None:
+        if not notes:
+            return
+        width = max(1.0, float(self.width() - 1))
+        for note in sorted(notes):
+            horizontal = self._note_rect(note, width)
+            if horizontal is None:
+                continue
+            x, note_width = horizontal
+            effect_margin = (
+                max(48.0 * self._scale, note_width * 3.0)
+                if include_effect_margin
+                else max(2.0 * self._scale, note_width * 0.12)
+            )
+            left = max(0.0, x - effect_margin)
+            right = min(width, x + note_width + effect_margin)
+            self.update(
+                QRectF(
+                    left,
+                    0.0,
+                    right - left + 1.0,
+                    float(self.height()),
+                ).toAlignedRect()
+            )
+
+    @staticmethod
+    def _region_intersects_lane(
+        region,
+        x: float,
+        note_width: float,
+        height: float,
+        margin: float = 0.0,
+    ) -> bool:
+        return region.intersects(
+            QRectF(
+                x - margin,
+                0.0,
+                note_width + margin * 2.0,
+                height,
+            ).toAlignedRect()
+        )
+
+    def _visible_sequence_notes(
+        self,
+        position: float,
+        song_horizon: float,
+    ) -> tuple[PianoRollNote, ...]:
+        if not self._sequence_notes:
+            return ()
+        active = self._active_sequence_notes(position)
+        left = bisect_right(self._sequence_starts, position)
+        right = bisect_right(self._sequence_starts, position + song_horizon)
+        upcoming = self._sequence_notes[left:right]
+        return tuple(
+            sorted(
+                (*active, *upcoming),
+                key=lambda item: (item.start, item.note, item.end),
+            )
+        )
+
+    def _active_sequence_notes(
+        self,
+        position: float,
+    ) -> tuple[PianoRollNote, ...]:
+        started_right = bisect_right(self._sequence_starts, position)
+        ending_left = bisect_right(self._sequence_ends, position)
+        previous_position = self._active_query_position
+        if previous_position is None:
+            if started_right <= len(self._sequence_notes) - ending_left:
+                active = set(range(started_right))
+                for _end, index in self._sequence_end_entries[:ending_left]:
+                    active.discard(index)
+            else:
+                active = {
+                    index
+                    for _end, index in self._sequence_end_entries[ending_left:]
+                    if index < started_right
+                }
+            self._active_sequence_indexes = active
+        elif position >= previous_position:
+            self._active_sequence_indexes.update(
+                range(self._active_start_cursor, started_right)
+            )
+            for _end, index in self._sequence_end_entries[
+                self._active_end_cursor:ending_left
+            ]:
+                self._active_sequence_indexes.discard(index)
+        else:
+            for _end, index in self._sequence_end_entries[
+                ending_left:self._active_end_cursor
+            ]:
+                self._active_sequence_indexes.add(index)
+            for index in range(started_right, self._active_start_cursor):
+                self._active_sequence_indexes.discard(index)
+        self._active_start_cursor = started_right
+        self._active_end_cursor = ending_left
+        self._active_query_position = position
+        return tuple(
+            self._sequence_notes[index]
+            for index in sorted(self._active_sequence_indexes)
+        )
+
+    def _reset_active_sequence_cache(self) -> None:
+        self._active_sequence_indexes.clear()
+        self._active_start_cursor = 0
+        self._active_end_cursor = 0
+        self._active_query_position = None
+
+    def _draw_impact_core(
+        self,
+        painter: QPainter,
+        center_x: float,
+        center_y: float,
+        radius: float,
+        color: QColor,
+        intensity: float,
+    ) -> None:
+        glow = QRadialGradient(QPointF(center_x, center_y), radius)
+        glow_center = QColor(color)
+        glow_center.setAlpha(round(220 * intensity))
+        glow_edge = QColor(color)
+        glow_edge.setAlpha(0)
+        glow.setColorAt(0.0, glow_center)
+        glow.setColorAt(1.0, glow_edge)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(
+            QRectF(
+                center_x - radius,
+                center_y - radius,
+                radius * 2.0,
+                radius * 2.0,
+            )
+        )
+
+        accent = QColor(color).darker(108)
+        accent.setAlpha(round(225 * intensity))
+        painter.setPen(
+            QPen(
+                accent,
+                max(1.1 * self._scale, radius * 0.28),
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        for start, end in (
+            (
+                QPointF(center_x, center_y - radius * 0.88),
+                QPointF(center_x, center_y + radius * 0.88),
+            ),
+            (
+                QPointF(center_x - radius * 0.88, center_y),
+                QPointF(center_x + radius * 0.88, center_y),
+            ),
+        ):
+            painter.drawLine(start, end)
+
+    def _draw_light_bar(
+        self,
+        painter: QPainter,
+        center_x: float,
+        center_y: float,
+        note_width: float,
+        color: QColor,
+        intensity: float,
+    ) -> None:
+        if not isinstance(painter, QPainter):
+            self._draw_light_bar_direct(
+                painter,
+                center_x,
+                center_y,
+                note_width,
+                color,
+                intensity,
+            )
+            return
+        intensity = max(0.0, min(1.0, float(intensity)))
+        center_y = self._quantize_subpixel(center_y)
+        intensity_bucket = min(
+            self.LIGHT_BAR_INTENSITY_STEPS - 1,
+            round(intensity * (self.LIGHT_BAR_INTENSITY_STEPS - 1)),
+        )
+        bar_height, outline_width = self._light_bar_metrics(note_width)
+        glow_height = max(4.0 * self._scale, bar_height * 2.0)
+        asset_height = max(
+            1,
+            math.ceil(
+                max(glow_height, bar_height + outline_width * 2.0) + 4.0
+            ),
+        )
+        asset_top = math.floor(center_y - asset_height / 2.0)
+        local_center_y = center_y - asset_top
+        cache_key = (
+            round(note_width, 2),
+            color.rgba(),
+            intensity_bucket,
+            round(local_center_y * self.SUBPIXEL_STEPS),
+            round(self._scale, 3),
+        )
+        asset = self._light_bar_cache.get(cache_key)
+        if asset is None:
+            quantized_intensity = intensity_bucket / max(
+                1,
+                self.LIGHT_BAR_INTENSITY_STEPS - 1,
+            )
+            asset_width = max(
+                1,
+                math.ceil(note_width + outline_width * 2.0 + 2.0),
+            )
+            asset = QPixmap(asset_width, asset_height)
+            asset.fill(Qt.GlobalColor.transparent)
+            asset_painter = QPainter(asset)
+            asset_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._draw_light_bar_direct(
+                asset_painter,
+                asset_width / 2.0,
+                local_center_y,
+                note_width,
+                color,
+                quantized_intensity,
+            )
+            asset_painter.end()
+            self._light_bar_cache[cache_key] = asset
+        painter.drawPixmap(
+            round(center_x - asset.width() / 2.0),
+            asset_top,
+            asset,
+        )
+
+    def _draw_light_bar_direct(
+        self,
+        painter: QPainter,
+        center_x: float,
+        center_y: float,
+        note_width: float,
+        color: QColor,
+        intensity: float,
+    ) -> None:
+        bar_width = note_width
+        bar_height, outline_width = self._light_bar_metrics(note_width)
+        glow_height = max(4.0 * self._scale, bar_height * 2.0)
+        corner_radius = min(1.2 * self._scale, bar_height / 3.0)
+
+        glow = QLinearGradient(
+            center_x,
+            center_y - glow_height / 2.0,
+            center_x,
+            center_y + glow_height / 2.0,
+        )
+        glow_edge = QColor(color)
+        glow_edge.setAlpha(0)
+        glow_center = QColor(color)
+        glow_center.setAlpha(round(120 * intensity))
+        glow.setColorAt(0.0, glow_edge)
+        glow.setColorAt(0.5, glow_center)
+        glow.setColorAt(1.0, glow_edge)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawRoundedRect(
+            QRectF(
+                center_x - bar_width / 2.0,
+                center_y - glow_height / 2.0,
+                bar_width,
+                glow_height,
+            ),
+            corner_radius,
+            corner_radius,
+        )
+
+        core = QLinearGradient(
+            center_x - bar_width / 2.0,
+            center_y,
+            center_x + bar_width / 2.0,
+            center_y,
+        )
+        edge = QColor(color).lighter(125)
+        edge.setAlpha(round(225 * intensity))
+        center = QColor(255, 255, 255, round(255 * intensity))
+        core.setColorAt(0.0, edge)
+        core.setColorAt(0.18, center)
+        core.setColorAt(0.82, center)
+        core.setColorAt(1.0, edge)
+        outline = QColor(color).darker(108)
+        outline.setAlpha(round(230 * intensity))
+        painter.setPen(QPen(outline, outline_width))
+        painter.setBrush(core)
+        painter.drawRoundedRect(
+            QRectF(
+                center_x - bar_width / 2.0,
+                center_y - bar_height / 2.0,
+                bar_width,
+                bar_height,
+            ),
+            corner_radius,
+            corner_radius,
+        )
+
+    def _light_bar_metrics(self, note_width: float) -> tuple[float, float]:
+        return (
+            max(2.0 * self._scale, note_width * 0.12),
+            max(0.6, 0.65 * self._scale),
+        )
+
+    def _minimum_note_body_height(self, note_width: float) -> float:
+        return max(
+            4.0 * self._scale,
+            min(6.0 * self._scale, note_width * 0.35),
+        )
+
+    def _quantize_subpixel(self, value: float) -> float:
+        return round(float(value) * self.SUBPIXEL_STEPS) / self.SUBPIXEL_STEPS
+
+    def _clamp_light_bar_center(self, center_y: float, note_width: float) -> float:
+        bar_height, outline_width = self._light_bar_metrics(note_width)
+        half_extent = (bar_height + outline_width) / 2.0
+        drawable_bottom = float(self.height() - 1)
+        return max(
+            half_extent,
+            min(drawable_bottom - half_extent, center_y),
+        )
+
+    def _draw_note_span(
+        self,
+        painter: QPainter,
+        x: float,
+        note_width: float,
+        top: float,
+        bottom: float,
+        color: QColor,
+        show_head: bool = True,
+        now: float | None = None,
+        phase_seed: float = 0.0,
+    ) -> None:
+        drawable_top = 0.5
+        drawable_bottom = float(self.height() - 1)
+        top = max(drawable_top, min(drawable_bottom, top))
+        bottom = max(top, min(drawable_bottom, bottom))
+        center_x = x + note_width / 2.0
+        head_y = self._clamp_light_bar_center(bottom, note_width)
+        if show_head:
+            trail_top = min(top, head_y)
+            trail_bottom = max(bottom, head_y)
+        else:
+            trail_top = min(top, bottom)
+            trail_bottom = max(top, bottom)
+        minimum_height = (
+            self._minimum_note_body_height(note_width)
+            if show_head
+            else 0.0
+        )
+        if trail_bottom - trail_top < minimum_height:
+            trail_top = max(drawable_top, trail_bottom - minimum_height)
+        trail_height = max(0.0, trail_bottom - trail_top)
+        if trail_height <= 0.0:
+            return
+
+        if isinstance(painter, QPainter):
+            trail_top = self._quantize_subpixel(trail_top)
+            trail_bottom = max(
+                trail_top,
+                self._quantize_subpixel(trail_bottom),
+            )
+            asset_top = math.floor(trail_top) - 1
+            asset_bottom = math.ceil(trail_bottom) + 1
+            local_top = trail_top - asset_top
+            local_bottom = trail_bottom - asset_top
+            body = self._note_body_asset(
+                note_width,
+                local_top,
+                local_bottom,
+                asset_bottom - asset_top,
+                color,
+                show_head,
+            )
+            painter.drawPixmap(
+                round(center_x - body.width() / 2.0),
+                asset_top,
+                body,
+            )
+            animation_time = time.monotonic() if now is None else now
+            twinkle = 0.82 + 0.18 * (
+                math.sin(animation_time * 7.0 + phase_seed * 0.73) + 1.0
+            ) / 2.0
+            if show_head:
+                self._draw_light_bar(
+                    painter,
+                    center_x,
+                    head_y,
+                    note_width,
+                    color,
+                    twinkle,
+                )
+            return
+
+        glow_width = max(7.0 * self._scale, note_width * 0.58)
+        core_width = max(1.8 * self._scale, note_width * 0.12)
+        glow_gradient = QLinearGradient(0.0, trail_top, 0.0, trail_bottom)
+        core_gradient = QLinearGradient(0.0, trail_top, 0.0, trail_bottom)
+        if show_head:
+            glow_stops = self.APPROACHING_TRAIL_GLOW_STOPS
+            core_stops = self.APPROACHING_TRAIL_CORE_STOPS
+        else:
+            glow_stops = self.HELD_TRAIL_GLOW_STOPS
+            core_stops = self.HELD_TRAIL_CORE_STOPS
+        for position, alpha in glow_stops:
+            stop_color = QColor(color)
+            stop_color.setAlpha(alpha)
+            glow_gradient.setColorAt(position, stop_color)
+        for position, alpha in core_stops:
+            stop_color = (
+                QColor(255, 255, 255)
+                if alpha >= 200
+                else QColor(color).lighter(155)
+            )
+            stop_color.setAlpha(alpha)
+            core_gradient.setColorAt(position, stop_color)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow_gradient)
+        painter.drawRoundedRect(
+            QRectF(
+                center_x - glow_width / 2.0,
+                trail_top,
+                glow_width,
+                trail_height,
+            ),
+            glow_width / 2.0,
+            glow_width / 2.0,
+        )
+        painter.setBrush(core_gradient)
+        painter.drawRoundedRect(
+            QRectF(
+                center_x - core_width / 2.0,
+                trail_top,
+                core_width,
+                trail_height,
+            ),
+            core_width / 2.0,
+            core_width / 2.0,
+        )
+
+        animation_time = time.monotonic() if now is None else now
+        twinkle = 0.82 + 0.18 * (
+            math.sin(animation_time * 7.0 + phase_seed * 0.73) + 1.0
+        ) / 2.0
+        if show_head:
+            self._draw_light_bar(
+                painter,
+                center_x,
+                head_y,
+                note_width,
+                color,
+                twinkle,
+            )
+
+    def _note_body_asset(
+        self,
+        note_width: float,
+        trail_top: float,
+        trail_bottom: float,
+        asset_height: int,
+        color: QColor,
+        show_head: bool,
+    ) -> QPixmap:
+        asset_height = max(1, int(asset_height))
+        trail_top = max(0.0, float(trail_top))
+        trail_bottom = max(trail_top, float(trail_bottom))
+        trail_height = max(0.0, trail_bottom - trail_top)
+        cache_key = (
+            round(note_width, 2),
+            round(trail_top * self.SUBPIXEL_STEPS),
+            round(trail_bottom * self.SUBPIXEL_STEPS),
+            asset_height,
+            color.rgba(),
+            bool(show_head),
+            round(self._scale, 3),
+        )
+        asset = self._note_body_cache.get(cache_key)
+        if asset is not None:
+            return asset
+        glow_width = max(7.0 * self._scale, note_width * 0.58)
+        core_width = max(1.8 * self._scale, note_width * 0.12)
+        asset_width = max(1, math.ceil(max(glow_width, core_width) + 2.0))
+        asset = QPixmap(asset_width, asset_height)
+        asset.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(asset)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        glow_gradient = QLinearGradient(
+            0.0,
+            trail_top,
+            0.0,
+            trail_bottom,
+        )
+        core_gradient = QLinearGradient(
+            0.0,
+            trail_top,
+            0.0,
+            trail_bottom,
+        )
+        if show_head:
+            glow_stops = self.APPROACHING_TRAIL_GLOW_STOPS
+            core_stops = self.APPROACHING_TRAIL_CORE_STOPS
+        else:
+            glow_stops = self.HELD_TRAIL_GLOW_STOPS
+            core_stops = self.HELD_TRAIL_CORE_STOPS
+        for position, alpha in glow_stops:
+            stop_color = QColor(color)
+            stop_color.setAlpha(alpha)
+            glow_gradient.setColorAt(position, stop_color)
+        for position, alpha in core_stops:
+            stop_color = (
+                QColor(255, 255, 255)
+                if alpha >= 200
+                else QColor(color).lighter(155)
+            )
+            stop_color.setAlpha(alpha)
+            core_gradient.setColorAt(position, stop_color)
+        center_x = asset_width / 2.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow_gradient)
+        painter.drawRoundedRect(
+            QRectF(
+                center_x - glow_width / 2.0,
+                trail_top,
+                glow_width,
+                trail_height,
+            ),
+            glow_width / 2.0,
+            glow_width / 2.0,
+        )
+        painter.setBrush(core_gradient)
+        painter.drawRoundedRect(
+            QRectF(
+                center_x - core_width / 2.0,
+                trail_top,
+                core_width,
+                trail_height,
+            ),
+            core_width / 2.0,
+            core_width / 2.0,
+        )
+        painter.end()
+        self._note_body_cache[cache_key] = asset
+        return asset
+
+    def _draw_impact_burst(
+        self,
+        painter: QPainter,
+        x: float,
+        note_width: float,
+        color: QColor,
+        progress: float,
+        intensity: float = 1.0,
+        ray_count: int = 11,
+        ring_count: int = 1,
+        mote_count: int = 4,
+        *,
+        rainbow: bool = False,
+        key_width_scale: float = 1.0,
+        effect_size_scale: float = 1.0,
+        effect_opacity: float = 1.0,
+    ) -> None:
+        if not isinstance(painter, QPainter):
+            self._draw_impact_burst_direct(
+                painter,
+                x,
+                note_width,
+                color,
+                progress,
+                intensity,
+                ray_count,
+                ring_count,
+                mote_count,
+                rainbow=rainbow,
+                key_width_scale=key_width_scale,
+                effect_size_scale=effect_size_scale,
+                effect_opacity=effect_opacity,
+            )
+            return
+        progress = max(0.0, min(1.0, progress))
+        progress_bucket = min(
+            self.IMPACT_PROGRESS_STEPS - 1,
+            round(progress * (self.IMPACT_PROGRESS_STEPS - 1)),
+        )
+        cache_key = (
+            round(note_width, 2),
+            color.rgba(),
+            progress_bucket,
+            round(float(intensity), 3),
+            int(ray_count),
+            int(ring_count),
+            int(mote_count),
+            bool(rainbow),
+            round(float(key_width_scale), 3),
+            round(float(effect_size_scale), 3),
+            round(float(effect_opacity), 3),
+            round(self._scale, 3),
+            self.height(),
+        )
+        asset = self._impact_cache.get(cache_key)
+        margin = max(48.0 * self._scale, note_width * 3.0)
+        if asset is None:
+            asset_width = max(1, math.ceil(note_width + margin * 2.0))
+            asset = QPixmap(asset_width, max(1, self.height()))
+            asset.fill(Qt.GlobalColor.transparent)
+            asset_painter = QPainter(asset)
+            asset_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._draw_impact_burst_direct(
+                asset_painter,
+                margin,
+                note_width,
+                color,
+                progress_bucket / max(1, self.IMPACT_PROGRESS_STEPS - 1),
+                intensity,
+                ray_count,
+                ring_count,
+                mote_count,
+                rainbow=rainbow,
+                key_width_scale=key_width_scale,
+                effect_size_scale=effect_size_scale,
+                effect_opacity=effect_opacity,
+            )
+            asset_painter.end()
+            self._impact_cache[cache_key] = asset
+        painter.drawPixmap(round(x - margin), 0, asset)
+
+    def _draw_impact_burst_direct(
+        self,
+        painter: QPainter,
+        x: float,
+        note_width: float,
+        color: QColor,
+        progress: float,
+        intensity: float = 1.0,
+        ray_count: int = 11,
+        ring_count: int = 1,
+        mote_count: int = 4,
+        *,
+        rainbow: bool = False,
+        key_width_scale: float = 1.0,
+        effect_size_scale: float = 1.0,
+        effect_opacity: float = 1.0,
+    ) -> None:
+        progress = max(0.0, min(1.0, progress))
+        fade = 1.0 - progress
+        spatial_scale = (
+            self.IMPACT_SIZE_SCALE
+            * max(0.5, min(1.0, float(key_width_scale)))
+            * max(0.1, float(effect_size_scale))
+        )
+        center_x = x + note_width / 2.0
+        base_radius = max(
+            4.5 * self._scale,
+            min(note_width * 0.58, 7.2 * self._scale),
+        ) * intensity * spatial_scale
+        center_y = self._impact_origin_y()
+        center_color = (
+            self._rainbow_impact_color(0, 7, progress)
+            if rainbow
+            else QColor(color)
+        )
+        painter.save()
+        painter.setOpacity(
+            painter.opacity()
+            * self.IMPACT_OPACITY
+            * max(0.0, min(1.0, float(effect_opacity)))
+        )
+        self._draw_impact_core(
+            painter,
+            center_x,
+            center_y,
+            base_radius * (1.0 + progress * 0.45),
+            center_color,
+            fade,
+        )
+
+        for ring_index in range(max(0, ring_count)):
+            ring_color = (
+                self._rainbow_impact_color(
+                    ring_index * 3 + 1,
+                    max(7, ring_count * 3),
+                    progress,
+                ).lighter(120)
+                if rainbow
+                else QColor(color).lighter(150 + ring_index * 12)
+            )
+            ring_color.setAlpha(
+                round(235 * fade * max(0.45, 1.0 - ring_index * 0.28))
+            )
+            ring_radius = (
+                base_radius
+                * (0.72 + progress * 2.1)
+                * (1.0 + ring_index * 0.48)
+            )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(
+                QPen(
+                    ring_color,
+                    max(0.9 * self._scale, 1.8 * self._scale * fade),
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                )
+            )
+            painter.drawEllipse(
+                QPointF(center_x, center_y),
+                ring_radius,
+                ring_radius * 0.52,
+            )
+
+        particle_radius = (
+            max(0.75 * self._scale, 1.55 * self._scale * fade)
+            * spatial_scale
+        )
+        ray_count = max(1, int(ray_count))
+        angles = tuple(
+            270.0
+            if ray_count == 1
+            else 195.0 + 150.0 * index / (ray_count - 1)
+            for index in range(ray_count)
+        )
+        for index, angle in enumerate(angles):
+            ray_color = (
+                self._rainbow_impact_color(index, ray_count, progress)
+                if rainbow
+                else QColor(color).lighter(135)
+            )
+            ray_color.setAlpha(round(220 * fade))
+            particle_color = (
+                QColor(ray_color).lighter(145)
+                if rainbow
+                else QColor(color).lighter(155)
+            )
+            particle_color.setAlpha(round(235 * fade))
+            painter.setPen(
+                QPen(
+                    ray_color,
+                    max(0.8 * self._scale, 1.4 * self._scale * fade),
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                )
+            )
+            radians = math.radians(angle)
+            spread = 0.86 + 0.18 * (index % 3)
+            start_distance = (
+                base_radius * 0.52
+                + 2.5
+                * self._scale
+                * progress
+                * spatial_scale
+            )
+            end_distance = (
+                base_radius
+                + (3.0 + 14.0 * progress)
+                * self._scale
+                * spread
+                * spatial_scale
+            )
+            start = QPointF(
+                center_x + math.cos(radians) * start_distance,
+                center_y + math.sin(radians) * start_distance,
+            )
+            end = QPointF(
+                center_x + math.cos(radians) * end_distance,
+                center_y + math.sin(radians) * end_distance,
+            )
+            painter.drawLine(start, end)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(particle_color)
+            painter.drawEllipse(end, particle_radius, particle_radius)
+            painter.setPen(
+                QPen(
+                    ray_color,
+                    max(0.8 * self._scale, 1.4 * self._scale * fade),
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                )
+            )
+        mote_angles = (205, 225, 245, 285, 305, 325, 345)
+        for mote_index, angle in enumerate(
+            mote_angles[:max(0, min(len(mote_angles), mote_count))]
+        ):
+            radians = math.radians(angle)
+            distance = (
+                base_radius
+                + (8.0 + 20.0 * progress)
+                * self._scale
+                * spatial_scale
+            )
+            mote = QPointF(
+                center_x + math.cos(radians) * distance,
+                center_y + math.sin(radians) * distance,
+            )
+            mote_color = (
+                self._rainbow_impact_color(
+                    mote_index + 2,
+                    max(7, mote_count),
+                    progress,
+                ).lighter(130)
+                if rainbow
+                else QColor(color).lighter(175)
+            )
+            mote_color.setAlpha(round(205 * fade))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(mote_color)
+            mote_radius = (
+                max(0.8 * self._scale, 1.8 * self._scale * fade)
+                * spatial_scale
+            )
+            painter.drawEllipse(mote, mote_radius, mote_radius)
+        painter.restore()
+
+    @staticmethod
+    def _rainbow_impact_color(
+        index: int,
+        count: int,
+        progress: float,
+    ) -> QColor:
+        count = max(1, int(count))
+        hue = round(
+            (int(index) % count) * 360.0 / count
+            + max(0.0, min(1.0, float(progress))) * 80.0
+        ) % 360
+        return QColor.fromHsv(hue, 235, 255)
+
+    def _impact_style(
+        self,
+        judgment: str,
+    ) -> tuple[QColor, float, int, int, int]:
+        if judgment == "PERFECT":
+            return QColor("#ffd84d"), 1.50, 17, 2, 7
+        if judgment == "GREAT":
+            return QColor("#52e5ff"), 1.05, 10, 1, 4
+        return QColor(self._scheduled).lighter(120), 0.72, 5, 0, 2
+
+    def _impact_key_width_scale(
+        self,
+        note_width: float,
+        available_width: float,
+    ) -> float:
+        white_note_count = sum(
+            1
+            for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
+            if note % 12 in self.WHITE_PITCH_CLASSES
+        )
+        white_width = max(1.0, float(available_width)) / white_note_count
+        return max(0.5, min(1.0, float(note_width) / white_width))
+
+    def _impact_duration(self, judgment: str) -> float:
+        return self.IMPACT_DURATION_SECONDS.get(
+            judgment,
+            self.IMPACT_DURATION_SECONDS["GOOD"],
+        )
+
+    def _impact_origin_y(self) -> float:
+        return float(self.height() - 1)
+
+    def _draw_lane_glow(
+        self,
+        painter: QPainter,
+        x: float,
+        note_width: float,
+        height: float,
+        color: QColor,
+        opacity: float,
+    ) -> None:
+        opacity = max(0.0, min(1.0, float(opacity)))
+        if opacity <= 0.0:
+            return
+        edge_color = QColor(color)
+        edge_color.setAlpha(round(255 * opacity * 0.28))
+        center_color = QColor(color)
+        center_color.setAlpha(round(255 * opacity))
+        gradient = QLinearGradient(x, 0.0, x + note_width, 0.0)
+        gradient.setColorAt(0.0, edge_color)
+        gradient.setColorAt(0.5, center_color)
+        gradient.setColorAt(1.0, edge_color)
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawRect(QRectF(x, 0.5, note_width, height))
+        painter.restore()
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width = max(1.0, float(self.width() - 1))
+        height = max(1.0, float(self.height() - 1))
+        dirty_region = event.region()
+        painter.drawPixmap(0, 0, self._ensure_static_layer(width, height))
+        now = time.monotonic()
+
+        for impact in self._hit_impacts:
+            horizontal = self._note_rect(impact.note, width)
+            if horizontal is None:
+                continue
+            elapsed = max(0.0, now - impact.started_at)
+            duration = self._impact_duration(impact.judgment)
+            if elapsed > duration:
+                continue
+            x, note_width = horizontal
+            effect_margin = max(48.0 * self._scale, note_width * 3.0)
+            if not self._region_intersects_lane(
+                dirty_region,
+                x,
+                note_width,
+                height,
+                effect_margin,
+            ):
+                continue
+            color, intensity, ray_count, ring_count, mote_count = (
+                self._impact_style(impact.judgment)
+            )
+            effect_size_scale = 1.0
+            effect_opacity = (
+                self.PERFECT_IMPACT_OPACITY
+                if impact.judgment == "PERFECT"
+                else 1.0
+            )
+            if impact.released:
+                effect_size_scale = self.RELEASE_IMPACT_SIZE_SCALE
+                effect_opacity = (
+                    self.PERFECT_RELEASE_IMPACT_OPACITY
+                    if impact.judgment == "PERFECT"
+                    else self.RELEASE_IMPACT_OPACITY
+                )
+                ray_count = max(
+                    1,
+                    round(ray_count * self.RELEASE_IMPACT_PARTICLE_SCALE),
+                )
+                mote_count = round(
+                    mote_count * self.RELEASE_IMPACT_PARTICLE_SCALE
+                )
+            self._draw_impact_burst(
+                painter,
+                x,
+                note_width,
+                color,
+                elapsed / duration,
+                intensity,
+                ray_count,
+                ring_count,
+                mote_count,
+                rainbow=impact.judgment == "PERFECT",
+                key_width_scale=self._impact_key_width_scale(
+                    note_width,
+                    width,
+                ),
+                effect_size_scale=effect_size_scale,
+                effect_opacity=effect_opacity,
+            )
+
+        for note in sorted(self._held_lane_counts):
+            horizontal = self._note_rect(note, width)
+            if horizontal is None:
+                continue
+            x, note_width = horizontal
+            if not self._region_intersects_lane(
+                dirty_region,
+                x,
+                note_width,
+                height,
+            ):
+                continue
+            self._draw_lane_glow(
+                painter,
+                x,
+                note_width,
+                height,
+                QColor(self._live),
+                self.HELD_LANE_OPACITY,
+            )
+
+        for fade in self._lane_fades:
+            horizontal = self._note_rect(fade.note, width)
+            if horizontal is None:
+                continue
+            elapsed = max(0.0, now - fade.started_at)
+            if elapsed > self.LANE_FADE_SECONDS:
+                continue
+            x, note_width = horizontal
+            if not self._region_intersects_lane(
+                dirty_region,
+                x,
+                note_width,
+                height,
+            ):
+                continue
+            progress = elapsed / self.LANE_FADE_SECONDS
+            self._draw_lane_glow(
+                painter,
+                x,
+                note_width,
+                height,
+                QColor(self._live),
+                self.HELD_LANE_OPACITY * (1.0 - progress) ** 2,
+            )
+
+        if self._grid_layer is not None:
+            painter.drawPixmap(0, 0, self._grid_layer)
+
+        if not self._frame_visible_notes and self._sequence_notes:
+            self._prepare_animation_frame(now)
+        position = self._frame_position
+        song_horizon = self.PREVIEW_SECONDS * self._speed_ratio
+        for note in self._frame_visible_notes:
+            horizontal = self._note_rect(note.note, width)
+            if horizontal is None:
+                continue
+            x, note_width = horizontal
+            if not self._region_intersects_lane(
+                dirty_region,
+                x,
+                note_width,
+                height,
+            ):
+                continue
+            top = height - ((note.end - position) / song_horizon) * height
+            bottom = height - ((note.start - position) / song_horizon) * height
+            self._draw_note_span(
+                painter,
+                x,
+                note_width,
+                top,
+                bottom,
+                QColor(
+                    self._melody_scheduled
+                    if note.melody
+                    else self._scheduled
+                ),
+                show_head=position < note.start,
+                now=now,
+                phase_seed=note.note + note.start,
+            )
+
+        if self._frame_layer is not None:
+            painter.drawPixmap(0, 0, self._frame_layer)
+        painter.end()
+
+
 class ContentPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1426,6 +3377,8 @@ class TrackChannelButton(QToolButton):
         self._enabled_foreground = QColor("#ffffff")
         self._disabled_background = QColor("#dff6fc")
         self._disabled_foreground = QColor("#12323b")
+        self._melody_highlight = QColor("#12323b")
+        self._melody = False
         self.setObjectName("TrackChannelButton")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1448,6 +3401,14 @@ class TrackChannelButton(QToolButton):
         self._enabled_foreground = QColor(enabled_foreground)
         self._disabled_background = QColor(disabled_background)
         self._disabled_foreground = QColor(disabled_foreground)
+        self.update()
+
+    def set_melody(self, melody: bool, highlight: QColor) -> None:
+        self._melody = bool(melody)
+        self._melody_highlight = QColor(highlight)
+        font = self.font()
+        font.setBold(self._melody)
+        self.setFont(font)
         self.update()
 
     def _circle_rect(self) -> QRectF:
@@ -1480,10 +3441,23 @@ class TrackChannelButton(QToolButton):
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(border, max(1.0, self._diameter / 18)))
+        painter.setPen(
+            QPen(
+                self._melody_highlight if self._melody else border,
+                (
+                    max(2.0, self._diameter / 7)
+                    if self._melody
+                    else max(1.0, self._diameter / 18)
+                ),
+            )
+        )
         painter.setBrush(background)
         bounds = self._circle_rect().adjusted(0.5, 0.5, -0.5, -0.5)
         painter.drawEllipse(bounds)
+        if self._melody:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(border, max(1.0, self._diameter / 18)))
+            painter.drawEllipse(bounds.adjusted(2.0, 2.0, -2.0, -2.0))
         painter.setPen(foreground)
         font = self.font()
         metrics = QFontMetricsF(font)
@@ -1638,6 +3612,7 @@ class TrackChannelTable(QTableWidget):
         self._enabled_foreground = QColor("#ffffff")
         self._disabled_background = QColor("#dff6fc")
         self._disabled_foreground = QColor("#12323b")
+        self._melody_highlight = QColor("#12323b")
 
     def apply_scale(self, scale: float) -> None:
         self._ui_scale = scale
@@ -1690,6 +3665,7 @@ class TrackChannelTable(QTableWidget):
                 self._disabled_background,
                 self._disabled_foreground,
             )
+            button.set_melody(source.melody, self._melody_highlight)
             self.setRowHeight(row, max(1, round(22 * self._ui_scale)))
 
     def set_colors(
@@ -1698,11 +3674,13 @@ class TrackChannelTable(QTableWidget):
         enabled_foreground: str,
         disabled_background: str,
         disabled_foreground: str,
+        melody_highlight: str,
     ) -> None:
         self._enabled_background = QColor(enabled_background)
         self._enabled_foreground = QColor(enabled_foreground)
         self._disabled_background = QColor(disabled_background)
         self._disabled_foreground = QColor(disabled_foreground)
+        self._melody_highlight = QColor(melody_highlight)
         for row in range(self.rowCount()):
             button = self.cellWidget(row, 0)
             if isinstance(button, TrackChannelButton):
@@ -1712,6 +3690,7 @@ class TrackChannelTable(QTableWidget):
                     self._disabled_background,
                     self._disabled_foreground,
                 )
+                button.set_melody(button._melody, self._melody_highlight)
         self.viewport().update()
 
 

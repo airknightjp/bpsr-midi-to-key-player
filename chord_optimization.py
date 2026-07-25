@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from config import shift_midi_note
+from melody_detection import MelodySource, detect_melody_source
 from midi_parser import MidiEvent
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 
@@ -21,6 +22,8 @@ LARGE_VOICE_GAP_SEMITONES = 16
 LARGE_VOICE_GAP_COST = 0.22
 PHRASE_RANGE_SWITCH_COST_FACTOR = 0.35
 EXPRESSIVE_CHORD_MAX_OFFSET_SECONDS = 0.012
+MELODY_OCTAVE_MOVE_COST = 1600.0
+MELODY_DROP_COST = 10000.0
 
 EventEnabledCallback = Callable[[MidiEvent], bool]
 ProgressCallback = Callable[[int], None]
@@ -44,6 +47,7 @@ class ChordOptimizationCancelled(Exception):
 class ChordOptimizationPlan:
     event_targets: dict[int, int | None]
     event_timing_offsets: dict[int, float]
+    melody_source: MelodySource | None = None
 
     def target_for(self, event: MidiEvent) -> EventTarget:
         event_id = id(event)
@@ -60,6 +64,7 @@ class _OptimizationEntry:
     event: MidiEvent
     note: int
     velocity: int
+    melody: bool
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,7 @@ def build_chord_optimization_plan(
     transpose_semitones: int = 0,
     octave_shift: int = 0,
     playback_speed_percent: int = 100,
+    prioritize_melody: bool = False,
     event_enabled: EventEnabledCallback | None = None,
     progress_callback: ProgressCallback | None = None,
     cancel_callback: CancelCallback | None = None,
@@ -117,6 +123,15 @@ def build_chord_optimization_plan(
         ):
             eligible_note_ons.append(event)
         report_progress(index + 1)
+    melody_source = detect_melody_source(ordered_events)
+    melody_priority_source = (
+        melody_source
+        if (
+            prioritize_melody
+            and len({_event_source(event) for event in eligible_note_ons}) > 1
+        )
+        else None
+    )
     onset_groups = _group_note_ons(eligible_note_ons)
     group_starts = {
         id(group[0]): group
@@ -155,9 +170,16 @@ def build_chord_optimization_plan(
                 occupied_targets=set(occupied_targets),
                 playback_speed_ratio=playback_speed_ratio,
                 phrase_boundary=phrase_boundary,
+                melody_source=melody_priority_source,
             )
             targets.update(group_targets)
-            timing_offsets.update(_expressive_group_offsets(group, group_targets))
+            timing_offsets.update(
+                _expressive_group_offsets(
+                    group,
+                    group_targets,
+                    melody_priority_source,
+                )
+            )
             if choice.state != current_state:
                 current_state = choice.state
                 last_state_change_time = group[0].time / playback_speed_ratio
@@ -204,7 +226,7 @@ def build_chord_optimization_plan(
         report_progress(total_events + index + 1)
 
     report_progress(total_work)
-    return ChordOptimizationPlan(targets, timing_offsets)
+    return ChordOptimizationPlan(targets, timing_offsets, melody_source)
 
 
 def _group_note_ons(note_ons: list[MidiEvent]) -> list[list[MidiEvent]]:
@@ -235,6 +257,7 @@ def _optimize_group(
     occupied_targets: set[int],
     playback_speed_ratio: float,
     phrase_boundary: bool,
+    melody_source: MelodySource | None,
 ) -> tuple[dict[int, int | None], _GroupChoice]:
     grouped_by_note: dict[int, list[MidiEvent]] = defaultdict(list)
     group_targets: dict[int, int | None] = {}
@@ -250,13 +273,18 @@ def _optimize_group(
     for note, same_pitch_events in grouped_by_note.items():
         representative = max(
             same_pitch_events,
-            key=lambda event: (event.velocity or 0, -group_order[id(event)]),
+            key=lambda event: (
+                _event_source(event) == melody_source,
+                event.velocity or 0,
+                -group_order[id(event)],
+            ),
         )
         entries.append(
             _OptimizationEntry(
                 event=representative,
                 note=note,
                 velocity=representative.velocity or 64,
+                melody=_event_source(representative) == melody_source,
             )
         )
         for event in same_pitch_events:
@@ -388,6 +416,8 @@ def _target_cost(
     occupied_targets: set[int],
 ) -> float:
     cost = abs(target - entry.note) / 12.0 * OCTAVE_MOVE_COST
+    if entry.melody and target != entry.note:
+        cost += MELODY_OCTAVE_MOVE_COST
     if target in occupied_targets:
         cost += OCCUPIED_KEY_COST
     if previous_targets:
@@ -407,6 +437,8 @@ def _target_cost(
 
 
 def _drop_cost(entry: _OptimizationEntry, index: int, last_index: int) -> float:
+    if entry.melody:
+        return MELODY_DROP_COST + entry.velocity
     if index == 0 or index == last_index:
         return 1200.0 + entry.velocity
     return 260.0 + entry.velocity * 0.25
@@ -420,6 +452,7 @@ def _pitch_candidates(note: int, low: int, high: int) -> tuple[int, ...]:
 def _expressive_group_offsets(
     group: list[MidiEvent],
     group_targets: dict[int, int | None],
+    melody_source: MelodySource | None,
 ) -> dict[int, float]:
     offsets = {id(event): 0.0 for event in group}
     events_by_time: dict[float, list[MidiEvent]] = defaultdict(list)
@@ -452,6 +485,9 @@ def _expressive_group_offsets(
             )
             delay = 0.002 + innerness * 0.007 + velocity_delay
             offsets[id(event)] = min(EXPRESSIVE_CHORD_MAX_OFFSET_SECONDS, delay)
+        for event in simultaneous:
+            if _event_source(event) == melody_source:
+                offsets[id(event)] = 0.0
     return offsets
 
 
@@ -484,4 +520,11 @@ def _source_owner(event: MidiEvent) -> SourceOwner:
         event.track if event.track is not None else -1,
         event.channel if event.channel is not None else 0,
         event.note if event.note is not None else -1,
+    )
+
+
+def _event_source(event: MidiEvent) -> MelodySource:
+    return (
+        event.track if event.track is not None else 0,
+        event.channel if event.channel is not None else 0,
     )

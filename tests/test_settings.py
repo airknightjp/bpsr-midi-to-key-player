@@ -30,11 +30,17 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.keyboard_play_shortcut, "F9")
         self.assertEqual(settings.keyboard_pause_shortcut, "F10")
         self.assertEqual(settings.keyboard_stop_shortcut, "F11")
-        self.assertEqual(settings.automatic_audio_buffer_frames, 512)
         self.assertFalse(hasattr(settings, "auto_audio_buffer"))
-        self.assertIsNone(settings.minimum_stable_qt_frames)
-        self.assertEqual(settings.qt_audio_environment, "")
+        self.assertFalse(hasattr(settings, "automatic_audio_buffer_frames"))
+        self.assertFalse(hasattr(settings, "minimum_stable_qt_frames"))
+        self.assertFalse(hasattr(settings, "qt_audio_environment"))
+        self.assertFalse(hasattr(settings, "audio_tuning_profiles"))
         self.assertFalse(hasattr(settings, "qt_frames_retest_after"))
+        self.assertEqual(settings.audio_qt_frames, 1_024)
+        self.assertEqual(settings.audio_buffer_frames, 512)
+        self.assertEqual(settings.audio_response_frames, 256)
+        self.assertEqual(settings.audio_chunk_frames, 1_024)
+        self.assertEqual(settings.audio_fallback_interval_ms, 4)
         self.assertEqual(settings.input_conversion_mode, "midi_file")
         self.assertEqual(settings.sound_playback_mode, "off")
         self.assertTrue(settings.play_sound)
@@ -64,6 +70,9 @@ class SettingsTests(unittest.TestCase):
     def test_default_theme_is_sky_blue(self) -> None:
         self.assertEqual(AppSettings().color_theme, "sky_blue")
 
+    def test_melody_priority_is_off_by_default(self) -> None:
+        self.assertFalse(AppSettings().melody_priority)
+
     def test_new_settings_round_trip(self) -> None:
         with isolated_settings_directory() as settings_dir:
             save_settings(
@@ -79,6 +88,7 @@ class SettingsTests(unittest.TestCase):
                     octave_shift=2,
                     humanize_timing=True,
                     chord_optimization=True,
+                    melody_priority=True,
                     chord_strum=True,
                     auto_sustain=True,
                     repeat_prevention=True,
@@ -105,9 +115,11 @@ class SettingsTests(unittest.TestCase):
                     sustain_key="space",
                     octave_down_key="[",
                     octave_up_key="]",
-                    automatic_audio_buffer_frames=2_048,
-                    minimum_stable_qt_frames=512,
-                    qt_audio_environment="device|48000|2|Float",
+                    audio_qt_frames=512,
+                    audio_buffer_frames=256,
+                    audio_response_frames=128,
+                    audio_chunk_frames=512,
+                    audio_fallback_interval_ms=8,
                     last_update_check_at=1_789_123_456,
                     panel_order=(
                         "player",
@@ -134,6 +146,9 @@ class SettingsTests(unittest.TestCase):
 
         self.assertFalse(saved_payload["play_sound"])
         self.assertNotIn("dry_run", saved_payload)
+        self.assertNotIn("automatic_audio_buffer_frames", saved_payload)
+        self.assertNotIn("minimum_stable_qt_frames", saved_payload)
+        self.assertNotIn("qt_audio_environment", saved_payload)
         self.assertEqual(loaded.color_theme, "orange")
         self.assertEqual(loaded.sound_source, "synth")
         self.assertTrue(loaded.always_on_top)
@@ -152,6 +167,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.octave_shift, 2)
         self.assertTrue(loaded.humanize_timing)
         self.assertTrue(loaded.chord_optimization)
+        self.assertTrue(loaded.melody_priority)
         self.assertTrue(loaded.chord_strum)
         self.assertTrue(loaded.auto_sustain)
         self.assertTrue(loaded.repeat_prevention)
@@ -182,12 +198,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.sustain_key, "space")
         self.assertEqual(loaded.octave_down_key, "[")
         self.assertEqual(loaded.octave_up_key, "]")
-        self.assertEqual(loaded.automatic_audio_buffer_frames, 2_048)
-        self.assertEqual(loaded.minimum_stable_qt_frames, 512)
-        self.assertEqual(
-            loaded.qt_audio_environment,
-            "device|48000|2|Float",
-        )
+        self.assertEqual(loaded.audio_qt_frames, 512)
+        self.assertEqual(loaded.audio_buffer_frames, 256)
+        self.assertEqual(loaded.audio_response_frames, 128)
+        self.assertEqual(loaded.audio_chunk_frames, 512)
+        self.assertEqual(loaded.audio_fallback_interval_ms, 8)
         self.assertEqual(loaded.last_update_check_at, 1_789_123_456)
 
     def test_removed_dry_run_setting_is_not_loaded(self) -> None:
@@ -218,11 +233,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(clamped.midi_column_widths, (40, 180, 2000))
         self.assertEqual(reset.midi_column_widths, (630, 180, 80))
 
-    def test_invalid_qt_value_and_legacy_retest_date_are_discarded(self) -> None:
+    def test_legacy_audio_learning_keys_are_discarded(self) -> None:
         with isolated_settings_directory() as settings_dir:
             settings_path = settings_dir / "settings.json"
             settings_path.write_text(
                 '{"minimum_stable_qt_frames":333,'
+                '"qt_audio_environment":"old-device",'
+                '"automatic_audio_buffer_frames":2048,'
                 '"qt_frames_retest_after":1800000000}',
                 encoding="utf-8",
             )
@@ -231,19 +248,12 @@ class SettingsTests(unittest.TestCase):
             save_settings(loaded)
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
 
-        self.assertIsNone(loaded.minimum_stable_qt_frames)
+        self.assertFalse(hasattr(loaded, "audio_tuning_profiles"))
+        self.assertNotIn("minimum_stable_qt_frames", saved)
+        self.assertNotIn("qt_audio_environment", saved)
+        self.assertNotIn("automatic_audio_buffer_frames", saved)
         self.assertNotIn("qt_frames_retest_after", saved)
-
-    def test_invalid_audio_buffer_value_uses_default(self) -> None:
-        with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"automatic_audio_buffer_frames":333}',
-                encoding="utf-8",
-            )
-
-            loaded = load_settings()
-
-        self.assertEqual(loaded.automatic_audio_buffer_frames, 512)
+        self.assertNotIn("audio_tuning_profiles", saved)
 
     def test_invalid_panel_order_is_repaired_without_duplicates(self) -> None:
         with isolated_settings_directory() as settings_dir:
@@ -306,7 +316,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(loaded.sound_source, "piano")
 
-    def test_legacy_manual_audio_buffer_settings_are_not_preserved(self) -> None:
+    def test_manual_audio_buffer_setting_is_preserved(self) -> None:
         with isolated_settings_directory() as settings_dir:
             settings_path = settings_dir / "settings.json"
             settings_path.write_text(
@@ -318,8 +328,8 @@ class SettingsTests(unittest.TestCase):
             save_settings(loaded)
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
 
-        self.assertFalse(hasattr(loaded, "audio_buffer_frames"))
-        self.assertNotIn("audio_buffer_frames", saved)
+        self.assertEqual(loaded.audio_buffer_frames, 512)
+        self.assertEqual(saved["audio_buffer_frames"], 512)
         self.assertNotIn("auto_audio_buffer", saved)
 
     def test_previous_default_shortcuts_are_migrated(self) -> None:

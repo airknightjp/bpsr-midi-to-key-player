@@ -81,13 +81,14 @@ def main() -> int:
     time.sleep(0.25)
 
     app = QCoreApplication([])
-    runtime_changes: list[tuple[int, int, str]] = []
+    runtime_changes: list[
+        tuple[int, int, int, int, int, str]
+    ] = []
     client = SoftwareSynthClient(
         "organ",
-        on_runtime_changed=lambda qt, buffer, reason: runtime_changes.append(
-            (qt, buffer, reason)
+        on_runtime_changed=lambda qt, buffer, response, chunk, fallback, reason: runtime_changes.append(
+            (qt, buffer, response, chunk, fallback, reason)
         ),
-        minimum_stable_qt_frames=1_024,
     )
     if not client.open():
         raise RuntimeError(client.last_error)
@@ -98,13 +99,14 @@ def main() -> int:
     switch_results: list[tuple[int, bool, int]] = []
 
     def switch(frames: int) -> None:
-        with engine._lock:
-            changed = (
-                False
-                if engine._requested_qt_frames == frames
-                else engine._recreate_output_locked(frames)
-            )
-            switch_results.append((frames, changed, engine.qt_frames))
+        changed = client.set_audio_settings(
+            frames,
+            client.buffer_frames,
+            client.response_frames,
+            client.chunk_frames,
+            client.fallback_interval_ms,
+        )
+        switch_results.append((frames, changed, engine.qt_frames))
 
     if not args.baseline:
         QTimer.singleShot(2_000, lambda: switch(512))

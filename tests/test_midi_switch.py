@@ -49,6 +49,7 @@ class RecordingSoundPlayer(MidiSoundPlayer):
         velocity: int,
         owner_note: int | None = None,
         output_callback=None,
+        melody: bool = False,
     ) -> None:
         self.sent_notes.append((channel, note, velocity))
         self._active_notes.add((channel, note))
@@ -525,6 +526,37 @@ class MidiSwitchTests(unittest.TestCase):
         player._refresh_chord_optimization_plan(events)
         player._optimization_planner.wait(timeout=1.0)
         self.assertEqual(player._chord_optimization_plan_speed, 137)
+
+    def test_melody_priority_change_rebuilds_sound_optimization_plan(
+        self,
+    ) -> None:
+        player = RecordingShortMessageSoundPlayer(
+            chord_optimization=True,
+            melody_priority=False,
+            auto_fit_note_range=False,
+        )
+        events = [
+            MidiEvent(0.0, "note_on", 0, 36, 70, track=0),
+            MidiEvent(0.0, "note_on", 0, 64, 70, track=0),
+            MidiEvent(0.0, "note_on", 0, 79, 70, track=0),
+            MidiEvent(0.0, "note_on", 1, 96, 100, track=1),
+        ]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        self.assertFalse(player._chord_optimization_plan_melody_priority)
+        self.assertEqual(
+            player.current_chord_optimization_plan().target_for(events[-1]),
+            (True, 72),
+        )
+
+        player.set_melody_priority(True)
+        player._optimization_planner.wait(timeout=1.0)
+
+        self.assertTrue(player._chord_optimization_plan_melody_priority)
+        self.assertEqual(
+            player.current_chord_optimization_plan().target_for(events[-1]),
+            (True, 96),
+        )
 
 
 if __name__ == "__main__":

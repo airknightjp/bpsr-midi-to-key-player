@@ -69,10 +69,6 @@ $ArgsList = @(
     "assets\whale_slider_frame_2.png;assets",
     "--add-data",
     "assets\check_white.svg;assets",
-    "--add-data",
-    "qml;qml",
-    "--additional-hooks-dir",
-    "hooks",
     "--name",
     "BPSR_MIDI_to_KEY_Player",
     "main.py"

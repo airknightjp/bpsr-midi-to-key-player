@@ -314,6 +314,15 @@ def build_stylesheet(
     }}
     QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 2px solid {palette.accent}; }}
     QComboBox::drop-down {{ width: {control_height}px; border: none; }}
+    QComboBox#AudioQtCombo, QComboBox#AudioBufferCombo {{
+        min-height: {round(20 * scale)}px;
+        max-height: {round(20 * scale)}px;
+        padding: 0 {round(4 * scale)}px;
+    }}
+    QComboBox#AudioQtCombo::drop-down,
+    QComboBox#AudioBufferCombo::drop-down {{
+        width: {round(18 * scale)}px;
+    }}
     QComboBox QAbstractItemView {{
         background: {palette.surface};
         color: {palette.text};

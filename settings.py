@@ -31,13 +31,19 @@ from config import (
 )
 from i18n import normalize_color_theme, normalize_language
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
-from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
 from audio_buffer import (
     DEFAULT_AUDIO_BUFFER_FRAMES,
-    QT_AUDIO_FRAME_OPTIONS,
+    DEFAULT_AUDIO_CHUNK_FRAMES,
+    DEFAULT_AUDIO_FALLBACK_INTERVAL_MS,
+    DEFAULT_AUDIO_RESPONSE_FRAMES,
+    DEFAULT_QT_AUDIO_FRAMES,
     normalize_audio_buffer_frames,
+    normalize_audio_chunk_frames,
+    normalize_audio_fallback_interval_ms,
+    normalize_audio_response_frames,
     normalize_qt_audio_frames,
 )
+from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
 
 
 SETTINGS_FILE_NAME = "settings.json"
@@ -57,6 +63,7 @@ class AppSettings:
     octave_shift: int = 0
     humanize_timing: bool = False
     chord_optimization: bool = False
+    melody_priority: bool = False
     chord_strum: bool = False
     auto_sustain: bool = False
     repeat_prevention: bool = False
@@ -88,9 +95,11 @@ class AppSettings:
         default_factory=lambda: dict(DEFAULT_SECTION_VISIBILITY)
     )
     last_update_check_at: int = 0
-    automatic_audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
-    minimum_stable_qt_frames: int | None = None
-    qt_audio_environment: str = ""
+    audio_qt_frames: int = DEFAULT_QT_AUDIO_FRAMES
+    audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
+    audio_response_frames: int = DEFAULT_AUDIO_RESPONSE_FRAMES
+    audio_chunk_frames: int = DEFAULT_AUDIO_CHUNK_FRAMES
+    audio_fallback_interval_ms: int = DEFAULT_AUDIO_FALLBACK_INTERVAL_MS
 
 def load_settings() -> AppSettings:
     global _last_settings_error
@@ -181,6 +190,7 @@ def load_settings() -> AppSettings:
         ),
         humanize_timing=_parse_bool(data.get("humanize_timing"), default=False),
         chord_optimization=_parse_bool(data.get("chord_optimization"), default=False),
+        melody_priority=_parse_bool(data.get("melody_priority"), default=False),
         chord_strum=_parse_bool(data.get("chord_strum"), default=False),
         auto_sustain=_parse_bool(data.get("auto_sustain"), default=False),
         repeat_prevention=_parse_bool(data.get("repeat_prevention"), default=False),
@@ -228,13 +238,21 @@ def load_settings() -> AppSettings:
         last_update_check_at=_parse_nonnegative_int(
             data.get("last_update_check_at")
         ),
-        automatic_audio_buffer_frames=normalize_audio_buffer_frames(
-            data.get("automatic_audio_buffer_frames")
+        audio_qt_frames=normalize_qt_audio_frames(
+            data.get("audio_qt_frames")
         ),
-        minimum_stable_qt_frames=_parse_optional_qt_frames(
-            data.get("minimum_stable_qt_frames")
+        audio_buffer_frames=normalize_audio_buffer_frames(
+            data.get("audio_buffer_frames")
         ),
-        qt_audio_environment=_parse_str(data.get("qt_audio_environment")),
+        audio_response_frames=normalize_audio_response_frames(
+            data.get("audio_response_frames")
+        ),
+        audio_chunk_frames=normalize_audio_chunk_frames(
+            data.get("audio_chunk_frames")
+        ),
+        audio_fallback_interval_ms=normalize_audio_fallback_interval_ms(
+            data.get("audio_fallback_interval_ms")
+        ),
     )
     return settings
 
@@ -256,6 +274,7 @@ def save_settings(settings: AppSettings) -> None:
             "octave_shift": settings.octave_shift,
             "humanize_timing": settings.humanize_timing,
             "chord_optimization": settings.chord_optimization,
+            "melody_priority": settings.melody_priority,
             "chord_strum": settings.chord_strum,
             "auto_sustain": settings.auto_sustain,
             "repeat_prevention": settings.repeat_prevention,
@@ -301,15 +320,21 @@ def save_settings(settings: AppSettings) -> None:
             "last_update_check_at": _parse_nonnegative_int(
                 settings.last_update_check_at
             ),
-            "automatic_audio_buffer_frames": normalize_audio_buffer_frames(
-                settings.automatic_audio_buffer_frames
+            "audio_qt_frames": normalize_qt_audio_frames(
+                settings.audio_qt_frames
             ),
-            "minimum_stable_qt_frames": (
-                normalize_qt_audio_frames(settings.minimum_stable_qt_frames)
-                if settings.minimum_stable_qt_frames is not None
-                else None
+            "audio_buffer_frames": normalize_audio_buffer_frames(
+                settings.audio_buffer_frames
             ),
-            "qt_audio_environment": settings.qt_audio_environment,
+            "audio_response_frames": normalize_audio_response_frames(
+                settings.audio_response_frames
+            ),
+            "audio_chunk_frames": normalize_audio_chunk_frames(
+                settings.audio_chunk_frames
+            ),
+            "audio_fallback_interval_ms": normalize_audio_fallback_interval_ms(
+                settings.audio_fallback_interval_ms
+            ),
         },
         indent=2,
         ensure_ascii=False,
@@ -333,18 +358,6 @@ def consume_settings_error() -> str:
     error = _last_settings_error
     _last_settings_error = ""
     return error
-
-
-def _parse_optional_qt_frames(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        frames = int(value)
-    except (TypeError, ValueError):
-        return None
-    if frames not in QT_AUDIO_FRAME_OPTIONS:
-        return None
-    return frames
 
 
 def _parse_nonnegative_int(value: object) -> int:

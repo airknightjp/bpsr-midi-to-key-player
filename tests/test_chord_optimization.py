@@ -142,6 +142,66 @@ class ChordOptimizationTests(unittest.TestCase):
         self.assertEqual(plan.target_for(strong_on), (True, 60))
         self.assertEqual(plan.target_for(strong_off), (True, 60))
 
+    def test_multi_source_chord_keeps_detected_melody_in_its_original_register(
+        self,
+    ) -> None:
+        accompaniment = [
+            note_on(0.0, 36, channel=0, track=0, velocity=70),
+            note_on(0.0, 64, channel=0, track=0, velocity=70),
+            note_on(0.0, 79, channel=0, track=0, velocity=70),
+        ]
+        melody = note_on(0.0, 96, channel=1, track=1, velocity=100)
+
+        plan = build_chord_optimization_plan(
+            [*accompaniment, melody],
+            auto_fit_note_range=False,
+            prioritize_melody=True,
+        )
+
+        self.assertEqual(plan.melody_source, (1, 1))
+        self.assertEqual(plan.target_for(melody), (True, 96))
+
+    def test_detects_melody_but_does_not_prioritize_it_when_option_is_off(
+        self,
+    ) -> None:
+        accompaniment = [
+            note_on(0.0, 36, channel=0, track=0, velocity=70),
+            note_on(0.0, 64, channel=0, track=0, velocity=70),
+            note_on(0.0, 79, channel=0, track=0, velocity=70),
+        ]
+        melody = note_on(0.0, 96, channel=1, track=1, velocity=100)
+
+        plan = build_chord_optimization_plan(
+            [*accompaniment, melody],
+            auto_fit_note_range=False,
+            prioritize_melody=False,
+        )
+
+        self.assertEqual(plan.melody_source, (1, 1))
+        self.assertEqual(plan.target_for(melody), (True, 72))
+
+    def test_auto_fit_still_keeps_detected_melody_inside_three_octaves(
+        self,
+    ) -> None:
+        accompaniment = [
+            note_on(0.0, 36, channel=0, track=0, velocity=70),
+            note_on(0.0, 64, channel=0, track=0, velocity=70),
+            note_on(0.0, 79, channel=0, track=0, velocity=70),
+        ]
+        melody = note_on(0.0, 96, channel=1, track=1, velocity=100)
+
+        plan = build_chord_optimization_plan(
+            [*accompaniment, melody],
+            auto_fit_note_range=True,
+            prioritize_melody=True,
+        )
+        target = plan.target_for(melody)[1]
+
+        self.assertEqual(plan.melody_source, (1, 1))
+        self.assertIsNotNone(target)
+        self.assertTrue(48 <= target <= 83)
+        self.assertEqual(target % 12, melody.note % 12)
+
     def test_nearby_onsets_share_an_optimization_group_without_changing_their_times(self) -> None:
         events = [
             note_on(1.000, 36),

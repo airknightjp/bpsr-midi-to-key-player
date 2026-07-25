@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QActionGroup, QCloseEvent, QDesktopServices, QIcon, QKeyEvent
+from PySide6.QtGui import QActionGroup, QCloseEvent, QColor, QDesktopServices, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from app_controller import AppController, UI_SCALE_PERCENT_OPTIONS
 from app_state import AppState, MidiListRow
+from audio_buffer import AUDIO_BUFFER_FRAME_OPTIONS, QT_AUDIO_FRAME_OPTIONS
 from config import (
     BASE_NOTE_MAX,
     BASE_NOTE_MIN,
@@ -58,10 +59,12 @@ from note_visualization import build_output_note_range, build_piano_roll_notes
 from qt_components import (
     ColumnSeparatorHeaderView,
     ContentPanel,
+    FallingNotesWidget,
     InteractiveIconButton,
     KnobValueControl,
     PanelDragHandle,
     PanelInsertionIndicator,
+    PianoKeyboardWidget,
     SeekSlider,
     ShortcutCaptureEdit,
     ThemedBackground,
@@ -70,7 +73,6 @@ from qt_components import (
     make_refresh_icon,
     make_transport_icon,
 )
-from qt_quick_visuals import FallingNotesWidget, PianoKeyboardWidget
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 from update_service import (
     AvailableUpdate,
@@ -130,6 +132,8 @@ class MidiMainWindow(QMainWindow):
         )
         self._focus_clear_controls = (
             self.sound_source_combo,
+            self.audio_qt_combo,
+            self.audio_buffer_combo,
             self.shortcut_start_edit,
             self.shortcut_pause_edit,
             self.shortcut_end_edit,
@@ -613,6 +617,7 @@ class MidiMainWindow(QMainWindow):
         self.humanize_check = self._option_check("humanize_timing")
         self.strum_check = self._option_check("chord_strum")
         self.optimization_check = self._option_check("chord_optimization")
+        self.melody_priority_check = self._option_check("melody_priority")
         self.auto_sustain_check = self._option_check("auto_sustain")
         for column, widget in enumerate(
             (self.play_sound_check, self.auto_fit_check, self.repeat_check)
@@ -629,6 +634,7 @@ class MidiMainWindow(QMainWindow):
                 self.humanize_check,
                 self.strum_check,
                 self.optimization_check,
+                self.melody_priority_check,
                 self.auto_sustain_check,
             ),
         ):
@@ -692,13 +698,48 @@ class MidiMainWindow(QMainWindow):
         )
         self.speed_control.valueChanged.connect(lambda value: self._set_option("playback_speed_percent", value))
         self.speed_control.resetRequested.connect(lambda: self._set_option("playback_speed_percent", 100))
-        self.audio_runtime_label = QLabel()
-        self.audio_runtime_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        self.audio_runtime_widget = QWidget()
+        self.audio_runtime_layout = QHBoxLayout(
+            self.audio_runtime_widget
         )
-        self.audio_runtime_label.setProperty("caption", True)
+        self.audio_runtime_layout.setContentsMargins(0, 0, 8, 0)
+        self.audio_runtime_layout.setSpacing(4)
+        self.audio_qt_label = QLabel("Qt")
+        self.audio_qt_label.setProperty("caption", True)
+        self.audio_qt_combo = QComboBox()
+        self.audio_qt_combo.setObjectName("AudioQtCombo")
+        for frames in QT_AUDIO_FRAME_OPTIONS:
+            self.audio_qt_combo.addItem(str(frames), frames)
+        self.audio_qt_combo.currentIndexChanged.connect(
+            lambda _index: self._set_audio_combo_option(
+                "audio_qt_frames",
+                self.audio_qt_combo,
+            )
+        )
+        self.audio_runtime_separator = QLabel("|")
+        self.audio_runtime_separator.setProperty("caption", True)
+        self.audio_buffer_label = QLabel("Buffer")
+        self.audio_buffer_label.setProperty("caption", True)
+        self.audio_buffer_combo = QComboBox()
+        self.audio_buffer_combo.setObjectName("AudioBufferCombo")
+        for frames in AUDIO_BUFFER_FRAME_OPTIONS:
+            self.audio_buffer_combo.addItem(str(frames), frames)
+        self.audio_buffer_combo.currentIndexChanged.connect(
+            lambda _index: self._set_audio_combo_option(
+                "audio_buffer_frames",
+                self.audio_buffer_combo,
+            )
+        )
+        for widget in (
+            self.audio_qt_label,
+            self.audio_qt_combo,
+            self.audio_runtime_separator,
+            self.audio_buffer_label,
+            self.audio_buffer_combo,
+        ):
+            self.audio_runtime_layout.addWidget(widget)
         self.menuBar().setCornerWidget(
-            self.audio_runtime_label,
+            self.audio_runtime_widget,
             Qt.Corner.TopRightCorner,
         )
         slider_layout.addWidget(self.speed_control)
@@ -1024,6 +1065,11 @@ class MidiMainWindow(QMainWindow):
                 if simultaneous_sound_and_realtime
                 else state.active_output_notes
             )
+            keyboard_melody_notes = (
+                frozenset()
+                if simultaneous_sound_and_realtime
+                else state.melody_output_notes
+            )
             keyboard_retrigger_events = (
                 state.realtime_output_retrigger_events
                 if simultaneous_sound_and_realtime
@@ -1037,6 +1083,7 @@ class MidiMainWindow(QMainWindow):
                 state.humanize_timing,
                 state.chord_strum,
                 state.chord_optimization,
+                state.melody_priority,
                 state.auto_sustain,
             )
             if self._signature_changed("settings", settings_signature):
@@ -1064,6 +1111,7 @@ class MidiMainWindow(QMainWindow):
                     state.transpose_semitones,
                     state.octave_shift,
                     state.chord_optimization,
+                    state.melody_priority,
                     id(applied_optimization_plan),
                 )
                 if self._signature_changed(
@@ -1086,6 +1134,7 @@ class MidiMainWindow(QMainWindow):
                 keyboard_visual_signature = (
                     keyboard_display_notes,
                     keyboard_retrigger_events,
+                    keyboard_melody_notes,
                 )
                 if self._signature_changed(
                     "keyboard_visualization",
@@ -1094,6 +1143,7 @@ class MidiMainWindow(QMainWindow):
                     self._render_output_keyboard(
                         keyboard_display_notes,
                         keyboard_retrigger_events,
+                        keyboard_melody_notes,
                     )
             piano_roll_running = self.controller.piano_roll_playback_running()
             self.position_slider.set_playback_running(piano_roll_running)
@@ -1107,6 +1157,7 @@ class MidiMainWindow(QMainWindow):
                     state.octave_shift,
                     state.humanize_timing,
                     state.chord_optimization,
+                    state.melody_priority,
                     state.chord_strum,
                     state.repeat_prevention,
                     state.playback_speed_percent,
@@ -1253,6 +1304,7 @@ class MidiMainWindow(QMainWindow):
         self.humanize_check.setText(text["humanize_timing"])
         self.strum_check.setText(text["chord_strum"])
         self.optimization_check.setText(text["chord_optimization"])
+        self.melody_priority_check.setText(text["melody_priority"])
         self.auto_sustain_check.setText(text["auto_sustain"])
         self.previous_track_button.setToolTip(text["previous_track"])
         self.previous_track_button.setAccessibleName(text["previous_track"])
@@ -1376,9 +1428,11 @@ class MidiMainWindow(QMainWindow):
             button.setFixedSize(transport_button_width, transport_button_height)
         self.volume_control.apply_scale(scale)
         self.speed_control.apply_scale(scale)
-        self.audio_runtime_label.setFixedWidth(px(158))
-        self.audio_runtime_label.setFixedHeight(px(24))
-        self.audio_runtime_label.setContentsMargins(0, 0, px(8), 0)
+        self.audio_runtime_widget.setFixedHeight(px(24))
+        self.audio_runtime_layout.setContentsMargins(0, 0, px(8), 0)
+        self.audio_runtime_layout.setSpacing(px(4))
+        self.audio_qt_combo.setFixedSize(px(60), px(20))
+        self.audio_buffer_combo.setFixedSize(px(60), px(20))
         self.slider_layout.setSpacing(px(2))
         self.slider_pane.setFixedWidth(self.speed_control.width())
         self.transpose_control.apply_scale(scale)
@@ -1508,6 +1562,7 @@ class MidiMainWindow(QMainWindow):
             palette.accent_text,
             palette.canvas,
             palette.text,
+            palette.text,
         )
         self.midi_header.set_separator_color(palette.border)
         for control in (
@@ -1532,6 +1587,8 @@ class MidiMainWindow(QMainWindow):
             palette.accent,
             palette.accent_hover,
             palette.accent_text,
+            palette.danger,
+            QColor(palette.danger).darker(125).name(),
         )
         self.piano_roll.set_colors(
             "#000000",
@@ -1539,6 +1596,7 @@ class MidiMainWindow(QMainWindow):
             palette.panel_alt,
             palette.accent,
             palette.accent_hover,
+            palette.danger,
         )
         if theme_name == "sky_blue":
             whale_frames = tuple(
@@ -1923,6 +1981,7 @@ class MidiMainWindow(QMainWindow):
             (self.humanize_check, state.humanize_timing),
             (self.strum_check, state.chord_strum),
             (self.optimization_check, state.chord_optimization),
+            (self.melody_priority_check, state.melody_priority),
             (self.auto_sustain_check, state.auto_sustain),
         ):
             self._set_check(check, value)
@@ -1933,6 +1992,7 @@ class MidiMainWindow(QMainWindow):
             self.humanize_check,
             self.strum_check,
             self.optimization_check,
+            self.melody_priority_check,
         ):
             check.setEnabled(True)
             if check.property("unsupported") != unsupported_in_realtime:
@@ -1944,8 +2004,10 @@ class MidiMainWindow(QMainWindow):
         self,
         active_notes: object,
         retrigger_events: object,
+        melody_notes: object,
     ) -> None:
         self.output_keyboard.set_active_notes(active_notes)
+        self.output_keyboard.set_melody_notes(melody_notes)
         self.output_keyboard.set_retrigger_events(retrigger_events)
 
     def _render_player_controls(self, state: AppState) -> None:
@@ -1957,12 +2019,14 @@ class MidiMainWindow(QMainWindow):
         if source_index >= 0:
             with QSignalBlocker(self.sound_source_combo):
                 self.sound_source_combo.setCurrentIndex(source_index)
-        self.audio_runtime_label.setText(
-            TEXT[state.language]["audio_runtime"].format(
-                qt=state.audio_qt_frames,
-                buffer=state.audio_buffer_frames,
-            )
-        )
+        for combo, value in (
+            (self.audio_qt_combo, state.audio_qt_frames),
+            (self.audio_buffer_combo, state.audio_buffer_frames),
+        ):
+            index = combo.findData(value)
+            if index >= 0 and combo.currentIndex() != index:
+                with QSignalBlocker(combo):
+                    combo.setCurrentIndex(index)
 
     def _render_transport_controls(self, state: AppState) -> None:
         text = TEXT[state.language]
@@ -2275,6 +2339,15 @@ class MidiMainWindow(QMainWindow):
     def _set_option(self, name: str, value: object) -> None:
         if not self._rendering:
             self.controller.set_option(name, value)
+
+    def _set_audio_combo_option(
+        self,
+        name: str,
+        combo: QComboBox,
+    ) -> None:
+        value = combo.currentData()
+        if value is not None:
+            self._set_option(name, value)
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[no-untyped-def]
         if event.type() == QEvent.Type.MouseButtonPress:
@@ -2621,33 +2694,14 @@ class MidiMainWindow(QMainWindow):
             self._sync_full_visibility_height()
             self.controller.set_window_geometry(self.width(), self.height())
 
-    def _sync_visual_host_activity(self) -> None:
-        active = self.isVisible() and not self.isMinimized()
-        self.piano_roll.set_host_active(active)
-        self.output_keyboard.set_host_active(active)
-
     def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().showEvent(event)
-        self._sync_visual_host_activity()
         self._update_transport_side_widths(
             self.state.ui_scale_percent / 100
         )
         if not self.isMaximized():
             self._sync_full_visibility_height()
             self.controller.set_window_geometry(self.width(), self.height())
-
-    def hideEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        self.piano_roll.set_host_active(False)
-        self.output_keyboard.set_host_active(False)
-        super().hideEvent(event)
-
-    def changeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        super().changeEvent(event)
-        if (
-            event.type() == QEvent.Type.WindowStateChange
-            and hasattr(self, "piano_roll")
-        ):
-            self._sync_visual_host_activity()
 
     @staticmethod
     def _set_check(check: QCheckBox, checked: bool) -> None:
