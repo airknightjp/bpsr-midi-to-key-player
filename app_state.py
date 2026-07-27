@@ -82,6 +82,7 @@ class AppState:
     transpose_semitones: int = 0
     octave_shift: int = 0
     humanize_timing: bool = False
+    chord_optimization: bool = False
     chord_strum: bool = False
     auto_sustain: bool = False
     sustain_key: str = "space"

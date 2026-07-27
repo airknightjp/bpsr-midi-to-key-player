@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from chord_optimization import ChordOptimizationPlan
 from midi_parser import MidiEvent
 from note_visualization import (
     PianoRollNote,
@@ -10,6 +11,32 @@ from note_visualization import (
 
 
 class NoteVisualizationTests(unittest.TestCase):
+    def test_applies_chord_optimization_to_range_and_piano_roll(self) -> None:
+        note_on = MidiEvent(1.0, "note_on", 0, 96, 90, track=0)
+        note_off = MidiEvent(2.0, "note_off", 0, 96, 0, track=0)
+        plan = ChordOptimizationPlan(
+            event_targets={id(note_on): 72, id(note_off): 72},
+            event_timing_offsets={id(note_on): 0.01, id(note_off): 0.01},
+        )
+
+        note_range = build_output_note_range(
+            (note_on, note_off),
+            enabled_sources={(0, 0)},
+            chord_optimization_plan=plan,
+        )
+        notes = build_piano_roll_notes(
+            (note_on, note_off),
+            enabled_sources={(0, 0)},
+            chord_optimization_plan=plan,
+            chord_strum=True,
+        )
+
+        self.assertEqual(note_range, (72, 72))
+        self.assertEqual(
+            notes,
+            (PianoRollNote(1.01, 2.01, 72, source=(0, 0)),),
+        )
+
     def test_preserves_track_channel_source_for_each_note(self) -> None:
         events = [
             MidiEvent(0.0, "note_on", 0, 48, 70, track=0),

@@ -85,6 +85,7 @@ class SettingsTests(unittest.TestCase):
                     octave_shift=2,
                     humanize_timing=True,
                     chord_strum=True,
+                    chord_optimization=True,
                     auto_sustain=True,
                     repeat_prevention=True,
                     playback_speed_percent=135,
@@ -141,7 +142,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertFalse(saved_payload["play_sound"])
         self.assertNotIn("dry_run", saved_payload)
-        self.assertNotIn("chord_optimization", saved_payload)
+        self.assertTrue(saved_payload["chord_optimization"])
         self.assertNotIn("melody_priority", saved_payload)
         self.assertNotIn("automatic_audio_buffer_frames", saved_payload)
         self.assertNotIn("minimum_stable_qt_frames", saved_payload)
@@ -164,6 +165,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.octave_shift, 2)
         self.assertTrue(loaded.humanize_timing)
         self.assertTrue(loaded.chord_strum)
+        self.assertTrue(loaded.chord_optimization)
         self.assertTrue(loaded.auto_sustain)
         self.assertTrue(loaded.repeat_prevention)
         self.assertEqual(loaded.playback_speed_percent, 135)

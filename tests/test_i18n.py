@@ -174,16 +174,19 @@ class I18nTests(unittest.TestCase):
     def test_performance_option_labels_use_current_names(self) -> None:
         expected = {
             "en": (
+                "Chord revoicing",
                 "Timing variation",
                 "Chord spread",
                 "Automatic sustain generation",
             ),
             "ja": (
+                "\u548c\u97f3\u306e\u518d\u914d\u7f6e",
                 "\u30bf\u30a4\u30df\u30f3\u30b0\u306e\u5206\u6563",
                 "\u548c\u97f3\u306e\u5206\u6563",
                 "\u30b5\u30b9\u30c6\u30a3\u30f3\u306e\u81ea\u52d5\u751f\u6210",
             ),
             "zh": (
+                "\u548c\u5f26\u91cd\u6392",
                 "\u65f6\u5e8f\u5206\u6563",
                 "\u548c\u5f26\u5206\u6563",
                 "\u81ea\u52a8\u5ef6\u97f3\u751f\u6210",
@@ -193,9 +196,14 @@ class I18nTests(unittest.TestCase):
         for language, labels in expected.items():
             with self.subTest(language=language):
                 translations = TEXT[language]
-                self.assertEqual(translations["humanize_timing"], labels[0])
-                self.assertEqual(translations["chord_strum"], labels[1])
-                self.assertEqual(translations["auto_sustain"], labels[2])
+                self.assertEqual(translations["chord_optimization"], labels[0])
+                self.assertEqual(translations["humanize_timing"], labels[1])
+                self.assertEqual(translations["chord_strum"], labels[2])
+                self.assertEqual(translations["auto_sustain"], labels[3])
+
+    def test_optimization_progress_exists_for_all_languages(self) -> None:
+        for translations in TEXT.values():
+            self.assertIn("{percent}", translations["optimization_progress"])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, RealtimeAutoSustain, plan_auto_sustain
+from chord_optimization import ChordOptimizationPlan
+from chord_optimization_planner import ChordOptimizationPlanner, ChordOptimizationRequest
 from audio_buffer import (
     DEFAULT_AUDIO_BUFFER_FRAMES,
     DEFAULT_AUDIO_CHUNK_FRAMES,
@@ -32,6 +34,7 @@ from software_synth import SoftwareSynthClient
 StateCallback = Callable[[str], None]
 ErrorCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
+OptimizationProgressCallback = Callable[[int | None], None]
 OutputNoteCallback = Callable[[int, bool], None]
 OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
 AudioRuntimeChangedCallback = Callable[
@@ -49,6 +52,7 @@ class MidiSoundPlayer:
         on_state: StateCallback | None = None,
         on_error: ErrorCallback | None = None,
         on_position: PositionCallback | None = None,
+        on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
         on_output_remap: OutputNoteCallback | None = None,
         on_output_source_note: OutputSourceNoteCallback | None = None,
@@ -59,6 +63,7 @@ class MidiSoundPlayer:
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         humanize_timing: bool = False,
+        chord_optimization: bool = False,
         chord_strum: bool = False,
         auto_sustain: bool = False,
         repeat_prevention: bool = False,
@@ -74,6 +79,9 @@ class MidiSoundPlayer:
         self.on_state = on_state or (lambda _state: None)
         self.on_error = on_error or (lambda _message: None)
         self.on_position = on_position or (lambda _position: None)
+        self.on_optimization_progress = (
+            on_optimization_progress or (lambda _progress: None)
+        )
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
         self.on_output_remap = on_output_remap or self.on_output_note
         self.on_output_source_note = (
@@ -93,6 +101,7 @@ class MidiSoundPlayer:
             min(MAX_OCTAVE_SHIFT, int(octave_shift)),
         )
         self.humanize_timing = humanize_timing
+        self.chord_optimization = bool(chord_optimization)
         self.chord_strum = chord_strum
         self.auto_sustain = auto_sustain
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
@@ -127,10 +136,31 @@ class MidiSoundPlayer:
         self._manual_sustain_sources: set[tuple[int, int]] = set()
         self._auto_sustain_sources: set[tuple[int, int]] = set()
         self._suppressed_note_offs: dict[tuple[int, int, int], int] = defaultdict(int)
+        self._chord_optimization_plan: ChordOptimizationPlan | None = None
+        self._chord_optimization_plan_auto_fit: bool | None = None
+        self._chord_optimization_plan_speed: int | None = None
+        self._chord_optimization_plan_transpose: int | None = None
+        self._chord_optimization_plan_octave: int | None = None
+        self._chord_optimization_plan_dirty = True
+        self._optimization_generation = 0
+        self._current_events: list[MidiEvent] | None = None
+        self._optimization_planner = ChordOptimizationPlanner(
+            request_provider=self._optimization_request,
+            request_is_current=self._optimization_request_is_current,
+            commit_plan=self._commit_optimization_plan,
+            should_stop=self._stop_event.is_set,
+            on_progress=self.on_optimization_progress,
+        )
 
     @property
     def is_playing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
+        with self._state_lock:
+            if not self._chord_optimization_plan_is_current_locked():
+                return None
+            return self._chord_optimization_plan
 
     def current_position(self) -> float | None:
         with self._state_lock:
@@ -148,6 +178,9 @@ class MidiSoundPlayer:
         self._release_requested.clear()
         self._remap_active_notes_requested.clear()
         self._repeat_guard.reset()
+        with self._state_lock:
+            self._current_events = events
+            self._mark_chord_optimization_dirty_locked()
         with self._lock:
             self._pending_seek = None
             self._pending_switch = None
@@ -190,8 +223,10 @@ class MidiSoundPlayer:
             if self.auto_fit_note_range == enabled:
                 return
             self.auto_fit_note_range = enabled
+            self._mark_chord_optimization_dirty_locked()
             self._remap_active_notes_requested.set()
             self._release_requested.set()
+        self._schedule_chord_optimization()
 
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
         transpose_semitones = max(
@@ -207,7 +242,9 @@ class MidiSoundPlayer:
                 return
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
+            self._mark_chord_optimization_dirty_locked()
             self._release_requested.set()
+        self._schedule_chord_optimization()
 
     def set_humanize_timing(self, enabled: bool) -> None:
         with self._state_lock:
@@ -216,6 +253,24 @@ class MidiSoundPlayer:
     def _humanize_timing_enabled(self) -> bool:
         with self._state_lock:
             return self.humanize_timing
+
+    def set_chord_optimization(self, enabled: bool) -> None:
+        with self._state_lock:
+            enabled = bool(enabled)
+            if self.chord_optimization == enabled:
+                return
+            self.chord_optimization = enabled
+            self._mark_chord_optimization_dirty_locked()
+            self._release_requested.set()
+        if enabled:
+            self._schedule_chord_optimization()
+        else:
+            self.on_optimization_progress(None)
+
+    def request_chord_optimization_refresh(self) -> None:
+        with self._state_lock:
+            self._mark_chord_optimization_dirty_locked()
+        self._schedule_chord_optimization()
 
     def set_chord_strum(self, enabled: bool) -> None:
         with self._state_lock:
@@ -241,10 +296,15 @@ class MidiSoundPlayer:
     def set_playback_speed(self, speed_percent: int) -> None:
         with self._state_lock:
             speed_percent = int(speed_percent)
-            self.playback_speed_percent = speed_percent
+            changed = self.playback_speed_percent != speed_percent
+            if changed:
+                self.playback_speed_percent = speed_percent
+                self._mark_chord_optimization_dirty_locked()
             clock = self._clock
         if clock is not None:
             clock.set_speed_percent(speed_percent)
+        if changed:
+            self._schedule_chord_optimization()
 
     def seek(self, position: float) -> None:
         position = max(0.0, position)
@@ -303,6 +363,7 @@ class MidiSoundPlayer:
         if self._thread is None or threading.current_thread() is self._thread:
             return
         self._thread.join(timeout)
+        self._optimization_planner.wait(timeout=0.2)
 
     def _run(self, events: list[MidiEvent], start_time: float) -> None:
         try:
@@ -338,6 +399,8 @@ class MidiSoundPlayer:
                 pass
             with self._state_lock:
                 self._clock = None
+                self._current_events = None
+                self._optimization_generation += 1
             if self._stop_event.is_set():
                 self.on_state("sound stopped")
             else:
@@ -346,6 +409,9 @@ class MidiSoundPlayer:
     def _play_from(self, events: list[MidiEvent], start_time: float) -> float:
         with self._lock:
             position_generation = self._position_generation
+        self._refresh_chord_optimization_plan(events, force=True)
+        if self._stop_event.is_set():
+            return start_time
         with self._state_lock:
             speed_percent = self.playback_speed_percent
         clock = PlaybackClock(start_time, speed_percent)
@@ -355,7 +421,11 @@ class MidiSoundPlayer:
         self._next_position_report_at = 0.0
         timeline = PlaybackTimeline(start_time, self._random)
         planned_events = plan_auto_sustain(events)
-        for scheduled in prepare_playback_events(planned_events, self._random):
+        for scheduled in prepare_playback_events(
+            planned_events,
+            self._random,
+            self._chord_optimization_timing_offset,
+        ):
             event = scheduled.event
             if self._stop_event.is_set():
                 return last_position
@@ -387,6 +457,7 @@ class MidiSoundPlayer:
                     scheduled,
                     self._humanize_timing_enabled(),
                     self._chord_strum_enabled(),
+                    self._chord_optimization_timing_offset(event),
                 )
                 delay = clock.delay_until(scheduled_time)
                 if delay <= 0:
@@ -540,9 +611,114 @@ class MidiSoundPlayer:
         return shifted_note
 
     def _playable_event_note(self, event: MidiEvent) -> int | None:
+        if self._chord_optimization_plan_is_current_locked():
+            plan = self._chord_optimization_plan
+            if plan is not None:
+                planned, target = plan.target_for(event)
+                if planned:
+                    return target
         if event.note is None:
             return None
         return self._playable_note(event.note)
+
+    def _chord_optimization_timing_offset(self, event: MidiEvent) -> float | None:
+        with self._state_lock:
+            if not self._chord_optimization_plan_is_current_locked():
+                return None
+            plan = self._chord_optimization_plan
+            return None if plan is None else plan.timing_offset_for(event)
+
+    def _refresh_chord_optimization_plan(
+        self,
+        events: list[MidiEvent],
+        force: bool = False,
+    ) -> None:
+        with self._state_lock:
+            if self._current_events is not events:
+                self._current_events = events
+                self._mark_chord_optimization_dirty_locked()
+        if force:
+            self._optimization_planner.build_now()
+        else:
+            self._schedule_chord_optimization()
+
+    def _mark_chord_optimization_dirty_locked(self) -> None:
+        self._chord_optimization_plan_dirty = True
+        self._optimization_generation += 1
+
+    def _schedule_chord_optimization(self) -> None:
+        with self._state_lock:
+            should_schedule = (
+                self._current_events is not None
+                and self.chord_optimization
+                and self._chord_optimization_plan_dirty
+            )
+        if should_schedule:
+            self._optimization_planner.schedule()
+
+    def _optimization_request(self) -> ChordOptimizationRequest | None:
+        with self._state_lock:
+            if (
+                not self.chord_optimization
+                or not self._chord_optimization_plan_dirty
+                or self._current_events is None
+            ):
+                return None
+            return ChordOptimizationRequest(
+                generation=self._optimization_generation,
+                events=self._current_events,
+                options={
+                    "auto_fit_note_range": self.auto_fit_note_range,
+                    "transpose_semitones": self.transpose_semitones,
+                    "octave_shift": self.note_octave_shift,
+                    "playback_speed_percent": self.playback_speed_percent,
+                    "event_enabled": self._event_is_enabled,
+                },
+            )
+
+    def _optimization_request_is_current(self, generation: int) -> bool:
+        with self._state_lock:
+            return self._optimization_request_is_current_locked(generation)
+
+    def _commit_optimization_plan(
+        self,
+        request: ChordOptimizationRequest,
+        plan: ChordOptimizationPlan,
+    ) -> bool:
+        with self._state_lock:
+            if not self._optimization_request_is_current_locked(request.generation):
+                return False
+            self._chord_optimization_plan = plan
+            self._chord_optimization_plan_auto_fit = bool(
+                request.options["auto_fit_note_range"]
+            )
+            self._chord_optimization_plan_speed = int(
+                request.options["playback_speed_percent"]
+            )
+            self._chord_optimization_plan_transpose = int(
+                request.options["transpose_semitones"]
+            )
+            self._chord_optimization_plan_octave = int(request.options["octave_shift"])
+            self._chord_optimization_plan_dirty = False
+            return True
+
+    def _optimization_request_is_current_locked(self, generation: int) -> bool:
+        return (
+            not self._stop_event.is_set()
+            and self.chord_optimization
+            and self._current_events is not None
+            and self._optimization_generation == generation
+        )
+
+    def _chord_optimization_plan_is_current_locked(self) -> bool:
+        return (
+            self.chord_optimization
+            and self._chord_optimization_plan is not None
+            and self._chord_optimization_plan_auto_fit == self.auto_fit_note_range
+            and self._chord_optimization_plan_speed == self.playback_speed_percent
+            and self._chord_optimization_plan_transpose == self.transpose_semitones
+            and self._chord_optimization_plan_octave == self.note_octave_shift
+        )
 
     def _send_note_on(
         self,

@@ -30,6 +30,24 @@ class FakeOutput:
 
 
 class KeyPlaybackTests(unittest.TestCase):
+    def test_keyboard_optimization_reports_progress_and_completion(self) -> None:
+        progress: list[int | None] = []
+        player = MidiKeyboardPlayer(
+            output=FakeOutput(),
+            chord_optimization=True,
+            on_optimization_progress=progress.append,
+        )
+        events = [
+            MidiEvent(time=index * 0.1, kind="note_on", channel=0, note=60, velocity=80)
+            for index in range(20)
+        ]
+
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        self.assertEqual(progress[0], 0)
+        self.assertIn(100, progress)
+        self.assertIsNone(progress[-1])
+
     def test_keyboard_player_reports_track_channel_for_output_notes(self) -> None:
         output = FakeOutput()
         source_events: list[tuple[int, int, int, bool]] = []
@@ -261,6 +279,21 @@ class KeyPlaybackTests(unittest.TestCase):
 
         self.assertEqual(output.pressed, ["s"])
         self.assertEqual(output.released, ["s"])
+
+    def test_keyboard_optimization_uses_one_external_range_for_a_high_chord(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(output=output, chord_optimization=True)
+        events = [
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=note, velocity=80, track=0)
+            for note in (84, 88, 91)
+        ]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        for event in events:
+            player._handle_event(event)
+
+        self.assertEqual(output.tapped, [">"])
+        self.assertEqual(output.pressed[-3:], ["z", "c", "b"])
 
     def test_shifted_note_still_uses_rapid_repeat_prevention(self) -> None:
         output = FakeOutput()

@@ -2595,6 +2595,7 @@ class QtUiTests(unittest.TestCase):
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
+            self.window.optimization_check,
         )
 
         self.assertTrue(all(item.property("settingsItem") for item in common_items + performance_items))
@@ -2619,6 +2620,7 @@ class QtUiTests(unittest.TestCase):
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
+            self.window.optimization_check,
         )
         self.window.show()
         for language in ("en", "ja", "zh"):
@@ -2656,6 +2658,7 @@ class QtUiTests(unittest.TestCase):
             for item in (
                 self.window.humanize_check,
                 self.window.strum_check,
+                self.window.optimization_check,
             )
         )
         self.assertGreater(second_row_top - first_row_bottom - 1, 0)
@@ -2667,6 +2670,7 @@ class QtUiTests(unittest.TestCase):
             "repeat_prevention",
             "humanize_timing",
             "chord_strum",
+            "chord_optimization",
             "auto_sustain",
         ):
             self.controller.set_option(option, True)
@@ -2679,6 +2683,7 @@ class QtUiTests(unittest.TestCase):
             self.window.repeat_check,
             self.window.humanize_check,
             self.window.strum_check,
+            self.window.optimization_check,
             self.window.auto_sustain_check,
         )
         self.assertTrue(all(check.isEnabled() for check in detailed_settings))
@@ -2686,6 +2691,7 @@ class QtUiTests(unittest.TestCase):
         unsupported = (
             self.window.humanize_check,
             self.window.strum_check,
+            self.window.optimization_check,
         )
         self.assertTrue(all(check.property("unsupported") for check in unsupported))
 
@@ -3589,6 +3595,7 @@ class QtUiTests(unittest.TestCase):
             self.window.repeat_check,
             self.window.humanize_check,
             self.window.strum_check,
+            self.window.optimization_check,
             self.window.auto_sustain_check,
         )
         content_top = min(item.geometry().top() for item in items)

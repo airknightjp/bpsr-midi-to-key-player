@@ -4,6 +4,7 @@ import random
 import threading
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND
@@ -26,6 +27,7 @@ class ScheduledMidiEvent:
 def prepare_playback_events(
     events: list[MidiEvent],
     random_source: random.Random | None = None,
+    chord_offset_provider: Callable[[MidiEvent], float | None] | None = None,
 ) -> list[ScheduledMidiEvent]:
     if random_source is None:
         random_source = random.Random()
@@ -59,6 +61,10 @@ def prepare_playback_events(
             }
 
         def offset_for(event: MidiEvent) -> float:
+            if chord_offset_provider is not None:
+                optimized_offset = chord_offset_provider(event)
+                if optimized_offset is not None:
+                    return optimized_offset
             return note_offsets.get(event.note, 0.0)
 
         ordered.extend(ScheduledMidiEvent(event) for event in other_events)
@@ -112,6 +118,7 @@ class PlaybackTimeline:
         scheduled: ScheduledMidiEvent | MidiEvent,
         humanize_timing: bool = False,
         chord_strum: bool = False,
+        chord_optimization_offset: float | None = None,
     ) -> float:
         if isinstance(scheduled, MidiEvent):
             scheduled = ScheduledMidiEvent(scheduled)
@@ -132,7 +139,14 @@ class PlaybackTimeline:
             if humanize_timing and event.kind != AUTO_SUSTAIN_EVENT_KIND
             else 0.0
         )
-        strum_offset = scheduled.strum_offset if chord_strum else 0.0
+        if chord_strum:
+            strum_offset = (
+                scheduled.strum_offset
+                if chord_optimization_offset is None
+                else chord_optimization_offset
+            )
+        else:
+            strum_offset = 0.0
         return max(
             self.start_time,
             self._previous_scheduled_time,

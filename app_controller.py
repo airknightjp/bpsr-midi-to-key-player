@@ -17,6 +17,7 @@ from audio_buffer import (
     normalize_qt_audio_frames,
 )
 from app_state import AppState, MidiListRow, TrackChannelItem
+from chord_optimization import ChordOptimizationPlan
 from config import (
     INPUT_CONVERSION_MIDI_FILE,
     INPUT_CONVERSION_REALTIME,
@@ -114,6 +115,7 @@ class AppController:
             transpose_semitones=self.settings.transpose_semitones,
             octave_shift=self.settings.octave_shift,
             humanize_timing=self.settings.humanize_timing,
+            chord_optimization=self.settings.chord_optimization,
             chord_strum=self.settings.chord_strum,
             auto_sustain=self.settings.auto_sustain,
             repeat_prevention=self.settings.repeat_prevention,
@@ -684,6 +686,9 @@ class AppController:
                 ("playback_error", pid, message)
             ),
             on_position=lambda value, pid=playback_id: self._queue_position_message(pid, value),
+            on_optimization_progress=lambda progress, pid=playback_id: (
+                self._queue_worker_message(("optimization", pid, progress))
+            ),
             on_output_note=lambda note, pressed, pid=playback_id: self._queue_worker_message(
                 ("key_output_note", pid, note, pressed)
             ),
@@ -705,6 +710,7 @@ class AppController:
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
+            chord_optimization=self.state.chord_optimization,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -794,6 +800,13 @@ class AppController:
                 if report_playback
                 else None
             ),
+            on_optimization_progress=(
+                lambda progress, pid=playback_id: self._queue_worker_message(
+                    ("optimization", pid, progress)
+                )
+                if report_playback
+                else None
+            ),
             on_output_note=(
                 lambda note, pressed, pid=playback_id: self._queue_worker_message(
                     ("sound_output_note", pid, note, pressed, time.monotonic())
@@ -847,6 +860,7 @@ class AppController:
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
+            chord_optimization=self.state.chord_optimization,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -1070,6 +1084,7 @@ class AppController:
             "game_countdown_sound",
             "auto_fit_note_range",
             "humanize_timing",
+            "chord_optimization",
             "chord_strum",
             "auto_sustain",
             "repeat_prevention",
@@ -1212,6 +1227,15 @@ class AppController:
     def current_key_bindings(self) -> dict[int, str]:
         return normalized_key_bindings(self.key_bindings)
 
+    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
+        if self.state.sound_playing and self.sound_player:
+            return self.sound_player.current_chord_optimization_plan()
+        if (
+            self.state.keyboard_playing or self.state.keyboard_paused
+        ) and self.player:
+            return self.player.current_chord_optimization_plan()
+        return None
+
     def piano_roll_playback_running(self) -> bool:
         if self.state.sound_playing and self.sound_player:
             return self.sound_player.current_position() is not None
@@ -1238,10 +1262,13 @@ class AppController:
 
     def _apply_track_channel_change(self) -> None:
         if self.state.keyboard_playing and self.player and self.player.is_playing:
+            self.player.request_chord_optimization_refresh()
             self.player.request_release_all()
             if self.sound_player and self.sound_player.is_playing:
+                self.sound_player.request_chord_optimization_refresh()
                 self.sound_player.release_all()
         elif self.state.sound_playing and self.sound_player and self.sound_player.is_playing:
+            self.sound_player.request_chord_optimization_refresh()
             self.sound_player.release_all()
 
     def enabled_channels(self) -> set[int]:
@@ -1336,6 +1363,7 @@ class AppController:
                     "keyboard_sound_error",
                     "playback_error",
                     "position",
+                    "optimization",
                     "key_output_note",
                     "sound_output_note",
                     "sound_output_remap",
@@ -1405,6 +1433,20 @@ class AppController:
                     if next_position != self.state.position:
                         self.state.position = next_position
                         position_changed = True
+                elif kind == "optimization":
+                    progress = message[2]
+                    if progress is None:
+                        self.state.status = (
+                            "playing"
+                            if self.state.keyboard_playing
+                            else "sound playing"
+                        )
+                    else:
+                        percent = self._clamp_int(progress, 0, 100, 0)
+                        self.state.status = self.text(
+                            "optimization_progress"
+                        ).format(percent=percent)
+                    changed = True
                 elif kind in {
                     "key_output_note",
                     "sound_output_note",
@@ -1579,6 +1621,7 @@ class AppController:
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
+            chord_optimization=self.state.chord_optimization,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -1669,6 +1712,15 @@ class AppController:
                 self.player.set_humanize_timing(self.state.humanize_timing)
             if self.sound_player:
                 self.sound_player.set_humanize_timing(self.state.humanize_timing)
+        elif name == "chord_optimization":
+            if self.player:
+                self.player.set_chord_optimization(
+                    self.state.chord_optimization
+                )
+            if self.sound_player:
+                self.sound_player.set_chord_optimization(
+                    self.state.chord_optimization
+                )
         elif name == "chord_strum":
             if self.player:
                 self.player.set_chord_strum(self.state.chord_strum)

@@ -797,6 +797,11 @@ class AppControllerTests(unittest.TestCase):
                 "set_chord_strum",
                 ("player", "sound_player"),
             ),
+            (
+                "chord_optimization",
+                "set_chord_optimization",
+                ("player", "sound_player"),
+            ),
         )
 
         for option, method_name, target_names in cases:
@@ -1110,6 +1115,7 @@ class AppControllerTests(unittest.TestCase):
             transpose_semitones=3,
             octave_shift=-1,
             humanize_timing=True,
+            chord_optimization=True,
             repeat_prevention=True,
             sound_source="organ",
         )
@@ -1127,6 +1133,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(player.kwargs["transpose_semitones"], 3)
         self.assertEqual(player.kwargs["octave_shift"], -1)
         self.assertTrue(player.kwargs["humanize_timing"])
+        self.assertTrue(player.kwargs["chord_optimization"])
         self.assertTrue(player.kwargs["repeat_prevention"])
         self.assertEqual(player.play_args[1]["countdown_seconds"], 4)
 

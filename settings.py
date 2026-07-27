@@ -62,6 +62,7 @@ class AppSettings:
     transpose_semitones: int = 0
     octave_shift: int = 0
     humanize_timing: bool = False
+    chord_optimization: bool = False
     chord_strum: bool = False
     auto_sustain: bool = False
     repeat_prevention: bool = False
@@ -187,6 +188,10 @@ def load_settings() -> AppSettings:
             default=0,
         ),
         humanize_timing=_parse_bool(data.get("humanize_timing"), default=False),
+        chord_optimization=_parse_bool(
+            data.get("chord_optimization"),
+            default=False,
+        ),
         chord_strum=_parse_bool(data.get("chord_strum"), default=False),
         auto_sustain=_parse_bool(data.get("auto_sustain"), default=False),
         repeat_prevention=_parse_bool(data.get("repeat_prevention"), default=False),
@@ -269,6 +274,7 @@ def save_settings(settings: AppSettings) -> None:
             "transpose_semitones": settings.transpose_semitones,
             "octave_shift": settings.octave_shift,
             "humanize_timing": settings.humanize_timing,
+            "chord_optimization": settings.chord_optimization,
             "chord_strum": settings.chord_strum,
             "auto_sustain": settings.auto_sustain,
             "repeat_prevention": settings.repeat_prevention,

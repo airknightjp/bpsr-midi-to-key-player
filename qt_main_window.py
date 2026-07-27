@@ -616,6 +616,7 @@ class MidiMainWindow(QMainWindow):
         self.repeat_check = self._option_check("repeat_prevention")
         self.humanize_check = self._option_check("humanize_timing")
         self.strum_check = self._option_check("chord_strum")
+        self.optimization_check = self._option_check("chord_optimization")
         self.auto_sustain_check = self._option_check("auto_sustain")
         for column, widget in enumerate(
             (
@@ -636,6 +637,7 @@ class MidiMainWindow(QMainWindow):
             (
                 self.humanize_check,
                 self.strum_check,
+                self.optimization_check,
             ),
         ):
             widget.setProperty("settingsItem", True)
@@ -1082,11 +1084,17 @@ class MidiMainWindow(QMainWindow):
                 state.repeat_prevention,
                 state.humanize_timing,
                 state.chord_strum,
+                state.chord_optimization,
                 state.auto_sustain,
             )
             if self._signature_changed("settings", settings_signature):
                 self._render_settings(state)
 
+            optimization_plan = (
+                self.controller.current_chord_optimization_plan()
+                if state.chord_optimization
+                else None
+            )
             if (
                 state.section_visibility["keyboard"]
                 or state.section_visibility["piano_roll"]
@@ -1098,6 +1106,8 @@ class MidiMainWindow(QMainWindow):
                     state.auto_fit_note_range,
                     state.transpose_semitones,
                     state.octave_shift,
+                    state.chord_optimization,
+                    id(optimization_plan),
                 )
                 if self._signature_changed(
                     "output_note_range",
@@ -1110,6 +1120,7 @@ class MidiMainWindow(QMainWindow):
                         auto_fit_note_range=state.auto_fit_note_range,
                         transpose_semitones=state.transpose_semitones,
                         octave_shift=state.octave_shift,
+                        chord_optimization_plan=optimization_plan,
                     )
                     self.output_keyboard.set_used_note_range(output_note_range)
                     self.piano_roll.set_used_note_range(output_note_range)
@@ -1141,8 +1152,10 @@ class MidiMainWindow(QMainWindow):
                     state.octave_shift,
                     state.humanize_timing,
                     state.chord_strum,
+                    state.chord_optimization,
                     state.repeat_prevention,
                     state.playback_speed_percent,
+                    id(optimization_plan),
                 )
                 if self._signature_changed(
                     "piano_roll_sequence",
@@ -1156,6 +1169,7 @@ class MidiMainWindow(QMainWindow):
                             auto_fit_note_range=state.auto_fit_note_range,
                             transpose_semitones=state.transpose_semitones,
                             octave_shift=state.octave_shift,
+                            chord_optimization_plan=optimization_plan,
                             humanize_timing=state.humanize_timing,
                             chord_strum=state.chord_strum,
                             repeat_prevention=state.repeat_prevention,
@@ -1281,6 +1295,7 @@ class MidiMainWindow(QMainWindow):
         self.repeat_check.setText(text["repeat_prevention"])
         self.humanize_check.setText(text["humanize_timing"])
         self.strum_check.setText(text["chord_strum"])
+        self.optimization_check.setText(text["chord_optimization"])
         self.auto_sustain_check.setText(text["auto_sustain"])
         self.previous_track_button.setToolTip(text["previous_track"])
         self.previous_track_button.setAccessibleName(text["previous_track"])
@@ -1954,6 +1969,7 @@ class MidiMainWindow(QMainWindow):
             (self.repeat_check, state.repeat_prevention),
             (self.humanize_check, state.humanize_timing),
             (self.strum_check, state.chord_strum),
+            (self.optimization_check, state.chord_optimization),
             (self.auto_sustain_check, state.auto_sustain),
         ):
             self._set_check(check, value)
@@ -1963,6 +1979,7 @@ class MidiMainWindow(QMainWindow):
         for check in (
             self.humanize_check,
             self.strum_check,
+            self.optimization_check,
         ):
             check.setEnabled(True)
             if check.property("unsupported") != unsupported_in_realtime:

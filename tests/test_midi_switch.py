@@ -109,6 +109,39 @@ class MidiSwitchTests(unittest.TestCase):
             [(64, 3, 0, True), (64, 3, 0, False)],
         )
 
+    def test_sound_player_uses_the_same_wide_chord_optimization_plan(self) -> None:
+        player = RecordingShortMessageSoundPlayer(
+            auto_fit_note_range=False,
+            chord_optimization=True,
+        )
+        note_ons = [
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=note, velocity=64, track=0)
+            for note in (36, 64, 79, 96)
+        ]
+        note_offs = [
+            MidiEvent(time=1.0, kind="note_off", channel=0, note=note, velocity=0, track=0)
+            for note in (36, 64, 79, 96)
+        ]
+        events = [*note_ons, *note_offs]
+        player._refresh_chord_optimization_plan(events, force=True)
+
+        for event in events:
+            player._handle_event(event)
+
+        self.assertEqual(
+            player.messages,
+            [
+                (0x90, 48, 64),
+                (0x90, 64, 64),
+                (0x90, 67, 64),
+                (0x90, 72, 64),
+                (0x80, 48, 0),
+                (0x80, 64, 0),
+                (0x80, 67, 0),
+                (0x80, 72, 0),
+            ],
+        )
+
     def test_sound_player_reports_playback_failure(self) -> None:
         errors: list[str] = []
         player = RecordingSoundPlayer()
