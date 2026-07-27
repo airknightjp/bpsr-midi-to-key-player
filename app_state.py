@@ -35,7 +35,7 @@ class TrackChannelItem:
     track: int
     channel: int
     enabled: bool = True
-    melody: bool = False
+    color: str = ""
 
 
 @dataclass
@@ -49,13 +49,14 @@ class AppState:
     midi_input_running: bool = False
     input_conversion_mode: str = DEFAULT_INPUT_CONVERSION_MODE
     active_output_notes: frozenset[int] = field(default_factory=frozenset)
-    melody_output_notes: frozenset[int] = field(default_factory=frozenset)
+    output_note_sources: tuple[tuple[int, int, int], ...] = ()
     output_note_retrigger_events: tuple[tuple[int, int], ...] = ()
     output_note_retrigger_serial: int = 0
     realtime_output_notes: frozenset[int] = field(default_factory=frozenset)
     realtime_note_trigger_events: tuple[tuple[int, int], ...] = ()
     realtime_note_trigger_serial: int = 0
     realtime_visible_output_notes: frozenset[int] = field(default_factory=frozenset)
+    realtime_output_note_sources: tuple[tuple[int, int, int], ...] = ()
     realtime_output_retrigger_events: tuple[tuple[int, int], ...] = ()
     realtime_output_retrigger_serial: int = 0
     rhythm_hit_events: tuple[tuple[int, int, str, bool], ...] = ()
@@ -81,8 +82,6 @@ class AppState:
     transpose_semitones: int = 0
     octave_shift: int = 0
     humanize_timing: bool = False
-    chord_optimization: bool = False
-    melody_priority: bool = False
     chord_strum: bool = False
     auto_sustain: bool = False
     sustain_key: str = "space"

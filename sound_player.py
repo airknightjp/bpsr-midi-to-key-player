@@ -14,8 +14,6 @@ from audio_buffer import (
     DEFAULT_AUDIO_RESPONSE_FRAMES,
     DEFAULT_QT_AUDIO_FRAMES,
 )
-from chord_optimization import ChordOptimizationPlan
-from chord_optimization_planner import ChordOptimizationPlanner, ChordOptimizationRequest
 from config import (
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
@@ -24,7 +22,6 @@ from config import (
     fit_note_to_base_range,
     shift_midi_note,
 )
-from melody_detection import MelodySource, detect_melody_source
 from midi_parser import MidiEvent
 from playback_timing import PlaybackClock, PlaybackTimeline, prepare_playback_events
 from repeat_guard import RapidRepeatGuard
@@ -35,9 +32,8 @@ from software_synth import SoftwareSynthClient
 StateCallback = Callable[[str], None]
 ErrorCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
-OptimizationProgressCallback = Callable[[int | None], None]
 OutputNoteCallback = Callable[[int, bool], None]
-MelodyOutputNoteCallback = Callable[[int, bool], None]
+OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
 AudioRuntimeChangedCallback = Callable[
     [int, int, int, int, int, str],
     None,
@@ -53,10 +49,9 @@ class MidiSoundPlayer:
         on_state: StateCallback | None = None,
         on_error: ErrorCallback | None = None,
         on_position: PositionCallback | None = None,
-        on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
         on_output_remap: OutputNoteCallback | None = None,
-        on_melody_output_note: MelodyOutputNoteCallback | None = None,
+        on_output_source_note: OutputSourceNoteCallback | None = None,
         enabled_channels: ChannelProvider | None = None,
         enabled_sources: SourceProvider | None = None,
         volume: int = 100,
@@ -64,8 +59,6 @@ class MidiSoundPlayer:
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         humanize_timing: bool = False,
-        chord_optimization: bool = False,
-        melody_priority: bool = False,
         chord_strum: bool = False,
         auto_sustain: bool = False,
         repeat_prevention: bool = False,
@@ -81,11 +74,11 @@ class MidiSoundPlayer:
         self.on_state = on_state or (lambda _state: None)
         self.on_error = on_error or (lambda _message: None)
         self.on_position = on_position or (lambda _position: None)
-        self.on_optimization_progress = on_optimization_progress or (lambda _progress: None)
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
         self.on_output_remap = on_output_remap or self.on_output_note
-        self.on_melody_output_note = (
-            on_melody_output_note or (lambda _note, _pressed: None)
+        self.on_output_source_note = (
+            on_output_source_note
+            or (lambda _note, _track, _channel, _pressed: None)
         )
         self.enabled_channels = enabled_channels or (lambda: set(range(16)))
         self.enabled_sources = enabled_sources
@@ -100,8 +93,6 @@ class MidiSoundPlayer:
             min(MAX_OCTAVE_SHIFT, int(octave_shift)),
         )
         self.humanize_timing = humanize_timing
-        self.chord_optimization = chord_optimization
-        self.melody_priority = bool(melody_priority)
         self.chord_strum = chord_strum
         self.auto_sustain = auto_sustain
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
@@ -131,47 +122,15 @@ class MidiSoundPlayer:
         self._active_notes: set[tuple[int, int]] = set()
         self._active_note_owner: dict[tuple[int, int], int] = {}
         self._active_note_velocity: dict[tuple[int, int], int] = {}
-        self._active_note_melody: dict[tuple[int, int], bool] = {}
+        self._active_note_source: dict[tuple[int, int], tuple[int, int]] = {}
         self._sustain_channels: set[int] = set()
         self._manual_sustain_sources: set[tuple[int, int]] = set()
         self._auto_sustain_sources: set[tuple[int, int]] = set()
         self._suppressed_note_offs: dict[tuple[int, int, int], int] = defaultdict(int)
-        self._chord_optimization_plan: ChordOptimizationPlan | None = None
-        self._chord_optimization_plan_auto_fit: bool | None = None
-        self._chord_optimization_plan_speed: int | None = None
-        self._chord_optimization_plan_transpose: int | None = None
-        self._chord_optimization_plan_octave: int | None = None
-        self._chord_optimization_plan_melody_priority: bool | None = None
-        self._chord_optimization_plan_dirty = True
-        self._optimization_generation = 0
-        self._current_events: list[MidiEvent] | None = None
-        self._melody_source: MelodySource | None = None
-        self._optimization_planner = ChordOptimizationPlanner(
-            request_provider=self._optimization_request,
-            request_is_current=self._optimization_request_is_current,
-            commit_plan=self._commit_optimization_plan,
-            should_stop=self._stop_event.is_set,
-            on_progress=self.on_optimization_progress,
-        )
 
     @property
     def is_playing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
-
-    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
-        with self._state_lock:
-            if (
-                not self.chord_optimization
-                or self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
-                or self._chord_optimization_plan_transpose != self.transpose_semitones
-                or self._chord_optimization_plan_octave != self.note_octave_shift
-                or (
-                    self._chord_optimization_plan_melody_priority
-                    != self.melody_priority
-                )
-            ):
-                return None
-            return self._chord_optimization_plan
 
     def current_position(self) -> float | None:
         with self._state_lock:
@@ -189,10 +148,6 @@ class MidiSoundPlayer:
         self._release_requested.clear()
         self._remap_active_notes_requested.clear()
         self._repeat_guard.reset()
-        with self._state_lock:
-            self._current_events = events
-            self._melody_source = detect_melody_source(events)
-            self._mark_chord_optimization_dirty_locked()
         with self._lock:
             self._pending_seek = None
             self._pending_switch = None
@@ -235,10 +190,8 @@ class MidiSoundPlayer:
             if self.auto_fit_note_range == enabled:
                 return
             self.auto_fit_note_range = enabled
-            self._mark_chord_optimization_dirty_locked()
             self._remap_active_notes_requested.set()
             self._release_requested.set()
-        self._schedule_chord_optimization()
 
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
         transpose_semitones = max(
@@ -254,9 +207,7 @@ class MidiSoundPlayer:
                 return
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
-            self._mark_chord_optimization_dirty_locked()
             self._release_requested.set()
-        self._schedule_chord_optimization()
 
     def set_humanize_timing(self, enabled: bool) -> None:
         with self._state_lock:
@@ -265,34 +216,6 @@ class MidiSoundPlayer:
     def _humanize_timing_enabled(self) -> bool:
         with self._state_lock:
             return self.humanize_timing
-
-    def set_chord_optimization(self, enabled: bool) -> None:
-        with self._state_lock:
-            enabled = bool(enabled)
-            if self.chord_optimization == enabled:
-                return
-            self.chord_optimization = enabled
-            self._mark_chord_optimization_dirty_locked()
-            self._release_requested.set()
-        if enabled:
-            self._schedule_chord_optimization()
-        else:
-            self.on_optimization_progress(None)
-
-    def set_melody_priority(self, enabled: bool) -> None:
-        with self._state_lock:
-            enabled = bool(enabled)
-            if self.melody_priority == enabled:
-                return
-            self.melody_priority = enabled
-            self._mark_chord_optimization_dirty_locked()
-        self._remap_active_notes_requested.set()
-        self._schedule_chord_optimization()
-
-    def request_chord_optimization_refresh(self) -> None:
-        with self._state_lock:
-            self._mark_chord_optimization_dirty_locked()
-        self._schedule_chord_optimization()
 
     def set_chord_strum(self, enabled: bool) -> None:
         with self._state_lock:
@@ -318,13 +241,10 @@ class MidiSoundPlayer:
     def set_playback_speed(self, speed_percent: int) -> None:
         with self._state_lock:
             speed_percent = int(speed_percent)
-            if self.playback_speed_percent != speed_percent:
-                self.playback_speed_percent = speed_percent
-                self._mark_chord_optimization_dirty_locked()
+            self.playback_speed_percent = speed_percent
             clock = self._clock
         if clock is not None:
             clock.set_speed_percent(speed_percent)
-            self._schedule_chord_optimization()
 
     def seek(self, position: float) -> None:
         position = max(0.0, position)
@@ -336,8 +256,6 @@ class MidiSoundPlayer:
 
     def switch(self, events: list[MidiEvent], start_time: float = 0.0) -> None:
         start_time = max(0.0, start_time)
-        with self._state_lock:
-            self._melody_source = detect_melody_source(events)
         with self._lock:
             self._pending_seek = None
             self._pending_switch = (events, start_time)
@@ -375,7 +293,7 @@ class MidiSoundPlayer:
             self._active_notes.clear()
             self._active_note_owner.clear()
             self._active_note_velocity.clear()
-            self._active_note_melody.clear()
+            self._active_note_source.clear()
             self._suppressed_note_offs.clear()
 
     def stop(self) -> None:
@@ -385,7 +303,6 @@ class MidiSoundPlayer:
         if self._thread is None or threading.current_thread() is self._thread:
             return
         self._thread.join(timeout)
-        self._optimization_planner.wait(timeout=0.2)
 
     def _run(self, events: list[MidiEvent], start_time: float) -> None:
         try:
@@ -421,8 +338,6 @@ class MidiSoundPlayer:
                 pass
             with self._state_lock:
                 self._clock = None
-                self._current_events = None
-                self._optimization_generation += 1
             if self._stop_event.is_set():
                 self.on_state("sound stopped")
             else:
@@ -431,9 +346,6 @@ class MidiSoundPlayer:
     def _play_from(self, events: list[MidiEvent], start_time: float) -> float:
         with self._lock:
             position_generation = self._position_generation
-        self._refresh_chord_optimization_plan(events, force=True)
-        if self._stop_event.is_set():
-            return start_time
         with self._state_lock:
             speed_percent = self.playback_speed_percent
         clock = PlaybackClock(start_time, speed_percent)
@@ -443,11 +355,7 @@ class MidiSoundPlayer:
         self._next_position_report_at = 0.0
         timeline = PlaybackTimeline(start_time, self._random)
         planned_events = plan_auto_sustain(events)
-        for scheduled in prepare_playback_events(
-            planned_events,
-            self._random,
-            self._chord_optimization_timing_offset,
-        ):
+        for scheduled in prepare_playback_events(planned_events, self._random):
             event = scheduled.event
             if self._stop_event.is_set():
                 return last_position
@@ -479,7 +387,6 @@ class MidiSoundPlayer:
                     scheduled,
                     self._humanize_timing_enabled(),
                     self._chord_strum_enabled(),
-                    self._chord_optimization_timing_offset(event),
                 )
                 delay = clock.delay_until(scheduled_time)
                 if delay <= 0:
@@ -571,7 +478,7 @@ class MidiSoundPlayer:
                     playable_note,
                     velocity,
                     owner_note=event.note,
-                    melody=self._event_source(event) == self._melody_source,
+                    source_track=event.track,
                 )
             elif event.kind == "note_off" and event.note is not None:
                 playable_note = self._playable_event_note(event)
@@ -633,127 +540,9 @@ class MidiSoundPlayer:
         return shifted_note
 
     def _playable_event_note(self, event: MidiEvent) -> int | None:
-        chord_optimization = self.chord_optimization
-        auto_fit_note_range = self.auto_fit_note_range
-        plan = self._chord_optimization_plan
-        plan_transpose = self._chord_optimization_plan_transpose
-        plan_octave = self._chord_optimization_plan_octave
-        plan_melody_priority = self._chord_optimization_plan_melody_priority
-        if (
-            chord_optimization
-            and plan is not None
-            and self._chord_optimization_plan_auto_fit == auto_fit_note_range
-            and plan_transpose == self.transpose_semitones
-            and plan_octave == self.note_octave_shift
-            and plan_melody_priority == self.melody_priority
-        ):
-            planned, target = plan.target_for(event)
-            if planned:
-                return target
         if event.note is None:
             return None
         return self._playable_note(event.note)
-
-    def _chord_optimization_timing_offset(self, event: MidiEvent) -> float | None:
-        if not self.chord_optimization or self._chord_optimization_plan is None:
-            return None
-        if (
-            self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
-            or self._chord_optimization_plan_transpose != self.transpose_semitones
-            or self._chord_optimization_plan_octave != self.note_octave_shift
-            or (
-                self._chord_optimization_plan_melody_priority
-                != self.melody_priority
-            )
-        ):
-            return None
-        return self._chord_optimization_plan.timing_offset_for(event)
-
-    def _refresh_chord_optimization_plan(
-        self,
-        events: list[MidiEvent],
-        force: bool = False,
-    ) -> None:
-        with self._state_lock:
-            if self._current_events is not events:
-                self._current_events = events
-                self._mark_chord_optimization_dirty_locked()
-        if force:
-            self._optimization_planner.build_now()
-        else:
-            self._schedule_chord_optimization()
-
-    def _mark_chord_optimization_dirty_locked(self) -> None:
-        self._chord_optimization_plan_dirty = True
-        self._optimization_generation += 1
-
-    def _schedule_chord_optimization(self) -> None:
-        with self._state_lock:
-            should_schedule = (
-                self._current_events is not None
-                and self.chord_optimization
-                and self._chord_optimization_plan_dirty
-            )
-        if should_schedule:
-            self._optimization_planner.schedule()
-
-    def _optimization_request(self) -> ChordOptimizationRequest | None:
-        with self._state_lock:
-            if (
-                not self.chord_optimization
-                or not self._chord_optimization_plan_dirty
-                or self._current_events is None
-            ):
-                return None
-            return ChordOptimizationRequest(
-                generation=self._optimization_generation,
-                events=self._current_events,
-                options={
-                    "auto_fit_note_range": self.auto_fit_note_range,
-                    "transpose_semitones": self.transpose_semitones,
-                    "octave_shift": self.note_octave_shift,
-                    "playback_speed_percent": self.playback_speed_percent,
-                    "prioritize_melody": self.melody_priority,
-                    "event_enabled": self._event_is_enabled,
-                },
-            )
-
-    def _optimization_request_is_current(self, generation: int) -> bool:
-        with self._state_lock:
-            return self._optimization_request_is_current_locked(generation)
-
-    def _commit_optimization_plan(
-        self,
-        request: ChordOptimizationRequest,
-        plan: ChordOptimizationPlan,
-    ) -> bool:
-        with self._state_lock:
-            if not self._optimization_request_is_current_locked(request.generation):
-                return False
-            self._chord_optimization_plan = plan
-            self._chord_optimization_plan_auto_fit = bool(
-                request.options["auto_fit_note_range"]
-            )
-            self._chord_optimization_plan_speed = int(
-                request.options["playback_speed_percent"]
-            )
-            self._chord_optimization_plan_transpose = int(
-                request.options["transpose_semitones"]
-            )
-            self._chord_optimization_plan_octave = int(request.options["octave_shift"])
-            self._chord_optimization_plan_melody_priority = bool(
-                request.options["prioritize_melody"]
-            )
-            self._chord_optimization_plan_dirty = False
-            return True
-
-    def _optimization_request_is_current_locked(self, generation: int) -> bool:
-        return (
-            not self._stop_event.is_set()
-            and self.chord_optimization
-            and self._current_events is not None
-            and self._optimization_generation == generation
-        )
 
     def _send_note_on(
         self,
@@ -762,25 +551,28 @@ class MidiSoundPlayer:
         velocity: int,
         owner_note: int | None = None,
         output_callback: OutputNoteCallback | None = None,
-        melody: bool = False,
+        source_track: int | None = None,
     ) -> None:
         active_note = (channel, note)
         previous_velocity = self._active_note_velocity.get(active_note, 0)
-        previous_melody = self._active_note_melody.get(active_note, False)
+        previous_source = self._active_note_source.get(active_note)
+        source = (
+            source_track if source_track is not None else -1,
+            channel,
+        )
         if active_note in self._active_notes and previous_velocity > 0:
             self._synth.note_off(channel, note)
-        if previous_melody and not melody:
-            self._emit_melody_output_note(note, False)
+        if previous_source is not None and previous_source != source:
+            self._emit_output_source_note(note, previous_source, False)
         if velocity > 0:
             self._synth.note_on(channel, note, velocity)
         self._active_notes.add(active_note)
         self._active_note_velocity[active_note] = velocity
-        self._active_note_melody[active_note] = bool(melody)
+        self._active_note_source[active_note] = source
         if owner_note is not None:
             self._active_note_owner[active_note] = owner_note
         self._emit_output_note(note, True, output_callback)
-        if melody:
-            self._emit_melody_output_note(note, True)
+        self._emit_output_source_note(note, source, True)
 
     def _send_note_off(
         self,
@@ -800,12 +592,12 @@ class MidiSoundPlayer:
             return
         self._active_note_owner.pop(active_note, None)
         velocity = self._active_note_velocity.pop(active_note, 0)
-        melody = self._active_note_melody.pop(active_note, False)
+        source = self._active_note_source.pop(active_note, None)
         if note_was_active and velocity > 0:
             self._synth.note_off(channel, note)
         self._active_notes.discard(active_note)
-        if note_was_active and melody:
-            self._emit_melody_output_note(note, False)
+        if note_was_active and source is not None:
+            self._emit_output_source_note(note, source, False)
         if note_was_active and not any(
             active == note for _channel, active in self._active_notes
         ):
@@ -822,9 +614,14 @@ class MidiSoundPlayer:
         except Exception:
             pass
 
-    def _emit_melody_output_note(self, note: int, pressed: bool) -> None:
+    def _emit_output_source_note(
+        self,
+        note: int,
+        source: tuple[int, int],
+        pressed: bool,
+    ) -> None:
         try:
-            self.on_melody_output_note(note, pressed)
+            self.on_output_source_note(note, source[0], source[1], pressed)
         except Exception:
             pass
 
@@ -894,7 +691,7 @@ class MidiSoundPlayer:
                     channel,
                     self._active_note_owner.get((channel, note), note),
                     self._active_note_velocity.get((channel, note), 0),
-                    self._active_note_melody.get((channel, note), False),
+                    self._active_note_source.get((channel, note), (-1, channel)),
                 )
                 for channel, note in sorted(self._active_notes)
             ]
@@ -915,7 +712,7 @@ class MidiSoundPlayer:
                     True,
                     automatic=True,
                 )
-            for channel, owner_note, velocity, melody in active_notes:
+            for channel, owner_note, velocity, source in active_notes:
                 playable_note = self._playable_note(owner_note)
                 if playable_note is None:
                     continue
@@ -925,7 +722,7 @@ class MidiSoundPlayer:
                     velocity,
                     owner_note=owner_note,
                     output_callback=self.on_output_remap,
-                    melody=melody,
+                    source_track=source[0],
                 )
 
     def _pop_pending_seek(self) -> float | None:
@@ -933,13 +730,6 @@ class MidiSoundPlayer:
             pending_seek = self._pending_seek
             self._pending_seek = None
         return pending_seek
-
-    @staticmethod
-    def _event_source(event: MidiEvent) -> MelodySource:
-        return (
-            event.track if event.track is not None else 0,
-            event.channel if event.channel is not None else 0,
-        )
 
     def _pop_pending_switch(self) -> tuple[list[MidiEvent], float] | None:
         with self._lock:

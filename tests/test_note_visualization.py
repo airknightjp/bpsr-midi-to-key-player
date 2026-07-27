@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import unittest
-
-from chord_optimization import ChordOptimizationPlan
 from midi_parser import MidiEvent
 from note_visualization import (
     PianoRollNote,
@@ -12,7 +10,7 @@ from note_visualization import (
 
 
 class NoteVisualizationTests(unittest.TestCase):
-    def test_marks_melody_notes_without_a_chord_optimization_plan(self) -> None:
+    def test_preserves_track_channel_source_for_each_note(self) -> None:
         events = [
             MidiEvent(0.0, "note_on", 0, 48, 70, track=0),
             MidiEvent(0.0, "note_on", 0, 52, 70, track=0),
@@ -31,15 +29,15 @@ class NoteVisualizationTests(unittest.TestCase):
         notes = build_piano_roll_notes(events)
 
         self.assertEqual(
-            {note.note for note in notes if note.melody},
-            {72, 74},
-        )
-        self.assertTrue(
-            all(
-                not note.melody
-                for note in notes
-                if note.note in {48, 50, 52, 53}
-            )
+            {(note.note, note.source) for note in notes},
+            {
+                (48, (0, 0)),
+                (52, (0, 0)),
+                (72, (1, 1)),
+                (50, (0, 0)),
+                (53, (0, 0)),
+                (74, (1, 1)),
+            },
         )
 
     def test_builds_full_piano_note_spans(self) -> None:
@@ -125,24 +123,10 @@ class NoteVisualizationTests(unittest.TestCase):
 
         notes = build_piano_roll_notes(events, enabled_sources={(0, 0)})
 
-        self.assertEqual(notes, (PianoRollNote(0.0, 0.01, 60, melody=True),))
-
-    def test_uses_chord_reconstruction_target_and_timing(self) -> None:
-        note_on = MidiEvent(1.0, "note_on", channel=0, note=84, velocity=90, track=0)
-        note_off = MidiEvent(2.0, "note_off", channel=0, note=84, velocity=0, track=0)
-        plan = ChordOptimizationPlan(
-            event_targets={id(note_on): 72},
-            event_timing_offsets={id(note_on): 0.01, id(note_off): 0.01},
+        self.assertEqual(
+            notes,
+            (PianoRollNote(0.0, 0.01, 60, source=(0, 0)),),
         )
-
-        notes = build_piano_roll_notes(
-            (note_on, note_off),
-            enabled_sources={(0, 0)},
-            chord_optimization_plan=plan,
-            chord_strum=True,
-        )
-
-        self.assertEqual(notes, (PianoRollNote(1.01, 2.01, 72, melody=True),))
 
     def test_applies_timing_corrections_to_the_visual_sequence(self) -> None:
         events = [

@@ -17,8 +17,6 @@ from audio_buffer import (
     normalize_qt_audio_frames,
 )
 from app_state import AppState, MidiListRow, TrackChannelItem
-from chord_optimization import ChordOptimizationPlan
-from melody_detection import detect_melody_source
 from config import (
     INPUT_CONVERSION_MIDI_FILE,
     INPUT_CONVERSION_REALTIME,
@@ -60,6 +58,7 @@ from rhythm_judgment import RhythmJudge, RhythmJudgment
 from settings import AppSettings, load_settings, save_settings
 from sound_sources import normalize_sound_source
 from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
+from source_colors import track_channel_color
 
 
 GAME_COUNTDOWN_KEY_HOLD_SECONDS = 0.12
@@ -115,8 +114,6 @@ class AppController:
             transpose_semitones=self.settings.transpose_semitones,
             octave_shift=self.settings.octave_shift,
             humanize_timing=self.settings.humanize_timing,
-            chord_optimization=self.settings.chord_optimization,
-            melody_priority=self.settings.melody_priority,
             chord_strum=self.settings.chord_strum,
             auto_sustain=self.settings.auto_sustain,
             repeat_prevention=self.settings.repeat_prevention,
@@ -196,7 +193,10 @@ class AppController:
         self.position_generation = 0
         self.midi_input_id = 0
         self._active_output_notes_by_source: dict[tuple[str, int], set[int]] = {}
-        self._melody_output_notes_by_source: dict[tuple[str, int], set[int]] = {}
+        self._active_output_note_sources: dict[
+            tuple[str, int],
+            set[tuple[int, int, int]],
+        ] = {}
         self._output_note_visible_until: dict[int, float] = {}
         self._output_note_release_due: dict[int, float] = {}
         self._realtime_note_visible_until: dict[int, float] = {}
@@ -684,15 +684,19 @@ class AppController:
                 ("playback_error", pid, message)
             ),
             on_position=lambda value, pid=playback_id: self._queue_position_message(pid, value),
-            on_optimization_progress=lambda progress, pid=playback_id: self._queue_worker_message(
-                ("optimization", pid, progress)
-            ),
             on_output_note=lambda note, pressed, pid=playback_id: self._queue_worker_message(
                 ("key_output_note", pid, note, pressed)
             ),
-            on_melody_output_note=lambda note, pressed, pid=playback_id: (
+            on_output_source_note=lambda note, track, channel, pressed, pid=playback_id: (
                 self._queue_worker_message(
-                    ("key_melody_output_note", pid, note, pressed)
+                    (
+                        "key_output_source",
+                        pid,
+                        note,
+                        track,
+                        channel,
+                        pressed,
+                    )
                 )
             ),
             enabled_channels=self.enabled_channels,
@@ -701,8 +705,6 @@ class AppController:
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
-            chord_optimization=self.state.chord_optimization,
-            melody_priority=self.state.melody_priority,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -792,13 +794,6 @@ class AppController:
                 if report_playback
                 else None
             ),
-            on_optimization_progress=(
-                lambda progress, pid=playback_id: self._queue_worker_message(
-                    ("optimization", pid, progress)
-                )
-                if report_playback
-                else None
-            ),
             on_output_note=(
                 lambda note, pressed, pid=playback_id: self._queue_worker_message(
                     ("sound_output_note", pid, note, pressed, time.monotonic())
@@ -813,9 +808,16 @@ class AppController:
                 if report_playback
                 else None
             ),
-            on_melody_output_note=(
-                lambda note, pressed, pid=playback_id: self._queue_worker_message(
-                    ("sound_melody_output_note", pid, note, pressed)
+            on_output_source_note=(
+                lambda note, track, channel, pressed, pid=playback_id: self._queue_worker_message(
+                    (
+                        "sound_output_source",
+                        pid,
+                        note,
+                        track,
+                        channel,
+                        pressed,
+                    )
                 )
                 if report_playback
                 else None
@@ -845,8 +847,6 @@ class AppController:
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
-            chord_optimization=self.state.chord_optimization,
-            melody_priority=self.state.melody_priority,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -998,6 +998,18 @@ class AppController:
             on_output_note=lambda note, pressed, iid=input_id: self._queue_worker_message(
                 ("midi_output_note", iid, note, pressed, time.monotonic())
             ),
+            on_output_source_note=lambda note, track, channel, pressed, iid=input_id: (
+                self._queue_worker_message(
+                    (
+                        "midi_output_source",
+                        iid,
+                        note,
+                        track,
+                        channel,
+                        pressed,
+                    )
+                )
+            ),
             auto_fit_note_range=self.state.auto_fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
@@ -1058,8 +1070,6 @@ class AppController:
             "game_countdown_sound",
             "auto_fit_note_range",
             "humanize_timing",
-            "chord_optimization",
-            "melody_priority",
             "chord_strum",
             "auto_sustain",
             "repeat_prevention",
@@ -1202,13 +1212,6 @@ class AppController:
     def current_key_bindings(self) -> dict[int, str]:
         return normalized_key_bindings(self.key_bindings)
 
-    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
-        if self.state.sound_playing and self.sound_player:
-            return self.sound_player.current_chord_optimization_plan()
-        if (self.state.keyboard_playing or self.state.keyboard_paused) and self.player:
-            return self.player.current_chord_optimization_plan()
-        return None
-
     def piano_roll_playback_running(self) -> bool:
         if self.state.sound_playing and self.sound_player:
             return self.sound_player.current_position() is not None
@@ -1235,13 +1238,10 @@ class AppController:
 
     def _apply_track_channel_change(self) -> None:
         if self.state.keyboard_playing and self.player and self.player.is_playing:
-            self.player.request_chord_optimization_refresh()
             self.player.request_release_all()
             if self.sound_player and self.sound_player.is_playing:
-                self.sound_player.request_chord_optimization_refresh()
                 self.sound_player.release_all()
         elif self.state.sound_playing and self.sound_player and self.sound_player.is_playing:
-            self.sound_player.request_chord_optimization_refresh()
             self.sound_player.release_all()
 
     def enabled_channels(self) -> set[int]:
@@ -1336,16 +1336,20 @@ class AppController:
                     "keyboard_sound_error",
                     "playback_error",
                     "position",
-                    "optimization",
                     "key_output_note",
                     "sound_output_note",
                     "sound_output_remap",
-                    "key_melody_output_note",
-                    "sound_melody_output_note",
+                    "key_output_source",
+                    "sound_output_source",
                 }:
                     if int(message[1]) != self.playback_id:
                         continue
                 if kind == "midi_output_note" and int(message[1]) != self.midi_input_id:
+                    continue
+                if (
+                    kind == "midi_output_source"
+                    and int(message[1]) != self.midi_input_id
+                ):
                     continue
                 if kind == "key_state":
                     status = str(message[2])
@@ -1401,14 +1405,6 @@ class AppController:
                     if next_position != self.state.position:
                         self.state.position = next_position
                         position_changed = True
-                elif kind == "optimization":
-                    progress = message[2]
-                    if progress is None:
-                        self.state.status = "playing" if self.state.keyboard_playing else "sound playing"
-                    else:
-                        percent = self._clamp_int(progress, 0, 100, 0)
-                        self.state.status = self.text("optimization_progress").format(percent=percent)
-                    changed = True
                 elif kind in {
                     "key_output_note",
                     "sound_output_note",
@@ -1487,18 +1483,21 @@ class AppController:
                     else:
                         released_output_notes.add(note)
                 elif kind in {
-                    "key_melody_output_note",
-                    "sound_melody_output_note",
+                    "key_output_source",
+                    "sound_output_source",
+                    "midi_output_source",
                 }:
-                    source_kind = (
-                        "key"
-                        if kind == "key_melody_output_note"
-                        else "sound"
-                    )
-                    changed = self._set_melody_output_note_state(
+                    source_kind = {
+                        "key_output_source": "key",
+                        "sound_output_source": "sound",
+                        "midi_output_source": "midi",
+                    }[kind]
+                    changed = self._set_output_note_source_state(
                         (source_kind, int(message[1])),
                         int(message[2]),
-                        bool(message[3]),
+                        int(message[3]),
+                        int(message[4]),
+                        bool(message[5]),
                     ) or changed
             if completed_sound_mode is not None:
                 changed = (
@@ -1580,8 +1579,6 @@ class AppController:
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
-            chord_optimization=self.state.chord_optimization,
-            melody_priority=self.state.melody_priority,
             chord_strum=self.state.chord_strum,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
@@ -1672,16 +1669,6 @@ class AppController:
                 self.player.set_humanize_timing(self.state.humanize_timing)
             if self.sound_player:
                 self.sound_player.set_humanize_timing(self.state.humanize_timing)
-        elif name == "chord_optimization":
-            if self.player:
-                self.player.set_chord_optimization(self.state.chord_optimization)
-            if self.sound_player:
-                self.sound_player.set_chord_optimization(self.state.chord_optimization)
-        elif name == "melody_priority":
-            if self.player:
-                self.player.set_melody_priority(self.state.melody_priority)
-            if self.sound_player:
-                self.sound_player.set_melody_priority(self.state.melody_priority)
         elif name == "chord_strum":
             if self.player:
                 self.player.set_chord_strum(self.state.chord_strum)
@@ -1734,14 +1721,13 @@ class AppController:
         ]
         if not sources:
             sources = [(0, channel) for channel in summary.channels]
-        melody_source = detect_melody_source(self.events)
         self._set_enabled_sources(sources)
         self.state.track_channels = [
             TrackChannelItem(
                 track=track,
                 channel=channel,
                 enabled=True,
-                melody=(track, channel) == melody_source,
+                color=track_channel_color(track, channel),
             )
             for track, channel in sources
         ]
@@ -2124,32 +2110,57 @@ class AppController:
         self.state.realtime_output_notes = next_notes
         return True
 
-    def _set_melody_output_note_state(
+    def _set_output_note_source_state(
         self,
-        source: tuple[str, int],
+        playback_source: tuple[str, int],
         note: int,
+        track: int,
+        channel: int,
         pressed: bool,
     ) -> bool:
         if not PIANO_NOTE_MIN <= note <= PIANO_NOTE_MAX:
             return False
-        source_notes = self._melody_output_notes_by_source.setdefault(
-            source,
+        source_notes = self._active_output_note_sources.setdefault(
+            playback_source,
             set(),
         )
+        source_entry = (note, track, channel)
         if pressed:
-            source_notes.add(note)
+            source_notes.add(source_entry)
         else:
-            source_notes.discard(note)
+            source_notes.discard(source_entry)
             if not source_notes:
-                self._melody_output_notes_by_source.pop(source, None)
-        next_notes = (
-            frozenset().union(*self._melody_output_notes_by_source.values())
-            if self._melody_output_notes_by_source
-            else frozenset()
+                self._active_output_note_sources.pop(playback_source, None)
+        output_sources = tuple(
+            sorted(
+                set().union(*self._active_output_note_sources.values())
+                if self._active_output_note_sources
+                else set()
+            )
         )
-        if next_notes == self.state.melody_output_notes:
+        realtime_sources = tuple(
+            sorted(
+                set().union(
+                    *(
+                        entries
+                        for source, entries in self._active_output_note_sources.items()
+                        if source[0] == "midi"
+                    )
+                )
+                if any(
+                    source[0] == "midi"
+                    for source in self._active_output_note_sources
+                )
+                else set()
+            )
+        )
+        if (
+            output_sources == self.state.output_note_sources
+            and realtime_sources == self.state.realtime_output_note_sources
+        ):
             return False
-        self.state.melody_output_notes = next_notes
+        self.state.output_note_sources = output_sources
+        self.state.realtime_output_note_sources = realtime_sources
         return True
 
     def _expire_output_note_releases(self) -> bool:
@@ -2220,9 +2231,8 @@ class AppController:
             self.state.realtime_output_retrigger_events = ()
         if source_kind is None:
             self._active_output_notes_by_source.clear()
-            self._melody_output_notes_by_source.clear()
+            self._active_output_note_sources.clear()
             remaining: set[int] = set()
-            remaining_melody: set[int] = set()
         else:
             for source in [
                 item for item in self._active_output_notes_by_source if item[0] == source_kind
@@ -2230,18 +2240,13 @@ class AppController:
                 self._active_output_notes_by_source.pop(source, None)
             for source in [
                 item
-                for item in self._melody_output_notes_by_source
+                for item in self._active_output_note_sources
                 if item[0] == source_kind
             ]:
-                self._melody_output_notes_by_source.pop(source, None)
+                self._active_output_note_sources.pop(source, None)
             remaining = (
                 set().union(*self._active_output_notes_by_source.values())
                 if self._active_output_notes_by_source
-                else set()
-            )
-            remaining_melody = (
-                set().union(*self._melody_output_notes_by_source.values())
-                if self._melody_output_notes_by_source
                 else set()
             )
         realtime_changed = self._sync_realtime_output_notes()
@@ -2264,16 +2269,36 @@ class AppController:
             if note in remaining
         }
         next_notes = frozenset(remaining)
-        next_melody_notes = frozenset(remaining_melody)
-        melody_changed = self.state.melody_output_notes != next_melody_notes
-        self.state.melody_output_notes = next_melody_notes
+        next_output_sources = tuple(
+            sorted(
+                set().union(*self._active_output_note_sources.values())
+                if self._active_output_note_sources
+                else set()
+            )
+        )
+        next_realtime_sources = tuple(
+            sorted(
+                {
+                    entry
+                    for source, entries in self._active_output_note_sources.items()
+                    if source[0] == "midi"
+                    for entry in entries
+                }
+            )
+        )
+        source_colors_changed = (
+            self.state.output_note_sources != next_output_sources
+            or self.state.realtime_output_note_sources != next_realtime_sources
+        )
+        self.state.output_note_sources = next_output_sources
+        self.state.realtime_output_note_sources = next_realtime_sources
         if self.state.active_output_notes == next_notes:
             return (
                 had_retrigger
                 or had_realtime_events
                 or had_realtime_retrigger
                 or realtime_changed
-                or melody_changed
+                or source_colors_changed
             )
         self.state.active_output_notes = next_notes
         return True

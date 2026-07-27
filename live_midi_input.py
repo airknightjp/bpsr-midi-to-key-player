@@ -34,6 +34,7 @@ MMSYSERR_NOERROR = 0
 StateCallback = Callable[[str], None]
 MidiMessageCallback = Callable[[int, int, int, int, float], None]
 OutputNoteCallback = Callable[[int, bool], None]
+OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
 NoteOwner = tuple[int, int]
 
 
@@ -80,6 +81,7 @@ class MidiInputKeyboardBridge:
         on_state: StateCallback | None = None,
         on_midi_message: MidiMessageCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
+        on_output_source_note: OutputSourceNoteCallback | None = None,
         auto_fit_note_range: bool = False,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
@@ -97,6 +99,10 @@ class MidiInputKeyboardBridge:
             lambda _event_type, _channel, _data1, _data2, _received_at: None
         )
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
+        self.on_output_source_note = (
+            on_output_source_note
+            or (lambda _note, _track, _channel, _pressed: None)
+        )
         self.auto_fit_note_range = auto_fit_note_range
         self.transpose_semitones = max(
             MIN_TRANSPOSE_SEMITONES,
@@ -464,7 +470,7 @@ class MidiInputKeyboardBridge:
         self.output.press(key)
         self._active_key_owner[key] = owner
         self._active_key_note[key] = output_note
-        self._emit_output_note(output_note, True)
+        self._emit_output_note(output_note, True, owner)
 
     def _release_note_key(self, key: str, owner: NoteOwner) -> None:
         current_owner = self._active_key_owner.get(key)
@@ -472,27 +478,44 @@ class MidiInputKeyboardBridge:
             output_note = self._active_key_note.get(key)
             self.output.release(key)
             if output_note is not None:
-                self._emit_output_note(output_note, False)
+                self._emit_output_note(output_note, False, current_owner)
             time.sleep(0.01)
             self.output.press(key)
             if output_note is not None:
-                self._emit_output_note(output_note, True)
+                self._emit_output_note(output_note, True, current_owner)
             return
-        self._active_key_owner.pop(key, None)
         self.output.release(key)
-        self._emit_key_released(key)
+        self._emit_key_released(key, current_owner)
         self._remove_active_key(key)
 
-    def _emit_key_released(self, key: str) -> None:
+    def _emit_key_released(
+        self,
+        key: str,
+        owner: NoteOwner | None = None,
+    ) -> None:
         output_note = self._active_key_note.get(key)
         if output_note is not None:
-            self._emit_output_note(output_note, False)
+            self._emit_output_note(
+                output_note,
+                False,
+                owner or self._active_key_owner.get(key),
+            )
 
-    def _emit_output_note(self, note: int, pressed: bool) -> None:
+    def _emit_output_note(
+        self,
+        note: int,
+        pressed: bool,
+        owner: NoteOwner | None = None,
+    ) -> None:
         try:
             self.on_output_note(note, pressed)
         except Exception:
             pass
+        if owner is not None:
+            try:
+                self.on_output_source_note(note, -1, owner[0], pressed)
+            except Exception:
+                pass
 
     def _remove_active_key(self, key: str) -> None:
         self._active_key_owner.pop(key, None)

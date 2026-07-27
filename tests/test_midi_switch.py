@@ -49,7 +49,7 @@ class RecordingSoundPlayer(MidiSoundPlayer):
         velocity: int,
         owner_note: int | None = None,
         output_callback=None,
-        melody: bool = False,
+        source_track: int | None = None,
     ) -> None:
         self.sent_notes.append((channel, note, velocity))
         self._active_notes.add((channel, note))
@@ -77,6 +77,38 @@ class RecordingShortMessageSoundPlayer(MidiSoundPlayer):
 
 
 class MidiSwitchTests(unittest.TestCase):
+    def test_sound_player_reports_track_channel_for_output_notes(self) -> None:
+        source_events: list[tuple[int, int, int, bool]] = []
+        player = RecordingShortMessageSoundPlayer(
+            on_output_source_note=lambda *event: source_events.append(event),
+        )
+
+        player._handle_event(
+            MidiEvent(
+                0.0,
+                "note_on",
+                channel=0,
+                note=64,
+                velocity=80,
+                track=3,
+            )
+        )
+        player._handle_event(
+            MidiEvent(
+                0.5,
+                "note_off",
+                channel=0,
+                note=64,
+                velocity=0,
+                track=3,
+            )
+        )
+
+        self.assertEqual(
+            source_events,
+            [(64, 3, 0, True), (64, 3, 0, False)],
+        )
+
     def test_sound_player_reports_playback_failure(self) -> None:
         errors: list[str] = []
         player = RecordingSoundPlayer()
@@ -99,28 +131,6 @@ class MidiSwitchTests(unittest.TestCase):
         player.wait_until_stopped(timeout=1.0)
 
         self.assertEqual(errors, ["audio failed"])
-
-    def test_clean_sound_optimization_refresh_does_not_start_worker(self) -> None:
-        player = MidiSoundPlayer(chord_optimization=True)
-        events = [
-            MidiEvent(
-                time=0.0,
-                kind="note_on",
-                channel=0,
-                note=60,
-                velocity=80,
-            )
-        ]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        with patch.object(
-            player._optimization_planner,
-            "schedule",
-        ) as schedule:
-            for _ in range(100):
-                player._refresh_chord_optimization_plan(events)
-
-        schedule.assert_not_called()
 
     def test_live_auto_fit_change_affects_following_sound_playback_notes(self) -> None:
         player = RecordingSoundPlayer()
@@ -475,89 +485,6 @@ class MidiSwitchTests(unittest.TestCase):
         player._handle_event(MidiEvent(time=0.1, kind="note_off", channel=0, note=48, velocity=0))
 
         self.assertEqual(player.messages, [(0x90, 62, 64), (0x80, 62, 0)])
-
-    def test_sound_player_uses_the_same_wide_chord_optimization_plan(self) -> None:
-        player = RecordingShortMessageSoundPlayer(
-            auto_fit_note_range=False,
-            chord_optimization=True,
-        )
-        note_ons = [
-            MidiEvent(time=0.0, kind="note_on", channel=0, note=note, velocity=64, track=0)
-            for note in (36, 64, 79, 96)
-        ]
-        note_offs = [
-            MidiEvent(time=1.0, kind="note_off", channel=0, note=note, velocity=0, track=0)
-            for note in (36, 64, 79, 96)
-        ]
-        events = [*note_ons, *note_offs]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        for event in events:
-            player._handle_event(event)
-
-        self.assertEqual(
-            player.messages,
-            [
-                (0x90, 48, 64),
-                (0x90, 64, 64),
-                (0x90, 67, 64),
-                (0x90, 72, 64),
-                (0x80, 48, 0),
-                (0x80, 64, 0),
-                (0x80, 67, 0),
-                (0x80, 72, 0),
-            ],
-        )
-
-    def test_speed_change_rebuilds_sound_chord_optimization_plan(self) -> None:
-        player = RecordingShortMessageSoundPlayer(
-            chord_optimization=True,
-            playback_speed_percent=100,
-        )
-        events = [MidiEvent(time=0.0, kind="note_on", channel=0, note=84, velocity=80)]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        self.assertFalse(player._chord_optimization_plan_dirty)
-        self.assertEqual(player._chord_optimization_plan_speed, 100)
-
-        player.set_playback_speed(137)
-
-        self.assertTrue(player._chord_optimization_plan_dirty)
-        player._refresh_chord_optimization_plan(events)
-        player._optimization_planner.wait(timeout=1.0)
-        self.assertEqual(player._chord_optimization_plan_speed, 137)
-
-    def test_melody_priority_change_rebuilds_sound_optimization_plan(
-        self,
-    ) -> None:
-        player = RecordingShortMessageSoundPlayer(
-            chord_optimization=True,
-            melody_priority=False,
-            auto_fit_note_range=False,
-        )
-        events = [
-            MidiEvent(0.0, "note_on", 0, 36, 70, track=0),
-            MidiEvent(0.0, "note_on", 0, 64, 70, track=0),
-            MidiEvent(0.0, "note_on", 0, 79, 70, track=0),
-            MidiEvent(0.0, "note_on", 1, 96, 100, track=1),
-        ]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        self.assertFalse(player._chord_optimization_plan_melody_priority)
-        self.assertEqual(
-            player.current_chord_optimization_plan().target_for(events[-1]),
-            (True, 72),
-        )
-
-        player.set_melody_priority(True)
-        player._optimization_planner.wait(timeout=1.0)
-
-        self.assertTrue(player._chord_optimization_plan_melody_priority)
-        self.assertEqual(
-            player.current_chord_optimization_plan().target_for(events[-1]),
-            (True, 96),
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

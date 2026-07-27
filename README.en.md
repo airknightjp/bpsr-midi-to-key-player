@@ -31,7 +31,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
-- Configure timing variation, chord spread, chord reconstruction, and automatic sustain generation.
+- Configure timing variation, chord spread, and automatic sustain generation.
 - Configure rapid-repeat prevention.
 - Display used track/channel combinations as circular buttons in `11` format.
 - Toggle each track/channel combination, with immediate changes during playback.
@@ -118,23 +118,13 @@ The base BPSR keyboard range is C3-B5.
 
 Transpose and octave shift apply to MIDI file keyboard conversion, realtime input conversion, MIDI sound playback, and realtime preview sound. Range fitting or normal out-of-range handling is applied after the pitch shift.
 
-## Chord Reconstruction
+## Performance Timing
 
-When `Chord reconstruction` is enabled, notes starting within approximately 35 ms are analyzed as one chord and rearranged by octaves into a playable form.
+`Timing variation` adds a small timing variation while keeping notes with the same original onset together.
 
-- The top voice, bass, common tones, voice order, and smooth movement between adjacent chords are prioritized while excessive spacing, physical-key collisions, and frequent range switches are discouraged.
-- A sufficiently long rest is treated as a phrase boundary. After the boundary, the planner can select a range suited to the new phrase without being overly constrained by the preceding voicing.
-- With `Fit to 3 octaves` enabled, every optimized chord stays inside C3-B5.
-- With range fitting disabled, the low, normal, and high ranges are compared, and `<` or `>` is used only where the optimized chord benefits from a range change.
-- With range fitting disabled, the current playback speed is evaluated continuously. Slower playback can use the added real-time switching margin to select a wider range, while faster playback avoids unnatural consecutive range changes. Changes made during playback take effect immediately.
-- The playback clock starts after the initial plan is ready.
-- Replanning during playback runs in the background and playback continues with the current plan until the replacement is ready. Continuous speed changes are debounced for 150 ms and obsolete calculations are cancelled.
-- If every note cannot be placed at once, redundant notes or inner voices are omitted before the top voice or bass.
-- This applies to MIDI file keyboard conversion and MIDI sound playback, not realtime input conversion.
+`Chord spread` adds a short onset difference of up to 12 ms to two or more distinct notes starting at exactly the same time. Existing onset differences in the MIDI are preserved.
 
-When `Chord spread` is also enabled, exactly simultaneous chords lead with the top voice and delay inner voices slightly more than outer voices. Stronger notes are also biased toward earlier onsets, with a maximum difference of 12 ms. Existing onset differences in the MIDI are preserved. These planned offsets are not applied while `Chord spread` is disabled.
-
-`Timing variation` remains a separate small timing variation applied to the chord as a group. Rapid-repeat prevention evaluates the converted physical key after chord reconstruction.
+These options apply to MIDI-file keyboard conversion and MIDI sound playback, not realtime input conversion. Rapid-repeat prevention evaluates the actual output interval after timing correction.
 
 ## Automatic Sustain Generation
 

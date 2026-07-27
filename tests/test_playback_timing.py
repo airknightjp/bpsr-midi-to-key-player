@@ -97,47 +97,6 @@ class PlaybackTimingTests(unittest.TestCase):
             [0.0, 0.006],
         )
 
-    def test_optimized_offsets_replace_random_order_for_simultaneous_chord(self) -> None:
-        events = [
-            MidiEvent(time=1.0, kind="note_on", channel=0, note=60, velocity=64),
-            MidiEvent(time=1.0, kind="note_on", channel=0, note=64, velocity=64),
-            MidiEvent(time=1.0, kind="note_on", channel=0, note=67, velocity=64),
-        ]
-        offsets = {60: 0.002, 64: 0.009, 67: 0.0}
-
-        prepared = prepare_playback_events(
-            events,
-            SequenceRandom(0.011, 0.001, 0.006),
-            lambda event: offsets[event.note],
-        )
-
-        self.assertEqual([item.event.note for item in prepared], [67, 60, 64])
-        self.assertEqual(
-            [item.strum_offset for item in prepared],
-            [0.0, 0.002, 0.009],
-        )
-
-    def test_optimized_offset_only_applies_while_chord_strum_is_enabled(self) -> None:
-        event = MidiEvent(time=1.0, kind="note_on", channel=0, note=60, velocity=64)
-        timeline = PlaybackTimeline(0.0, FixedRandom())
-
-        self.assertEqual(
-            timeline.scheduled_time(
-                event,
-                chord_strum=False,
-                chord_optimization_offset=0.009,
-            ),
-            1.0,
-        )
-        self.assertEqual(
-            timeline.scheduled_time(
-                event,
-                chord_strum=True,
-                chord_optimization_offset=0.009,
-            ),
-            1.009,
-        )
-
     def test_speed_change_preserves_position_and_applies_immediately(self) -> None:
         now = [100.0]
         clock = PlaybackClock(

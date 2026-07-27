@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
 
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND
 from midi_parser import MidiEvent
@@ -31,23 +30,39 @@ class FakeOutput:
 
 
 class KeyPlaybackTests(unittest.TestCase):
-    def test_keyboard_optimization_reports_progress_and_completion(self) -> None:
-        progress: list[int | None] = []
+    def test_keyboard_player_reports_track_channel_for_output_notes(self) -> None:
+        output = FakeOutput()
+        source_events: list[tuple[int, int, int, bool]] = []
         player = MidiKeyboardPlayer(
-            output=FakeOutput(),
-            chord_optimization=True,
-            on_optimization_progress=progress.append,
+            output=output,
+            on_output_source_note=lambda *event: source_events.append(event),
         )
-        events = [
-            MidiEvent(time=index * 0.1, kind="note_on", channel=0, note=60, velocity=80)
-            for index in range(20)
-        ]
 
-        player._refresh_chord_optimization_plan(events, force=True)
+        player._handle_event(
+            MidiEvent(
+                0.0,
+                "note_on",
+                channel=0,
+                note=60,
+                velocity=80,
+                track=2,
+            )
+        )
+        player._handle_event(
+            MidiEvent(
+                0.5,
+                "note_off",
+                channel=0,
+                note=60,
+                velocity=0,
+                track=2,
+            )
+        )
 
-        self.assertEqual(progress[0], 0)
-        self.assertIn(100, progress)
-        self.assertIsNone(progress[-1])
+        self.assertEqual(
+            source_events,
+            [(60, 2, 0, True), (60, 2, 0, False)],
+        )
 
     def test_keyboard_player_filters_channels_dynamically_without_restart(self) -> None:
         enabled = {0}
@@ -142,31 +157,6 @@ class KeyPlaybackTests(unittest.TestCase):
 
         self.assertIn("stopped", states)
         self.assertEqual(errors, ["blocked"])
-
-    def test_clean_keyboard_optimization_refresh_does_not_start_worker(self) -> None:
-        player = MidiKeyboardPlayer(
-            output=FakeOutput(),
-            chord_optimization=True,
-        )
-        events = [
-            MidiEvent(
-                time=0.0,
-                kind="note_on",
-                channel=0,
-                note=60,
-                velocity=80,
-            )
-        ]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        with patch.object(
-            player._optimization_planner,
-            "schedule",
-        ) as schedule:
-            for _ in range(100):
-                player._refresh_chord_optimization_plan(events)
-
-        schedule.assert_not_called()
 
     def test_same_note_on_different_channels_has_independent_note_off(self) -> None:
         output = FakeOutput()
@@ -272,86 +262,18 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertEqual(output.pressed, ["s"])
         self.assertEqual(output.released, ["s"])
 
-    def test_keyboard_optimization_uses_one_external_range_for_a_high_chord(self) -> None:
-        output = FakeOutput()
-        player = MidiKeyboardPlayer(output=output, chord_optimization=True)
-        events = [
-            MidiEvent(time=0.0, kind="note_on", channel=0, note=note, velocity=80, track=0)
-            for note in (84, 88, 91)
-        ]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        for event in events:
-            player._handle_event(event)
-
-        self.assertEqual(output.tapped, [">"])
-        self.assertEqual(output.pressed[-3:], ["z", "c", "b"])
-
-    def test_speed_change_rebuilds_keyboard_chord_optimization_plan(self) -> None:
-        player = MidiKeyboardPlayer(
-            output=FakeOutput(),
-            chord_optimization=True,
-            playback_speed_percent=100,
-        )
-        events = [MidiEvent(time=0.0, kind="note_on", channel=0, note=84, velocity=80)]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        self.assertFalse(player._chord_optimization_plan_dirty)
-        self.assertEqual(player._chord_optimization_plan_speed, 100)
-
-        player.set_playback_speed(73)
-
-        self.assertTrue(player._chord_optimization_plan_dirty)
-        player._refresh_chord_optimization_plan(events)
-        player._optimization_planner.wait(timeout=1.0)
-        self.assertEqual(player._chord_optimization_plan_speed, 73)
-
-    def test_melody_priority_change_rebuilds_keyboard_optimization_plan(
-        self,
-    ) -> None:
-        player = MidiKeyboardPlayer(
-            output=FakeOutput(),
-            chord_optimization=True,
-            melody_priority=False,
-        )
-        events = [
-            MidiEvent(0.0, "note_on", 0, 36, 70, track=0),
-            MidiEvent(0.0, "note_on", 0, 64, 70, track=0),
-            MidiEvent(0.0, "note_on", 0, 79, 70, track=0),
-            MidiEvent(0.0, "note_on", 1, 96, 100, track=1),
-        ]
-        player._refresh_chord_optimization_plan(events, force=True)
-
-        self.assertFalse(player._chord_optimization_plan_melody_priority)
-        self.assertEqual(
-            player.current_chord_optimization_plan().target_for(events[-1]),
-            (True, 72),
-        )
-
-        player.set_melody_priority(True)
-        player._optimization_planner.wait(timeout=1.0)
-
-        self.assertTrue(player._chord_optimization_plan_melody_priority)
-        self.assertEqual(
-            player.current_chord_optimization_plan().target_for(events[-1]),
-            (True, 96),
-        )
-
-    def test_optimized_note_still_uses_rapid_repeat_prevention(self) -> None:
+    def test_shifted_note_still_uses_rapid_repeat_prevention(self) -> None:
         output = FakeOutput()
         player = MidiKeyboardPlayer(
             output=output,
-            chord_optimization=True,
             repeat_prevention=True,
         )
         events = [
-            MidiEvent(time=0.00, kind="note_on", channel=0, note=96, velocity=80, track=0),
-            MidiEvent(time=0.01, kind="note_off", channel=0, note=96, velocity=0, track=0),
-            MidiEvent(time=0.04, kind="note_on", channel=0, note=96, velocity=80, track=0),
-            MidiEvent(time=0.05, kind="note_off", channel=0, note=96, velocity=0, track=0),
+            MidiEvent(time=0.00, kind="note_on", channel=0, note=60, velocity=80, track=0),
+            MidiEvent(time=0.01, kind="note_off", channel=0, note=60, velocity=0, track=0),
+            MidiEvent(time=0.04, kind="note_on", channel=0, note=60, velocity=80, track=0),
+            MidiEvent(time=0.05, kind="note_off", channel=0, note=60, velocity=0, track=0),
         ]
-        player._refresh_chord_optimization_plan(events, force=True)
-
         for event in events:
             player._handle_event(event, emitted_at=1.0 + event.time)
 

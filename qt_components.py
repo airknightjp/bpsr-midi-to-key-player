@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
 from app_state import TrackChannelItem
 from config import PIANO_NOTE_MAX, PIANO_NOTE_MIN
 from note_visualization import PianoRollNote
+from source_colors import contrasting_text_color, track_channel_color
 
 
 PANEL_DRAG_MIME_TYPE = "application/x-bpsr-panel-id"
@@ -839,7 +840,7 @@ class PianoKeyboardWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._active_notes: frozenset[int] = frozenset()
-        self._melody_notes: frozenset[int] = frozenset()
+        self._note_sources: dict[int, tuple[tuple[int, int], ...]] = {}
         self._used_note_range: tuple[int, int] | None = None
         self._surface = QColor("#ffffff")
         self._border = QColor("#9aa5b1")
@@ -848,8 +849,6 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor("#00a7d6")
         self._accent_border = QColor("#0093bd")
         self._accent_text = QColor("#ffffff")
-        self._melody_accent = QColor("#d04855")
-        self._melody_border = QColor("#a52f3b")
         self._unused_surface = self._surface.darker(118)
         self._unused_black = self._black.lighter(145)
         self._unused_text = QColor(self._text)
@@ -943,19 +942,26 @@ class PianoKeyboardWidget(QWidget):
             self._active_notes = active
             self.update()
 
-    def set_melody_notes(self, notes: object) -> None:
+    def set_note_sources(self, entries: object) -> None:
         if not self._rendering_enabled:
             return
         try:
-            melody = frozenset(
-                int(note)
-                for note in notes  # type: ignore[union-attr]
-                if self.NOTE_MIN <= int(note) <= self.NOTE_MAX
-            )
+            grouped: dict[int, set[tuple[int, int]]] = {}
+            for note, track, channel in entries:  # type: ignore[union-attr]
+                normalized_note = int(note)
+                if not self.NOTE_MIN <= normalized_note <= self.NOTE_MAX:
+                    continue
+                grouped.setdefault(normalized_note, set()).add(
+                    (int(track), int(channel))
+                )
+            note_sources = {
+                note: tuple(sorted(sources))
+                for note, sources in grouped.items()
+            }
         except (TypeError, ValueError):
-            melody = frozenset()
-        if melody != self._melody_notes:
-            self._melody_notes = melody
+            note_sources = {}
+        if note_sources != self._note_sources:
+            self._note_sources = note_sources
             self.update()
 
     def set_used_note_range(self, note_range: object) -> None:
@@ -1044,8 +1050,6 @@ class PianoKeyboardWidget(QWidget):
         accent: str,
         accent_border: str,
         accent_text: str,
-        melody_accent: str | None = None,
-        melody_border: str | None = None,
     ) -> None:
         self._surface = QColor(surface)
         self._border = QColor(border)
@@ -1053,14 +1057,20 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor(accent)
         self._accent_border = QColor(accent_border)
         self._accent_text = QColor(accent_text)
-        self._melody_accent = QColor(melody_accent or accent)
-        self._melody_border = QColor(melody_border or accent_border)
         self._unused_surface = self._surface.darker(118)
         self._unused_black = self._black.lighter(145)
         self._unused_text = QColor(self._text)
         self._unused_text.setAlpha(120)
         self._refresh_note_range_colors()
         self.update()
+
+    def _active_note_brush(self, note: int, bounds: QRectF) -> QBrush:
+        del note, bounds
+        return QBrush(self._accent)
+
+    def _active_note_border(self, note: int) -> QColor:
+        del note
+        return QColor(self._accent_border)
 
     def apply_scale(self, scale: float) -> None:
         self.setMinimumWidth(0)
@@ -1093,18 +1103,13 @@ class PianoKeyboardWidget(QWidget):
                 note in self._active_notes
                 and note not in self._retrigger_release_until
             )
-            melody = active and note in self._melody_notes
             painter.fillRect(
                 key_rect,
-                (
-                    self._melody_accent
-                    if melody
-                    else self._accent if active else fill
-                ),
+                self._active_note_brush(note, key_rect) if active else fill,
             )
             painter.setPen(
                 QPen(
-                    self._melody_border if melody else self._accent_border,
+                    self._active_note_border(note),
                     1.0,
                 )
                 if active
@@ -1159,22 +1164,13 @@ class PianoKeyboardWidget(QWidget):
                 note in self._active_notes
                 and note not in self._retrigger_release_until
             )
-            melody = active and note in self._melody_notes
             painter.fillRect(
                 key_rect,
-                (
-                    self._melody_accent
-                    if melody
-                    else self._accent if active else fill
-                ),
+                self._active_note_brush(note, key_rect) if active else fill,
             )
             painter.setPen(
                 QPen(
-                    (
-                        self._melody_border
-                        if melody
-                        else self._accent_border if active else self._border
-                    ),
+                    self._active_note_border(note) if active else self._border,
                     1.0,
                 )
             )
@@ -1189,6 +1185,7 @@ class _RhythmHitImpact:
     started_at: float
     judgment: str
     released: bool
+    source: tuple[int, int] | None
 
 
 @dataclass(frozen=True)
@@ -1209,6 +1206,7 @@ class FallingNotesWidget(QWidget):
         "GOOD": 0.12,
     }
     IMPACT_SIZE_SCALE = 1.0
+    IMPACT_PARTICLE_SPREAD_SCALE = 0.50
     IMPACT_OPACITY = 1.0
     PERFECT_IMPACT_OPACITY = 0.50
     PERFECT_RELEASE_IMPACT_OPACITY = 0.20
@@ -1217,12 +1215,14 @@ class FallingNotesWidget(QWidget):
     RELEASE_IMPACT_PARTICLE_SCALE = 0.50
     LANE_FADE_SECONDS = 0.15
     HELD_LANE_OPACITY = 0.28
+    LANE_GLOW_ENABLED = False
     APPROACHING_TRAIL_GLOW_STOPS = ((0.0, 0), (0.55, 31), (1.0, 120))
     APPROACHING_TRAIL_CORE_STOPS = ((0.0, 16), (0.62, 189), (1.0, 255))
     HELD_TRAIL_GLOW_STOPS = ((0.0, 0), (0.60, 31), (0.88, 57), (1.0, 0))
     HELD_TRAIL_CORE_STOPS = ((0.0, 16), (0.58, 189), (0.88, 150), (1.0, 0))
     WHITE_PITCH_CLASSES = PianoKeyboardWidget.WHITE_PITCH_CLASSES
     BLACK_PITCH_CLASSES = frozenset((1, 3, 6, 8, 10))
+    BLACK_KEY_WIDTH_RATIO = 0.62
     LIGHT_BAR_INTENSITY_STEPS = 12
     IMPACT_PROGRESS_STEPS = 24
     SUBPIXEL_STEPS = 4
@@ -1237,6 +1237,7 @@ class FallingNotesWidget(QWidget):
         self._sequence_starts: tuple[float, ...] = ()
         self._sequence_by_end: tuple[PianoRollNote, ...] = ()
         self._sequence_ends: tuple[float, ...] = ()
+        self._sequence_by_pitch: dict[int, tuple[PianoRollNote, ...]] = {}
         self._sequence_end_entries: tuple[tuple[float, int], ...] = ()
         self._active_sequence_indexes: set[int] = set()
         self._active_start_cursor = 0
@@ -1257,7 +1258,6 @@ class FallingNotesWidget(QWidget):
         self._border = QColor("#9aa5b1")
         self._grid = QColor("#d5dde7")
         self._scheduled = QColor("#00a7d6")
-        self._melody_scheduled = QColor("#d04855")
         self._live = QColor("#0093bd")
         self._scale = 1.0
         self._static_layer: QPixmap | None = None
@@ -1366,6 +1366,7 @@ class FallingNotesWidget(QWidget):
         except (TypeError, ValueError, IndexError):
             return
         now = time.monotonic()
+        playback_position = self._current_position(now)
         changed_notes: set[int] = set()
         for serial, note, judgment, released in reversed(pending):
             self._last_hit_serial = serial
@@ -1394,6 +1395,11 @@ class FallingNotesWidget(QWidget):
                     started_at=now,
                     judgment=judgment,
                     released=released,
+                    source=self._impact_source(
+                        note,
+                        playback_position,
+                        released=released,
+                    ),
                 )
             )
             changed_notes.add(note)
@@ -1417,6 +1423,31 @@ class FallingNotesWidget(QWidget):
         else:
             self._held_lane_counts[note] = active_count - 1
 
+    def _impact_source(
+        self,
+        note: int,
+        position: float,
+        *,
+        released: bool,
+    ) -> tuple[int, int] | None:
+        candidates = self._sequence_by_pitch.get(int(note), ())
+        candidates = tuple(candidate for candidate in candidates if candidate.source)
+        if not candidates:
+            return None
+        matched = min(
+            candidates,
+            key=lambda candidate: (
+                abs(
+                    (candidate.end if released else candidate.start)
+                    - float(position)
+                ),
+                candidate.start,
+                candidate.end,
+                candidate.source,
+            ),
+        )
+        return matched.source
+
     def set_sequence_notes(self, notes: tuple[PianoRollNote, ...]) -> None:
         if not self._rendering_enabled:
             return
@@ -1424,6 +1455,13 @@ class FallingNotesWidget(QWidget):
         if normalized != self._sequence_notes:
             self._sequence_notes = normalized
             self._sequence_starts = tuple(note.start for note in normalized)
+            sequence_by_pitch: dict[int, list[PianoRollNote]] = {}
+            for note in normalized:
+                sequence_by_pitch.setdefault(note.note, []).append(note)
+            self._sequence_by_pitch = {
+                note: tuple(sequence)
+                for note, sequence in sequence_by_pitch.items()
+            }
             self._sequence_end_entries = tuple(
                 sorted(
                     (
@@ -1514,13 +1552,11 @@ class FallingNotesWidget(QWidget):
         grid: str,
         scheduled: str,
         live: str,
-        melody_scheduled: str | None = None,
     ) -> None:
         self._surface = QColor(surface)
         self._border = QColor(border)
         self._grid = QColor(grid)
         self._scheduled = QColor(scheduled)
-        self._melody_scheduled = QColor(melody_scheduled or scheduled)
         self._live = QColor(live)
         self._invalidate_render_cache()
         self.update()
@@ -1622,7 +1658,7 @@ class FallingNotesWidget(QWidget):
                 and note - 1 in white_indexes
             ):
                 center = (white_indexes[note - 1] + 1) * white_width
-                note_width = white_width * 0.62
+                note_width = white_width * self.BLACK_KEY_WIDTH_RATIO
             else:
                 continue
             cache[note] = (center - note_width / 2, note_width)
@@ -2477,6 +2513,7 @@ class FallingNotesWidget(QWidget):
                 * self._scale
                 * progress
                 * spatial_scale
+                * self.IMPACT_PARTICLE_SPREAD_SCALE
             )
             end_distance = (
                 base_radius
@@ -2484,6 +2521,7 @@ class FallingNotesWidget(QWidget):
                 * self._scale
                 * spread
                 * spatial_scale
+                * self.IMPACT_PARTICLE_SPREAD_SCALE
             )
             start = QPointF(
                 center_x + math.cos(radians) * start_distance,
@@ -2515,6 +2553,7 @@ class FallingNotesWidget(QWidget):
                 + (8.0 + 20.0 * progress)
                 * self._scale
                 * spatial_scale
+                * self.IMPACT_PARTICLE_SPREAD_SCALE
             )
             mote = QPointF(
                 center_x + math.cos(radians) * distance,
@@ -2555,12 +2594,24 @@ class FallingNotesWidget(QWidget):
     def _impact_style(
         self,
         judgment: str,
+        source: tuple[int, int] | None = None,
     ) -> tuple[QColor, float, int, int, int]:
+        source_color = (
+            QColor(track_channel_color(*source))
+            if source is not None
+            else None
+        )
         if judgment == "PERFECT":
-            return QColor("#ffd84d"), 1.50, 17, 2, 7
+            return source_color or QColor("#ffd84d"), 1.50, 17, 2, 7
         if judgment == "GREAT":
-            return QColor("#52e5ff"), 1.05, 10, 1, 4
-        return QColor(self._scheduled).lighter(120), 0.72, 5, 0, 2
+            return source_color or QColor("#52e5ff"), 1.05, 10, 1, 4
+        return (
+            source_color or QColor(self._scheduled).lighter(120),
+            0.72,
+            5,
+            0,
+            2,
+        )
 
     def _impact_key_width_scale(
         self,
@@ -2639,7 +2690,7 @@ class FallingNotesWidget(QWidget):
             ):
                 continue
             color, intensity, ray_count, ring_count, mote_count = (
-                self._impact_style(impact.judgment)
+                self._impact_style(impact.judgment, impact.source)
             )
             effect_size_scale = 1.0
             effect_opacity = (
@@ -2671,7 +2722,7 @@ class FallingNotesWidget(QWidget):
                 ray_count,
                 ring_count,
                 mote_count,
-                rainbow=impact.judgment == "PERFECT",
+                rainbow=False,
                 key_width_scale=self._impact_key_width_scale(
                     note_width,
                     width,
@@ -2680,51 +2731,52 @@ class FallingNotesWidget(QWidget):
                 effect_opacity=effect_opacity,
             )
 
-        for note in sorted(self._held_lane_counts):
-            horizontal = self._note_rect(note, width)
-            if horizontal is None:
-                continue
-            x, note_width = horizontal
-            if not self._region_intersects_lane(
-                dirty_region,
-                x,
-                note_width,
-                height,
-            ):
-                continue
-            self._draw_lane_glow(
-                painter,
-                x,
-                note_width,
-                height,
-                QColor(self._live),
-                self.HELD_LANE_OPACITY,
-            )
+        if self.LANE_GLOW_ENABLED:
+            for note in sorted(self._held_lane_counts):
+                horizontal = self._note_rect(note, width)
+                if horizontal is None:
+                    continue
+                x, note_width = horizontal
+                if not self._region_intersects_lane(
+                    dirty_region,
+                    x,
+                    note_width,
+                    height,
+                ):
+                    continue
+                self._draw_lane_glow(
+                    painter,
+                    x,
+                    note_width,
+                    height,
+                    QColor(self._live),
+                    self.HELD_LANE_OPACITY,
+                )
 
-        for fade in self._lane_fades:
-            horizontal = self._note_rect(fade.note, width)
-            if horizontal is None:
-                continue
-            elapsed = max(0.0, now - fade.started_at)
-            if elapsed > self.LANE_FADE_SECONDS:
-                continue
-            x, note_width = horizontal
-            if not self._region_intersects_lane(
-                dirty_region,
-                x,
-                note_width,
-                height,
-            ):
-                continue
-            progress = elapsed / self.LANE_FADE_SECONDS
-            self._draw_lane_glow(
-                painter,
-                x,
-                note_width,
-                height,
-                QColor(self._live),
-                self.HELD_LANE_OPACITY * (1.0 - progress) ** 2,
-            )
+            for fade in self._lane_fades:
+                horizontal = self._note_rect(fade.note, width)
+                if horizontal is None:
+                    continue
+                elapsed = max(0.0, now - fade.started_at)
+                if elapsed > self.LANE_FADE_SECONDS:
+                    continue
+                x, note_width = horizontal
+                if not self._region_intersects_lane(
+                    dirty_region,
+                    x,
+                    note_width,
+                    height,
+                ):
+                    continue
+                progress = elapsed / self.LANE_FADE_SECONDS
+                self._draw_lane_glow(
+                    painter,
+                    x,
+                    note_width,
+                    height,
+                    QColor(self._live),
+                    self.HELD_LANE_OPACITY * (1.0 - progress) ** 2,
+                )
 
         if self._grid_layer is not None:
             painter.drawPixmap(0, 0, self._grid_layer)
@@ -2754,8 +2806,8 @@ class FallingNotesWidget(QWidget):
                 top,
                 bottom,
                 QColor(
-                    self._melody_scheduled
-                    if note.melody
+                    track_channel_color(*note.source)
+                    if note.source is not None
                     else self._scheduled
                 ),
                 show_head=position < note.start,
@@ -3373,12 +3425,10 @@ class TrackChannelButton(QToolButton):
         super().__init__(parent)
         self.source = source
         self._diameter = 18
-        self._enabled_background = QColor("#00a7d6")
+        self._source_background = QColor(track_channel_color(*source))
         self._enabled_foreground = QColor("#ffffff")
         self._disabled_background = QColor("#dff6fc")
         self._disabled_foreground = QColor("#12323b")
-        self._melody_highlight = QColor("#12323b")
-        self._melody = False
         self.setObjectName("TrackChannelButton")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3397,18 +3447,10 @@ class TrackChannelButton(QToolButton):
         disabled_background: QColor,
         disabled_foreground: QColor,
     ) -> None:
-        self._enabled_background = QColor(enabled_background)
+        self._source_background = QColor(enabled_background)
         self._enabled_foreground = QColor(enabled_foreground)
         self._disabled_background = QColor(disabled_background)
         self._disabled_foreground = QColor(disabled_foreground)
-        self.update()
-
-    def set_melody(self, melody: bool, highlight: QColor) -> None:
-        self._melody = bool(melody)
-        self._melody_highlight = QColor(highlight)
-        font = self.font()
-        font.setBold(self._melody)
-        self.setFont(font)
         self.update()
 
     def _circle_rect(self) -> QRectF:
@@ -3425,39 +3467,33 @@ class TrackChannelButton(QToolButton):
 
     def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
         enabled = self.isChecked()
-        background = QColor(
-            self._enabled_background if enabled else self._disabled_background
-        )
+        background = QColor(self._source_background)
+        if not enabled:
+            background.setAlpha(105)
         foreground = QColor(
-            self._enabled_foreground if enabled else self._disabled_foreground
+            contrasting_text_color(self._source_background.name())
+            if enabled
+            else self._disabled_foreground
         )
         if self.isDown():
             background = background.darker(118)
         elif self.underMouse():
             background = background.lighter(106)
-        border = QColor(self._enabled_background if enabled else self._disabled_foreground)
+        border = QColor(self._source_background)
         if not enabled:
-            border.setAlpha(110)
+            border.setAlpha(190)
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(
             QPen(
-                self._melody_highlight if self._melody else border,
-                (
-                    max(2.0, self._diameter / 7)
-                    if self._melody
-                    else max(1.0, self._diameter / 18)
-                ),
+                border,
+                max(1.0, self._diameter / 18),
             )
         )
         painter.setBrush(background)
         bounds = self._circle_rect().adjusted(0.5, 0.5, -0.5, -0.5)
         painter.drawEllipse(bounds)
-        if self._melody:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(border, max(1.0, self._diameter / 18)))
-            painter.drawEllipse(bounds.adjusted(2.0, 2.0, -2.0, -2.0))
         painter.setPen(foreground)
         font = self.font()
         metrics = QFontMetricsF(font)
@@ -3612,7 +3648,6 @@ class TrackChannelTable(QTableWidget):
         self._enabled_foreground = QColor("#ffffff")
         self._disabled_background = QColor("#dff6fc")
         self._disabled_foreground = QColor("#12323b")
-        self._melody_highlight = QColor("#12323b")
 
     def apply_scale(self, scale: float) -> None:
         self._ui_scale = scale
@@ -3638,7 +3673,8 @@ class TrackChannelTable(QTableWidget):
             self.setRowCount(len(items))
         for row, source in enumerate(items):
             cell = self.item(row, 0) or QTableWidgetItem()
-            cell.setText(f"{source.track + 1}{source.channel + 1}")
+            display_text = f"{source.track + 1}{source.channel + 1}"
+            cell.setText("")
             cell.setData(
                 Qt.ItemDataRole.UserRole,
                 (source.track, source.channel),
@@ -3656,16 +3692,15 @@ class TrackChannelTable(QTableWidget):
                     )
                 )
                 self.setCellWidget(row, 0, button)
-            button.setText(cell.text())
+            button.setText(display_text)
             button.setChecked(source.enabled)
             button.set_scale(self._ui_scale)
             button.set_colors(
-                self._enabled_background,
+                QColor(source.color or track_channel_color(*source_key)),
                 self._enabled_foreground,
                 self._disabled_background,
                 self._disabled_foreground,
             )
-            button.set_melody(source.melody, self._melody_highlight)
             self.setRowHeight(row, max(1, round(22 * self._ui_scale)))
 
     def set_colors(
@@ -3674,23 +3709,20 @@ class TrackChannelTable(QTableWidget):
         enabled_foreground: str,
         disabled_background: str,
         disabled_foreground: str,
-        melody_highlight: str,
     ) -> None:
         self._enabled_background = QColor(enabled_background)
         self._enabled_foreground = QColor(enabled_foreground)
         self._disabled_background = QColor(disabled_background)
         self._disabled_foreground = QColor(disabled_foreground)
-        self._melody_highlight = QColor(melody_highlight)
         for row in range(self.rowCount()):
             button = self.cellWidget(row, 0)
             if isinstance(button, TrackChannelButton):
                 button.set_colors(
-                    self._enabled_background,
+                    QColor(track_channel_color(*button.source)),
                     self._enabled_foreground,
                     self._disabled_background,
                     self._disabled_foreground,
                 )
-                button.set_melody(button._melody, self._melody_highlight)
         self.viewport().update()
 
 

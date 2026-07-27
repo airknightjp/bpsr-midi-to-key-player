@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import threading
+from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -13,11 +14,33 @@ from process_lifecycle import (
     start_parent_process_watchdog,
 )
 
+_PARSED_MIDI_CACHE: OrderedDict[
+    tuple[str, int, int],
+    tuple[list[MidiEvent], MidiSummary],
+] = OrderedDict()
+_PARSED_MIDI_CACHE_LIMIT = 8
+
+
+def _cached_parse(path: str) -> tuple[list[MidiEvent], MidiSummary]:
+    midi_path = Path(path)
+    stat = midi_path.stat()
+    key = (str(midi_path), int(stat.st_mtime_ns), int(stat.st_size))
+    cached = _PARSED_MIDI_CACHE.get(key)
+    if cached is not None:
+        _PARSED_MIDI_CACHE.move_to_end(key)
+        return cached
+    parsed = parse_midi(midi_path)
+    _PARSED_MIDI_CACHE[key] = parsed
+    _PARSED_MIDI_CACHE.move_to_end(key)
+    while len(_PARSED_MIDI_CACHE) > _PARSED_MIDI_CACHE_LIMIT:
+        _PARSED_MIDI_CACHE.popitem(last=False)
+    return parsed
+
 
 def _parse_midi_in_process(
     path: str,
 ) -> tuple[list[MidiEvent], MidiSummary]:
-    return parse_midi(Path(path))
+    return _cached_parse(path)
 
 
 def _parser_worker_pid() -> int:

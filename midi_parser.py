@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from collections import defaultdict
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -13,12 +15,47 @@ class MidiEvent:
     velocity: int | None = None
     value: int | None = None
     track: int | None = None
+    tick: int | None = None
+    beat: float | None = None
+    program: int = 0
+    program_epoch: int = 0
+    note_id: int | None = None
+
+
+@dataclass(frozen=True)
+class MidiTempoChange:
+    tick: int
+    beat: float
+    second: float
+    microseconds_per_beat: int
+
+
+@dataclass(frozen=True)
+class MidiTimeSignature:
+    tick: int
+    beat: float
+    numerator: int
+    denominator: int
+    valid: bool = True
+
+
+@dataclass(frozen=True)
+class MidiProgramChange:
+    tick: int
+    beat: float
+    second: float
+    track: int
+    channel: int
+    program: int
+    program_epoch: int
 
 
 @dataclass(frozen=True)
 class MidiTrackSummary:
     index: int
     channels: tuple[int, ...]
+    name: str = ""
+    instrument_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -29,54 +66,89 @@ class MidiSummary:
     event_count: int
     tracks: tuple[MidiTrackSummary, ...] = ()
     note_range: tuple[int, int] | None = None
+    midi_format: int = 1
+    ticks_per_beat: int = 480
+    tempo_changes: tuple[MidiTempoChange, ...] = ()
+    time_signatures: tuple[MidiTimeSignature, ...] = ()
+    program_changes: tuple[MidiProgramChange, ...] = ()
+    file_hash: str = ""
+
+
+@dataclass(frozen=True)
+class _ParsedTrack:
+    events: tuple[tuple[int, int, MidiEvent], ...]
+    tempos: tuple[tuple[int, int], ...]
+    time_signatures: tuple[tuple[int, int, int, bool], ...]
+    program_changes: tuple[tuple[int, int, int, int], ...]
+    end_tick: int
+    name: str
+    instrument_name: str
 
 
 def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
     midi_path = Path(path)
     data = midi_path.read_bytes()
-    ticks_per_beat, tracks = _read_smf(data)
-    tick_events: list[tuple[int, MidiEvent]] = []
+    midi_format, ticks_per_beat, tracks = _read_smf(data)
+    tick_events: list[tuple[int, int, MidiEvent]] = []
     tempo_changes: list[tuple[int, int]] = [(0, 500_000)]
+    time_signatures: list[tuple[int, int, int, bool]] = []
+    program_changes: list[tuple[int, int, int, int, int]] = []
+    track_metadata: list[tuple[str, str]] = []
     end_tick = 0
 
     for track_index, track in enumerate(tracks):
-        parsed_events, parsed_tempos, track_end_tick = _parse_track(track, track_index)
-        tick_events.extend(parsed_events)
-        tempo_changes.extend(parsed_tempos)
-        end_tick = max(end_tick, track_end_tick)
+        parsed = _parse_track(track, track_index)
+        tick_events.extend(parsed.events)
+        tempo_changes.extend(parsed.tempos)
+        time_signatures.extend(parsed.time_signatures)
+        program_changes.extend(
+            (tick, track_index, channel, program, epoch)
+            for tick, channel, program, epoch in parsed.program_changes
+        )
+        track_metadata.append((parsed.name, parsed.instrument_name))
+        end_tick = max(end_tick, parsed.end_tick)
 
     tempo_map = _build_tempo_map(tempo_changes, ticks_per_beat)
+    ordered_tick_events = sorted(
+        tick_events,
+        key=lambda item: (
+            item[0],
+            _event_priority(item[2].kind),
+            item[2].track if item[2].track is not None else -1,
+            item[1],
+        ),
+    )
     events = [
-        MidiEvent(
+        replace(
+            event,
             time=_tick_to_seconds(tick, tempo_map, ticks_per_beat),
-            kind=event.kind,
-            channel=event.channel,
-            note=event.note,
-            velocity=event.velocity,
-            value=event.value,
-            track=event.track,
+            tick=tick,
+            beat=tick / ticks_per_beat,
         )
-        for tick, event in tick_events
+        for tick, _sequence, event in ordered_tick_events
     ]
-    events.sort(key=lambda event: (event.time, _event_priority(event.kind)))
+    events = _assign_stable_note_ids(events)
     source_event_count = len(events)
     duration = max(
         events[-1].time if events else 0.0,
         _tick_to_seconds(end_tick, tempo_map, ticks_per_beat),
     )
     if duration > (events[-1].time if events else 0.0):
-        events.append(MidiEvent(time=duration, kind="end"))
+        events.append(
+            MidiEvent(
+                time=duration,
+                kind="end",
+                tick=end_tick,
+                beat=end_tick / ticks_per_beat,
+            )
+        )
     channels = sorted({event.channel for event in events if event.channel is not None})
     played_notes = [
         event.note
         for event in events
         if event.kind == "note_on" and event.note is not None
     ]
-    note_range = (
-        (min(played_notes), max(played_notes))
-        if played_notes
-        else None
-    )
+    note_range = (min(played_notes), max(played_notes)) if played_notes else None
     track_summaries = tuple(
         MidiTrackSummary(
             index=track_index,
@@ -89,8 +161,43 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
                     }
                 )
             ),
+            name=track_metadata[track_index][0],
+            instrument_name=track_metadata[track_index][1],
         )
         for track_index in range(len(tracks))
+    )
+    normalized_tempos = tuple(
+        MidiTempoChange(
+            tick=tick,
+            beat=tick / ticks_per_beat,
+            second=_tick_to_seconds(tick, tempo_map, ticks_per_beat),
+            microseconds_per_beat=tempo,
+        )
+        for tick, tempo in sorted(dict(tempo_changes).items())
+    )
+    normalized_signatures = tuple(
+        MidiTimeSignature(
+            tick=tick,
+            beat=tick / ticks_per_beat,
+            numerator=numerator,
+            denominator=denominator,
+            valid=valid,
+        )
+        for tick, numerator, denominator, valid in _unique_time_signatures(
+            time_signatures
+        )
+    )
+    normalized_programs = tuple(
+        MidiProgramChange(
+            tick=tick,
+            beat=tick / ticks_per_beat,
+            second=_tick_to_seconds(tick, tempo_map, ticks_per_beat),
+            track=track,
+            channel=channel,
+            program=program,
+            program_epoch=epoch,
+        )
+        for tick, track, channel, program, epoch in sorted(program_changes)
     )
     summary = MidiSummary(
         path=midi_path,
@@ -99,11 +206,17 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
         event_count=source_event_count,
         tracks=track_summaries,
         note_range=note_range,
+        midi_format=midi_format,
+        ticks_per_beat=ticks_per_beat,
+        tempo_changes=normalized_tempos,
+        time_signatures=normalized_signatures,
+        program_changes=normalized_programs,
+        file_hash=hashlib.sha256(data).hexdigest(),
     )
     return events, summary
 
 
-def _read_smf(data: bytes) -> tuple[int, list[bytes]]:
+def _read_smf(data: bytes) -> tuple[int, int, list[bytes]]:
     offset = 0
     if len(data) < 14:
         raise ValueError("Invalid MIDI file: truncated header")
@@ -148,18 +261,22 @@ def _read_smf(data: bytes) -> tuple[int, list[bytes]]:
         tracks.append(data[offset:offset + length])
         offset += length
 
-    return division, tracks
+    return midi_format, division, tracks
 
 
-def _parse_track(
-    track: bytes,
-    track_index: int,
-) -> tuple[list[tuple[int, MidiEvent]], list[tuple[int, int]], int]:
+def _parse_track(track: bytes, track_index: int) -> _ParsedTrack:
     offset = 0
     tick = 0
+    sequence = 0
     running_status: int | None = None
-    events: list[tuple[int, MidiEvent]] = []
+    events: list[tuple[int, int, MidiEvent]] = []
     tempos: list[tuple[int, int]] = []
+    signatures: list[tuple[int, int, int, bool]] = []
+    program_changes: list[tuple[int, int, int, int]] = []
+    channel_programs = [0] * 16
+    channel_program_epochs = [0] * 16
+    name = ""
+    instrument_name = ""
 
     while offset < len(track):
         delta, offset = _read_var_len(track, offset)
@@ -196,6 +313,15 @@ def _parse_track(
                 if tempo <= 0:
                     raise ValueError("Invalid MIDI file: invalid tempo")
                 tempos.append((tick, tempo))
+            elif meta_type == 0x58:
+                valid = length >= 2 and payload[0] > 0 and payload[1] <= 7
+                numerator = payload[0] if length >= 1 else 4
+                denominator = 1 << payload[1] if length >= 2 and payload[1] <= 7 else 4
+                signatures.append((tick, numerator, denominator, valid))
+            elif meta_type == 0x03 and not name:
+                name = _decode_midi_text(payload)
+            elif meta_type == 0x04 and not instrument_name:
+                instrument_name = _decode_midi_text(payload)
             continue
 
         if status in (0xF0, 0xF7):
@@ -212,18 +338,43 @@ def _parse_track(
         data_len = 1 if event_type in (0xC0, 0xD0) else 2
         payload = track[offset:offset + data_len]
         offset += data_len
-
         if len(payload) != data_len:
             raise ValueError("Invalid MIDI file: truncated event")
         if any(byte >= 0x80 for byte in payload):
             raise ValueError("Invalid MIDI file: invalid event data byte")
 
+        if event_type == 0xC0:
+            channel_programs[channel] = payload[0]
+            channel_program_epochs[channel] += 1
+            epoch = channel_program_epochs[channel]
+            program_changes.append((tick, channel, payload[0], epoch))
+            events.append(
+                (
+                    tick,
+                    sequence,
+                    MidiEvent(
+                        time=0.0,
+                        kind="program_change",
+                        channel=channel,
+                        value=payload[0],
+                        track=track_index,
+                        program=payload[0],
+                        program_epoch=epoch,
+                    ),
+                )
+            )
+            sequence += 1
+            continue
+
+        program = channel_programs[channel]
+        epoch = channel_program_epochs[channel]
         if event_type == 0x90:
             note, velocity = payload
             kind = "note_on" if velocity > 0 else "note_off"
             events.append(
                 (
                     tick,
+                    sequence,
                     MidiEvent(
                         time=0.0,
                         kind=kind,
@@ -231,14 +382,18 @@ def _parse_track(
                         note=note,
                         velocity=velocity,
                         track=track_index,
+                        program=program,
+                        program_epoch=epoch,
                     ),
                 )
             )
+            sequence += 1
         elif event_type == 0x80:
             note, velocity = payload
             events.append(
                 (
                     tick,
+                    sequence,
                     MidiEvent(
                         time=0.0,
                         kind="note_off",
@@ -246,26 +401,69 @@ def _parse_track(
                         note=note,
                         velocity=velocity,
                         track=track_index,
+                        program=program,
+                        program_epoch=epoch,
                     ),
                 )
             )
+            sequence += 1
         elif event_type == 0xB0:
             control, value = payload
             if control == 64:
                 events.append(
                     (
                         tick,
+                        sequence,
                         MidiEvent(
                             time=0.0,
                             kind="sustain",
                             channel=channel,
                             value=value,
                             track=track_index,
+                            program=program,
+                            program_epoch=epoch,
                         ),
                     )
                 )
+                sequence += 1
 
-    return events, tempos, tick
+    return _ParsedTrack(
+        events=tuple(events),
+        tempos=tuple(tempos),
+        time_signatures=tuple(signatures),
+        program_changes=tuple(program_changes),
+        end_tick=tick,
+        name=name,
+        instrument_name=instrument_name,
+    )
+
+
+def _assign_stable_note_ids(events: list[MidiEvent]) -> list[MidiEvent]:
+    active: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    next_note_id = 0
+    result: list[MidiEvent] = []
+    for event in events:
+        if event.channel is None or event.note is None:
+            result.append(event)
+            continue
+        owner = (
+            event.track if event.track is not None else -1,
+            event.channel,
+            event.note,
+        )
+        if event.kind == "note_on":
+            note_id = next_note_id
+            next_note_id += 1
+            active[owner].append(note_id)
+            result.append(replace(event, note_id=note_id))
+        elif event.kind == "note_off":
+            note_id = active[owner].pop() if active.get(owner) else None
+            if not active.get(owner):
+                active.pop(owner, None)
+            result.append(replace(event, note_id=note_id))
+        else:
+            result.append(event)
+    return result
 
 
 def _read_var_len(data: bytes, offset: int) -> tuple[int, int]:
@@ -281,7 +479,10 @@ def _read_var_len(data: bytes, offset: int) -> tuple[int, int]:
     raise ValueError("Invalid MIDI file: variable length value is too long")
 
 
-def _build_tempo_map(tempo_changes: list[tuple[int, int]], ticks_per_beat: int) -> list[tuple[int, float, int]]:
+def _build_tempo_map(
+    tempo_changes: list[tuple[int, int]],
+    ticks_per_beat: int,
+) -> list[tuple[int, float, int]]:
     unique_changes = sorted(dict(tempo_changes).items())
     tempo_map: list[tuple[int, float, int]] = []
     current_seconds = 0.0
@@ -289,7 +490,12 @@ def _build_tempo_map(tempo_changes: list[tuple[int, int]], ticks_per_beat: int) 
     previous_tempo = unique_changes[0][1]
 
     for tick, tempo in unique_changes:
-        current_seconds += (tick - previous_tick) * previous_tempo / ticks_per_beat / 1_000_000
+        current_seconds += (
+            (tick - previous_tick)
+            * previous_tempo
+            / ticks_per_beat
+            / 1_000_000
+        )
         tempo_map.append((tick, current_seconds, tempo))
         previous_tick = tick
         previous_tempo = tempo
@@ -297,7 +503,11 @@ def _build_tempo_map(tempo_changes: list[tuple[int, int]], ticks_per_beat: int) 
     return tempo_map
 
 
-def _tick_to_seconds(tick: int, tempo_map: list[tuple[int, float, int]], ticks_per_beat: int) -> float:
+def _tick_to_seconds(
+    tick: int,
+    tempo_map: list[tuple[int, float, int]],
+    ticks_per_beat: int,
+) -> float:
     active_tick, active_seconds, active_tempo = tempo_map[0]
     for tempo_tick, seconds_at_tick, tempo in tempo_map:
         if tempo_tick > tick:
@@ -305,8 +515,37 @@ def _tick_to_seconds(tick: int, tempo_map: list[tuple[int, float, int]], ticks_p
         active_tick = tempo_tick
         active_seconds = seconds_at_tick
         active_tempo = tempo
-    return active_seconds + (tick - active_tick) * active_tempo / ticks_per_beat / 1_000_000
+    return (
+        active_seconds
+        + (tick - active_tick) * active_tempo / ticks_per_beat / 1_000_000
+    )
+
+
+def _unique_time_signatures(
+    signatures: list[tuple[int, int, int, bool]],
+) -> tuple[tuple[int, int, int, bool], ...]:
+    by_tick: dict[int, tuple[int, int, bool]] = {}
+    for tick, numerator, denominator, valid in signatures:
+        by_tick[tick] = (numerator, denominator, valid)
+    return tuple(
+        (tick, *value)
+        for tick, value in sorted(by_tick.items())
+    )
+
+
+def _decode_midi_text(payload: bytes) -> str:
+    for encoding in ("utf-8", "cp932", "latin-1"):
+        try:
+            return payload.decode(encoding).strip("\x00 ")
+        except UnicodeDecodeError:
+            continue
+    return ""
 
 
 def _event_priority(kind: str) -> int:
-    return {"note_off": 0, "sustain": 1, "note_on": 2}.get(kind, 3)
+    return {
+        "note_off": 0,
+        "sustain": 1,
+        "program_change": 2,
+        "note_on": 3,
+    }.get(kind, 4)

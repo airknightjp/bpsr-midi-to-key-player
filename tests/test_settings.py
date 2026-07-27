@@ -70,9 +70,6 @@ class SettingsTests(unittest.TestCase):
     def test_default_theme_is_sky_blue(self) -> None:
         self.assertEqual(AppSettings().color_theme, "sky_blue")
 
-    def test_melody_priority_is_off_by_default(self) -> None:
-        self.assertFalse(AppSettings().melody_priority)
-
     def test_new_settings_round_trip(self) -> None:
         with isolated_settings_directory() as settings_dir:
             save_settings(
@@ -87,8 +84,6 @@ class SettingsTests(unittest.TestCase):
                     transpose_semitones=-7,
                     octave_shift=2,
                     humanize_timing=True,
-                    chord_optimization=True,
-                    melody_priority=True,
                     chord_strum=True,
                     auto_sustain=True,
                     repeat_prevention=True,
@@ -146,6 +141,8 @@ class SettingsTests(unittest.TestCase):
 
         self.assertFalse(saved_payload["play_sound"])
         self.assertNotIn("dry_run", saved_payload)
+        self.assertNotIn("chord_optimization", saved_payload)
+        self.assertNotIn("melody_priority", saved_payload)
         self.assertNotIn("automatic_audio_buffer_frames", saved_payload)
         self.assertNotIn("minimum_stable_qt_frames", saved_payload)
         self.assertNotIn("qt_audio_environment", saved_payload)
@@ -166,8 +163,6 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.transpose_semitones, -7)
         self.assertEqual(loaded.octave_shift, 2)
         self.assertTrue(loaded.humanize_timing)
-        self.assertTrue(loaded.chord_optimization)
-        self.assertTrue(loaded.melody_priority)
         self.assertTrue(loaded.chord_strum)
         self.assertTrue(loaded.auto_sustain)
         self.assertTrue(loaded.repeat_prevention)

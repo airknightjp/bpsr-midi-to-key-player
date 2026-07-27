@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -48,6 +48,7 @@ from qt_components import (
 )
 from qt_styles import THEMES, build_stylesheet
 from settings import AppSettings
+from source_colors import track_channel_color
 from update_service import AvailableUpdate, ReleaseAsset
 
 
@@ -169,23 +170,15 @@ class QtUiTests(unittest.TestCase):
             TrackChannelItem(track=0, channel=0, enabled=True),
         )
 
-        with (
-            patch(
-                "qt_main_window.build_output_note_range",
-                wraps=qt_main_window.build_output_note_range,
-            ) as range_builder,
-            patch.object(
-                self.controller,
-                "current_chord_optimization_plan",
-                wraps=self.controller.current_chord_optimization_plan,
-            ) as optimization_plan,
-        ):
+        with patch(
+            "qt_main_window.build_output_note_range",
+            wraps=qt_main_window.build_output_note_range,
+        ) as range_builder:
             self.controller._notify()
             self.controller.state.position = 0.5
             self.controller._notify()
 
         range_builder.assert_called_once()
-        optimization_plan.assert_not_called()
 
     def test_disabled_source_recalculates_output_note_range(self) -> None:
         self.controller.events = [
@@ -1058,8 +1051,8 @@ class QtUiTests(unittest.TestCase):
 
         self.assertEqual(self.window.track_channels.columnCount(), 1)
         self.assertTrue(self.window.track_channels.horizontalHeader().isHidden())
-        self.assertEqual(self.window.track_channels.item(0, 0).text(), "11")
-        self.assertEqual(self.window.track_channels.item(1, 0).text(), "23")
+        self.assertEqual(self.window.track_channels.item(0, 0).text(), "")
+        self.assertEqual(self.window.track_channels.item(1, 0).text(), "")
         button = self.window.track_channels.cellWidget(0, 0)
         self.assertIsInstance(button, TrackChannelButton)
         self.assertEqual(button.text(), "11")
@@ -1071,6 +1064,12 @@ class QtUiTests(unittest.TestCase):
         )
         header = self.window.track_channels.horizontalHeader()
         self.assertEqual(header.sectionSize(0), 20)
+        self.window.show()
+        self.application.processEvents()
+        QTest.mouseMove(button, button.rect().center())
+        self.application.processEvents()
+        self.assertEqual(self.window.track_channels.item(0, 0).text(), "")
+        self.assertEqual(button.text(), "11")
         button.setText("1216")
         self.assertFalse(button.grab().isNull())
         self.assertEqual(self.window.track_channels.font().pixelSize(), 11)
@@ -2086,7 +2085,6 @@ class QtUiTests(unittest.TestCase):
         self.controller._notify()
         self.window.show()
         self.application.processEvents()
-        palette = THEMES[self.controller.state.color_theme]
         enabled = self.window.track_channels.cellWidget(0, 0)
         disabled = self.window.track_channels.cellWidget(1, 0)
 
@@ -2094,28 +2092,48 @@ class QtUiTests(unittest.TestCase):
         self.assertIsInstance(disabled, TrackChannelButton)
         self.assertTrue(enabled.isChecked())
         self.assertFalse(disabled.isChecked())
+        QTest.mouseMove(
+            self.window,
+            QPoint(self.window.width() - 1, self.window.height() - 1),
+        )
+        self.application.processEvents()
         enabled_image = enabled.grab().toImage()
         disabled_image = disabled.grab().toImage()
         enabled_sample = enabled_image.pixelColor(enabled.width() // 2, enabled.height() // 4)
         disabled_sample = disabled_image.pixelColor(disabled.width() // 2, disabled.height() // 4)
 
-        self.assertEqual(enabled_sample.name(), palette.accent)
-        self.assertEqual(disabled_sample.name(), palette.canvas)
+        enabled_source_color = QColor(track_channel_color(0, 0))
+        self.assertEqual(
+            enabled._source_background.name(),
+            enabled_source_color.name(),
+        )
+        self.assertIn(
+            enabled_sample.name(),
+            {
+                enabled_source_color.name(),
+                enabled_source_color.lighter(106).name(),
+            },
+        )
+        self.assertNotEqual(disabled_sample.name(), enabled_sample.name())
+        self.assertEqual(
+            disabled._source_background.name(),
+            track_channel_color(0, 1).lower(),
+        )
 
-    def test_detected_melody_track_channel_has_a_distinct_emphasis(self) -> None:
+    def test_track_channel_buttons_use_the_same_font_weight(self) -> None:
         self.controller.state.track_channels = [
-            TrackChannelItem(0, 0, True, False),
-            TrackChannelItem(1, 1, True, True),
+            TrackChannelItem(0, 0, True),
+            TrackChannelItem(1, 1, True),
         ]
         self.controller._notify()
         self.application.processEvents()
         accompaniment = self.window.track_channels.cellWidget(0, 0)
-        melody = self.window.track_channels.cellWidget(1, 0)
+        second_source = self.window.track_channels.cellWidget(1, 0)
 
         self.assertIsInstance(accompaniment, TrackChannelButton)
-        self.assertIsInstance(melody, TrackChannelButton)
+        self.assertIsInstance(second_source, TrackChannelButton)
         self.assertFalse(accompaniment.font().bold())
-        self.assertTrue(melody.font().bold())
+        self.assertFalse(second_source.font().bold())
 
     def test_view_section_actions_are_direct_menu_items(self) -> None:
         view_action = next(
@@ -2577,8 +2595,6 @@ class QtUiTests(unittest.TestCase):
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
-            self.window.optimization_check,
-            self.window.melody_priority_check,
         )
 
         self.assertTrue(all(item.property("settingsItem") for item in common_items + performance_items))
@@ -2603,8 +2619,6 @@ class QtUiTests(unittest.TestCase):
         performance_items = (
             self.window.humanize_check,
             self.window.strum_check,
-            self.window.optimization_check,
-            self.window.melody_priority_check,
         )
         self.window.show()
         for language in ("en", "ja", "zh"):
@@ -2642,8 +2656,6 @@ class QtUiTests(unittest.TestCase):
             for item in (
                 self.window.humanize_check,
                 self.window.strum_check,
-                self.window.optimization_check,
-                self.window.melody_priority_check,
             )
         )
         self.assertGreater(second_row_top - first_row_bottom - 1, 0)
@@ -2655,8 +2667,6 @@ class QtUiTests(unittest.TestCase):
             "repeat_prevention",
             "humanize_timing",
             "chord_strum",
-            "chord_optimization",
-            "melody_priority",
             "auto_sustain",
         ):
             self.controller.set_option(option, True)
@@ -2669,8 +2679,6 @@ class QtUiTests(unittest.TestCase):
             self.window.repeat_check,
             self.window.humanize_check,
             self.window.strum_check,
-            self.window.optimization_check,
-            self.window.melody_priority_check,
             self.window.auto_sustain_check,
         )
         self.assertTrue(all(check.isEnabled() for check in detailed_settings))
@@ -2678,8 +2686,6 @@ class QtUiTests(unittest.TestCase):
         unsupported = (
             self.window.humanize_check,
             self.window.strum_check,
-            self.window.optimization_check,
-            self.window.melody_priority_check,
         )
         self.assertTrue(all(check.property("unsupported") for check in unsupported))
 
@@ -2857,7 +2863,7 @@ class QtUiTests(unittest.TestCase):
 
         self.assertEqual(
             self.window.piano_roll.sequence_notes,
-            (PianoRollNote(1.0, 2.0, 60, melody=True),),
+            (PianoRollNote(1.0, 2.0, 60, source=(0, 0)),),
         )
 
     def test_live_checkbox_change_rebuilds_the_falling_note_sequence(self) -> None:
@@ -2898,7 +2904,7 @@ class QtUiTests(unittest.TestCase):
         self.assertTrue(self.controller.state.auto_sustain)
         self.assertEqual(
             plain,
-            (PianoRollNote(0.0, 0.5, 60, melody=True),),
+            (PianoRollNote(0.0, 0.5, 60, source=(0, 0)),),
         )
         self.assertEqual(self.window.piano_roll.sequence_notes, plain)
         set_sequence_notes.assert_not_called()
@@ -3002,14 +3008,19 @@ class QtUiTests(unittest.TestCase):
 
     def test_falling_note_renders_three_distinct_judgment_effects(self) -> None:
         roll = FallingNotesWidget()
+        source = (2, 3)
 
-        perfect = roll._impact_style("PERFECT")
-        great = roll._impact_style("GREAT")
-        good = roll._impact_style("GOOD")
+        perfect = roll._impact_style("PERFECT", source)
+        great = roll._impact_style("GREAT", source)
+        good = roll._impact_style("GOOD", source)
 
         self.assertEqual(
             (perfect[2:], great[2:], good[2:]),
             ((17, 2, 7), (10, 1, 4), (5, 0, 2)),
+        )
+        self.assertEqual(
+            {effect[0].name() for effect in (perfect, great, good)},
+            {QColor(track_channel_color(*source)).name()},
         )
         self.assertGreater(perfect[1], great[1])
         self.assertGreater(great[1], good[1])
@@ -3021,8 +3032,9 @@ class QtUiTests(unittest.TestCase):
             roll._impact_duration("GREAT"),
             roll._impact_duration("GOOD"),
         )
+        self.assertEqual(roll.IMPACT_PARTICLE_SPREAD_SCALE, 0.50)
 
-    def test_falling_note_hit_events_restore_burst_and_lane_effects(self) -> None:
+    def test_falling_note_hit_events_keep_state_while_lane_glow_is_hidden(self) -> None:
         roll = FallingNotesWidget()
 
         with patch("qt_components.time.monotonic", return_value=10.0):
@@ -3044,10 +3056,21 @@ class QtUiTests(unittest.TestCase):
         self.assertNotIn(60, roll.held_lane_notes)
         self.assertEqual(roll.lane_fade_count, 1)
         self.assertFalse(hasattr(roll, "set_score"))
+        self.assertFalse(roll.LANE_GLOW_ENABLED)
+        roll.resize(1080, 57)
+        roll.show()
+        self.application.processEvents()
+        with patch.object(roll, "_draw_lane_glow") as draw_lane_glow:
+            roll.grab()
+        draw_lane_glow.assert_not_called()
 
-    def test_perfect_hit_draws_the_rainbow_burst(self) -> None:
+    def test_perfect_hit_draws_the_assigned_track_channel_color(self) -> None:
         roll = FallingNotesWidget()
         roll.resize(1080, 57)
+        source = (2, 3)
+        roll.set_sequence_notes(
+            (PianoRollNote(0.0, 1.0, 60, source=source),)
+        )
         roll.show()
         self.application.processEvents()
         with patch("qt_components.time.monotonic", return_value=10.0):
@@ -3065,7 +3088,11 @@ class QtUiTests(unittest.TestCase):
             roll.grab()
 
         draw_burst.assert_called_once()
-        self.assertTrue(draw_burst.call_args.kwargs["rainbow"])
+        self.assertFalse(draw_burst.call_args.kwargs["rainbow"])
+        self.assertEqual(
+            draw_burst.call_args.args[3].name(),
+            QColor(track_channel_color(*source)).name(),
+        )
         self.assertEqual(draw_burst.call_args.args[5:], (1.5, 17, 2, 7))
         roll.close()
 
@@ -3077,16 +3104,20 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(roll.hit_impact_count, 0)
         self.assertEqual(roll.lane_fade_count, 0)
 
-    def test_perfect_effect_uses_rainbow_palette(self) -> None:
+    def test_hit_effect_source_uses_start_and_end_positions(self) -> None:
         roll = FallingNotesWidget()
+        first = PianoRollNote(1.0, 2.0, 60, source=(0, 0))
+        second = PianoRollNote(4.0, 6.0, 60, source=(3, 2))
+        roll.set_sequence_notes((first, second))
 
-        colors = {
-            roll._rainbow_impact_color(index, 7, 0.0).hue()
-            for index in range(7)
-        }
-
-        self.assertEqual(len(colors), 7)
-        self.assertGreaterEqual(max(colors) - min(colors), 300)
+        self.assertEqual(
+            roll._impact_source(60, 4.05, released=False),
+            second.source,
+        )
+        self.assertEqual(
+            roll._impact_source(60, 5.95, released=True),
+            second.source,
+        )
 
     def test_falling_note_head_disappears_after_reaching_the_hit_line(self) -> None:
         roll = FallingNotesWidget()
@@ -3310,7 +3341,7 @@ class QtUiTests(unittest.TestCase):
 
     def test_full_keyboard_renders_final_output_note_state(self) -> None:
         self.controller.state.active_output_notes = frozenset((21, 61, 108))
-        self.controller.state.melody_output_notes = frozenset((61,))
+        self.controller.state.output_note_sources = ((61, 2, 3),)
         self.controller._notify()
 
         self.assertEqual(
@@ -3318,9 +3349,35 @@ class QtUiTests(unittest.TestCase):
             frozenset((21, 61, 108)),
         )
         self.assertEqual(
-            self.window.output_keyboard._melody_notes,
-            frozenset((61,)),
+            self.window.output_keyboard._note_sources,
+            {61: ((2, 3),)},
         )
+
+    def test_full_keyboard_temporarily_uses_one_pressed_key_color(self) -> None:
+        keyboard = PianoKeyboardWidget()
+        keyboard.set_colors(
+            "#ffffff",
+            "#808080",
+            "#202020",
+            "#1458D4",
+            "#0B3D9A",
+            "#ffffff",
+        )
+        keyboard.set_note_sources(((60, 0, 0), (64, 3, 7)))
+
+        first_brush = keyboard._active_note_brush(
+            60,
+            QRectF(0.0, 0.0, 10.0, 20.0),
+        )
+        second_brush = keyboard._active_note_brush(
+            64,
+            QRectF(10.0, 0.0, 10.0, 20.0),
+        )
+
+        self.assertEqual(first_brush.color().name(), "#1458d4")
+        self.assertEqual(second_brush.color().name(), "#1458d4")
+        self.assertEqual(keyboard._active_note_border(60).name(), "#0b3d9a")
+        self.assertEqual(keyboard._active_note_border(64).name(), "#0b3d9a")
 
     def test_final_output_range_updates_keyboard_and_falling_notes(self) -> None:
         self.controller.events = [
@@ -3526,8 +3583,6 @@ class QtUiTests(unittest.TestCase):
             self.window.repeat_check,
             self.window.humanize_check,
             self.window.strum_check,
-            self.window.optimization_check,
-            self.window.melody_priority_check,
             self.window.auto_sustain_check,
         )
         content_top = min(item.geometry().top() for item in items)

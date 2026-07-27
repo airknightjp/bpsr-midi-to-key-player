@@ -108,6 +108,50 @@ class MidiParserTests(unittest.TestCase):
             {(0, 0), (0, 1), (1, 1)},
         )
 
+    def test_parser_preserves_analysis_metadata_and_stable_note_ids(self) -> None:
+        track = (
+            b"\x00\xff\x03\x06Melody"
+            + b"\x00\xff\x04\x05Piano"
+            + b"\x00\xff\x58\x04\x03\x02\x18\x08"
+            + b"\x00\xc0\x28"
+            + b"\x00\x90\x3c\x50"
+            + b"\x60\x90\x3c\x40"
+            + b"\x60\x90\x3c\x00"
+            + b"\x60\x80\x3c\x00"
+            + b"\x00\xff\x2f\x00"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "metadata.mid"
+            path.write_bytes(_midi_file(track))
+
+            events, summary = parse_midi(path)
+
+        note_ons = [event for event in events if event.kind == "note_on"]
+        note_offs = [event for event in events if event.kind == "note_off"]
+        self.assertEqual(summary.midi_format, 0)
+        self.assertEqual(summary.ticks_per_beat, 480)
+        self.assertEqual(summary.tracks[0].name, "Melody")
+        self.assertEqual(summary.tracks[0].instrument_name, "Piano")
+        self.assertEqual(
+            (
+                summary.time_signatures[0].numerator,
+                summary.time_signatures[0].denominator,
+            ),
+            (3, 4),
+        )
+        self.assertEqual(summary.program_changes[0].program, 40)
+        self.assertEqual(
+            [event.note_id for event in note_ons],
+            [0, 1],
+        )
+        self.assertEqual(
+            [event.note_id for event in note_offs],
+            [1, 0],
+        )
+        self.assertTrue(all(event.program == 40 for event in note_ons))
+        self.assertTrue(all(event.tick is not None for event in note_ons))
+        self.assertTrue(summary.file_hash)
+
 
 if __name__ == "__main__":
     unittest.main()

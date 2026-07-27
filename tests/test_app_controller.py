@@ -16,6 +16,7 @@ from config import (
 )
 from midi_parser import MidiEvent, MidiSummary, MidiTrackSummary
 from settings import AppSettings
+from source_colors import track_channel_color
 
 
 class RecordingView:
@@ -66,9 +67,6 @@ class FakePlayer:
 
     def set_playback_speed(self, value: int) -> None:
         self.speed = value
-
-    def request_chord_optimization_refresh(self) -> None:
-        self.refreshed = True
 
     def request_release_all(self) -> None:
         self.released = True
@@ -799,16 +797,6 @@ class AppControllerTests(unittest.TestCase):
                 "set_chord_strum",
                 ("player", "sound_player"),
             ),
-            (
-                "chord_optimization",
-                "set_chord_optimization",
-                ("player", "sound_player"),
-            ),
-            (
-                "melody_priority",
-                "set_melody_priority",
-                ("player", "sound_player"),
-            ),
         )
 
         for option, method_name, target_names in cases:
@@ -955,14 +943,15 @@ class AppControllerTests(unittest.TestCase):
 
         self.assertEqual(
             controller.state.track_channels,
-            [TrackChannelItem(0, 0, True), TrackChannelItem(0, 1, True)],
+            [
+                TrackChannelItem(0, 0, True, track_channel_color(0, 0)),
+                TrackChannelItem(0, 1, True, track_channel_color(0, 1)),
+            ],
         )
         self.assertEqual(controller.enabled_sources(), {(0, 0), (0, 1)})
 
-    def test_melody_track_channel_is_detected_when_chord_optimization_is_off(
-        self,
-    ) -> None:
-        controller = self.make_controller(chord_optimization=False)
+    def test_track_channels_include_stable_source_colors(self) -> None:
+        controller = self.make_controller()
         controller.events = [
             MidiEvent(0.0, "note_on", 0, 48, 70, track=0),
             MidiEvent(0.0, "note_on", 0, 52, 70, track=0),
@@ -986,12 +975,11 @@ class AppControllerTests(unittest.TestCase):
 
         controller._set_track_channels(summary)
 
-        self.assertFalse(controller.state.chord_optimization)
         self.assertEqual(
             controller.state.track_channels,
             [
-                TrackChannelItem(0, 0, True, False),
-                TrackChannelItem(1, 1, True, True),
+                TrackChannelItem(0, 0, True, track_channel_color(0, 0)),
+                TrackChannelItem(1, 1, True, track_channel_color(1, 1)),
             ],
         )
 
@@ -1122,8 +1110,6 @@ class AppControllerTests(unittest.TestCase):
             transpose_semitones=3,
             octave_shift=-1,
             humanize_timing=True,
-            chord_optimization=True,
-            melody_priority=True,
             repeat_prevention=True,
             sound_source="organ",
         )
@@ -1141,8 +1127,6 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(player.kwargs["transpose_semitones"], 3)
         self.assertEqual(player.kwargs["octave_shift"], -1)
         self.assertTrue(player.kwargs["humanize_timing"])
-        self.assertTrue(player.kwargs["chord_optimization"])
-        self.assertTrue(player.kwargs["melody_priority"])
         self.assertTrue(player.kwargs["repeat_prevention"])
         self.assertEqual(player.play_args[1]["countdown_seconds"], 4)
 
@@ -1406,6 +1390,38 @@ class AppControllerTests(unittest.TestCase):
         controller.process_pending_events()
 
         self.assertEqual(controller.state.active_output_notes, frozenset())
+
+    def test_event_dispatch_tracks_output_sources_by_track_and_channel(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 5
+        controller.midi_input_id = 8
+        controller.worker_queue.put(
+            ("sound_output_source", 5, 60, 2, 3, True)
+        )
+        controller.worker_queue.put(
+            ("midi_output_source", 8, 64, -1, 4, True)
+        )
+
+        controller.process_pending_events()
+
+        self.assertEqual(
+            controller.state.output_note_sources,
+            ((60, 2, 3), (64, -1, 4)),
+        )
+        self.assertEqual(
+            controller.state.realtime_output_note_sources,
+            ((64, -1, 4),),
+        )
+
+        controller.worker_queue.put(
+            ("sound_output_source", 5, 60, 2, 3, False)
+        )
+        controller.process_pending_events()
+
+        self.assertEqual(
+            controller.state.output_note_sources,
+            ((64, -1, 4),),
+        )
 
     def test_event_dispatch_tracks_full_piano_range_for_every_output_source(self) -> None:
         controller = self.make_controller()

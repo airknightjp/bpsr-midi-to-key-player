@@ -616,8 +616,6 @@ class MidiMainWindow(QMainWindow):
         self.repeat_check = self._option_check("repeat_prevention")
         self.humanize_check = self._option_check("humanize_timing")
         self.strum_check = self._option_check("chord_strum")
-        self.optimization_check = self._option_check("chord_optimization")
-        self.melody_priority_check = self._option_check("melody_priority")
         self.auto_sustain_check = self._option_check("auto_sustain")
         for column, widget in enumerate(
             (
@@ -638,8 +636,6 @@ class MidiMainWindow(QMainWindow):
             (
                 self.humanize_check,
                 self.strum_check,
-                self.optimization_check,
-                self.melody_priority_check,
             ),
         ):
             widget.setProperty("settingsItem", True)
@@ -1069,10 +1065,10 @@ class MidiMainWindow(QMainWindow):
                 if simultaneous_sound_and_realtime
                 else state.active_output_notes
             )
-            keyboard_melody_notes = (
-                frozenset()
+            keyboard_source_entries = (
+                state.realtime_output_note_sources
                 if simultaneous_sound_and_realtime
-                else state.melody_output_notes
+                else state.output_note_sources
             )
             keyboard_retrigger_events = (
                 state.realtime_output_retrigger_events
@@ -1086,23 +1082,11 @@ class MidiMainWindow(QMainWindow):
                 state.repeat_prevention,
                 state.humanize_timing,
                 state.chord_strum,
-                state.chord_optimization,
-                state.melody_priority,
                 state.auto_sustain,
             )
             if self._signature_changed("settings", settings_signature):
                 self._render_settings(state)
 
-            optimization_plan = (
-                self.controller.current_chord_optimization_plan()
-                if state.chord_optimization
-                else None
-            )
-            applied_optimization_plan = (
-                optimization_plan
-                if state.chord_optimization
-                else None
-            )
             if (
                 state.section_visibility["keyboard"]
                 or state.section_visibility["piano_roll"]
@@ -1114,9 +1098,6 @@ class MidiMainWindow(QMainWindow):
                     state.auto_fit_note_range,
                     state.transpose_semitones,
                     state.octave_shift,
-                    state.chord_optimization,
-                    state.melody_priority,
-                    id(applied_optimization_plan),
                 )
                 if self._signature_changed(
                     "output_note_range",
@@ -1129,7 +1110,6 @@ class MidiMainWindow(QMainWindow):
                         auto_fit_note_range=state.auto_fit_note_range,
                         transpose_semitones=state.transpose_semitones,
                         octave_shift=state.octave_shift,
-                        chord_optimization_plan=applied_optimization_plan,
                     )
                     self.output_keyboard.set_used_note_range(output_note_range)
                     self.piano_roll.set_used_note_range(output_note_range)
@@ -1138,7 +1118,7 @@ class MidiMainWindow(QMainWindow):
                 keyboard_visual_signature = (
                     keyboard_display_notes,
                     keyboard_retrigger_events,
-                    keyboard_melody_notes,
+                    keyboard_source_entries,
                 )
                 if self._signature_changed(
                     "keyboard_visualization",
@@ -1147,7 +1127,7 @@ class MidiMainWindow(QMainWindow):
                     self._render_output_keyboard(
                         keyboard_display_notes,
                         keyboard_retrigger_events,
-                        keyboard_melody_notes,
+                        keyboard_source_entries,
                     )
             piano_roll_running = self.controller.piano_roll_playback_running()
             self.position_slider.set_playback_running(piano_roll_running)
@@ -1160,12 +1140,9 @@ class MidiMainWindow(QMainWindow):
                     state.transpose_semitones,
                     state.octave_shift,
                     state.humanize_timing,
-                    state.chord_optimization,
-                    state.melody_priority,
                     state.chord_strum,
                     state.repeat_prevention,
                     state.playback_speed_percent,
-                    id(optimization_plan),
                 )
                 if self._signature_changed(
                     "piano_roll_sequence",
@@ -1179,9 +1156,6 @@ class MidiMainWindow(QMainWindow):
                             auto_fit_note_range=state.auto_fit_note_range,
                             transpose_semitones=state.transpose_semitones,
                             octave_shift=state.octave_shift,
-                            chord_optimization_plan=(
-                                applied_optimization_plan
-                            ),
                             humanize_timing=state.humanize_timing,
                             chord_strum=state.chord_strum,
                             repeat_prevention=state.repeat_prevention,
@@ -1307,8 +1281,6 @@ class MidiMainWindow(QMainWindow):
         self.repeat_check.setText(text["repeat_prevention"])
         self.humanize_check.setText(text["humanize_timing"])
         self.strum_check.setText(text["chord_strum"])
-        self.optimization_check.setText(text["chord_optimization"])
-        self.melody_priority_check.setText(text["melody_priority"])
         self.auto_sustain_check.setText(text["auto_sustain"])
         self.previous_track_button.setToolTip(text["previous_track"])
         self.previous_track_button.setAccessibleName(text["previous_track"])
@@ -1566,7 +1538,6 @@ class MidiMainWindow(QMainWindow):
             palette.accent_text,
             palette.canvas,
             palette.text,
-            palette.text,
         )
         self.midi_header.set_separator_color(palette.border)
         for control in (
@@ -1591,8 +1562,6 @@ class MidiMainWindow(QMainWindow):
             palette.accent,
             palette.accent_hover,
             palette.accent_text,
-            palette.danger,
-            QColor(palette.danger).darker(125).name(),
         )
         self.piano_roll.set_colors(
             "#000000",
@@ -1600,7 +1569,6 @@ class MidiMainWindow(QMainWindow):
             palette.panel_alt,
             palette.accent,
             palette.accent_hover,
-            palette.danger,
         )
         if theme_name == "sky_blue":
             whale_frames = tuple(
@@ -1986,8 +1954,6 @@ class MidiMainWindow(QMainWindow):
             (self.repeat_check, state.repeat_prevention),
             (self.humanize_check, state.humanize_timing),
             (self.strum_check, state.chord_strum),
-            (self.optimization_check, state.chord_optimization),
-            (self.melody_priority_check, state.melody_priority),
             (self.auto_sustain_check, state.auto_sustain),
         ):
             self._set_check(check, value)
@@ -1997,8 +1963,6 @@ class MidiMainWindow(QMainWindow):
         for check in (
             self.humanize_check,
             self.strum_check,
-            self.optimization_check,
-            self.melody_priority_check,
         ):
             check.setEnabled(True)
             if check.property("unsupported") != unsupported_in_realtime:
@@ -2010,10 +1974,10 @@ class MidiMainWindow(QMainWindow):
         self,
         active_notes: object,
         retrigger_events: object,
-        melody_notes: object,
+        note_sources: object,
     ) -> None:
         self.output_keyboard.set_active_notes(active_notes)
-        self.output_keyboard.set_melody_notes(melody_notes)
+        self.output_keyboard.set_note_sources(note_sources)
         self.output_keyboard.set_retrigger_events(retrigger_events)
 
     def _render_player_controls(self, state: AppState) -> None:

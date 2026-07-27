@@ -7,8 +7,6 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, plan_auto_sustain
-from chord_optimization import ChordOptimizationPlan
-from chord_optimization_planner import ChordOptimizationPlanner, ChordOptimizationRequest
 from config import (
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
@@ -24,7 +22,6 @@ from config import (
     shift_midi_note,
 )
 from keyboard_output import KeyboardOutput
-from melody_detection import MelodySource, detect_melody_source
 from midi_parser import MidiEvent
 from playback_timing import PlaybackClock, PlaybackTimeline, prepare_playback_events
 from repeat_guard import RapidRepeatGuard
@@ -33,10 +30,9 @@ from repeat_guard import RapidRepeatGuard
 StateCallback = Callable[[str], None]
 ErrorCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
-OptimizationProgressCallback = Callable[[int | None], None]
 CountdownCallback = Callable[[int], None]
 OutputNoteCallback = Callable[[int, bool], None]
-MelodyOutputNoteCallback = Callable[[int, bool], None]
+OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
 EnabledChannelsCallback = Callable[[], set[int]]
 EnabledSourcesCallback = Callable[[], set[tuple[int, int]]]
 NoteOwner = tuple[int, int, int]
@@ -49,17 +45,14 @@ class MidiKeyboardPlayer:
         on_state: StateCallback | None = None,
         on_error: ErrorCallback | None = None,
         on_position: PositionCallback | None = None,
-        on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
-        on_melody_output_note: MelodyOutputNoteCallback | None = None,
+        on_output_source_note: OutputSourceNoteCallback | None = None,
         enabled_channels: EnabledChannelsCallback | None = None,
         enabled_sources: EnabledSourcesCallback | None = None,
         auto_fit_note_range: bool = False,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         humanize_timing: bool = False,
-        chord_optimization: bool = False,
-        melody_priority: bool = False,
         chord_strum: bool = False,
         auto_sustain: bool = False,
         repeat_prevention: bool = False,
@@ -73,10 +66,10 @@ class MidiKeyboardPlayer:
         self.on_state = on_state or (lambda _state: None)
         self.on_error = on_error or (lambda _message: None)
         self.on_position = on_position or (lambda _position: None)
-        self.on_optimization_progress = on_optimization_progress or (lambda _progress: None)
         self.on_output_note = on_output_note or (lambda _note, _pressed: None)
-        self.on_melody_output_note = (
-            on_melody_output_note or (lambda _note, _pressed: None)
+        self.on_output_source_note = (
+            on_output_source_note
+            or (lambda _note, _track, _channel, _pressed: None)
         )
         self.enabled_channels = enabled_channels
         self.enabled_sources = enabled_sources
@@ -90,8 +83,6 @@ class MidiKeyboardPlayer:
             min(MAX_OCTAVE_SHIFT, int(octave_shift)),
         )
         self.humanize_timing = humanize_timing
-        self.chord_optimization = chord_optimization
-        self.melody_priority = bool(melody_priority)
         self.chord_strum = chord_strum
         self.auto_sustain = auto_sustain
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
@@ -113,42 +104,10 @@ class MidiKeyboardPlayer:
         self._auto_sustain_channels: set[tuple[int, int]] = set()
         self._sustain_lock = threading.RLock()
         self._octave_shift = 0
-        self._chord_optimization_plan: ChordOptimizationPlan | None = None
-        self._chord_optimization_plan_auto_fit: bool | None = None
-        self._chord_optimization_plan_speed: int | None = None
-        self._chord_optimization_plan_transpose: int | None = None
-        self._chord_optimization_plan_octave: int | None = None
-        self._chord_optimization_plan_melody_priority: bool | None = None
-        self._chord_optimization_plan_dirty = True
-        self._optimization_generation = 0
-        self._current_events: list[MidiEvent] | None = None
-        self._melody_source: MelodySource | None = None
-        self._optimization_planner = ChordOptimizationPlanner(
-            request_provider=self._optimization_request,
-            request_is_current=self._optimization_request_is_current,
-            commit_plan=self._commit_optimization_plan,
-            should_stop=self._stop_event.is_set,
-            on_progress=self.on_optimization_progress,
-        )
 
     @property
     def is_playing(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
-
-    def current_chord_optimization_plan(self) -> ChordOptimizationPlan | None:
-        with self._config_lock:
-            if (
-                not self.chord_optimization
-                or self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
-                or self._chord_optimization_plan_transpose != self.transpose_semitones
-                or self._chord_optimization_plan_octave != self.note_octave_shift
-                or (
-                    self._chord_optimization_plan_melody_priority
-                    != self.melody_priority
-                )
-            ):
-                return None
-            return self._chord_optimization_plan
 
     def play(self, events: list[MidiEvent], countdown_seconds: int = 0, start_time: float = 0.0) -> None:
         self.play_with_countdown_sound(events, countdown_seconds, start_time, None)
@@ -165,10 +124,6 @@ class MidiKeyboardPlayer:
         self._stop_event.clear()
         self._release_requested.clear()
         self._repeat_guard.reset()
-        with self._config_lock:
-            self._current_events = events
-            self._melody_source = detect_melody_source(events)
-            self._mark_chord_optimization_dirty_locked()
         self._thread = threading.Thread(
             target=self._run,
             args=(events, countdown_seconds, max(0.0, start_time), on_countdown_tick),
@@ -192,9 +147,7 @@ class MidiKeyboardPlayer:
             if self.auto_fit_note_range == enabled:
                 return
             self.auto_fit_note_range = enabled
-            self._mark_chord_optimization_dirty_locked()
             self._release_requested.set()
-        self._schedule_chord_optimization()
 
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
         transpose_semitones = max(
@@ -210,9 +163,7 @@ class MidiKeyboardPlayer:
                 return
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
-            self._mark_chord_optimization_dirty_locked()
             self._release_requested.set()
-        self._schedule_chord_optimization()
 
     def set_humanize_timing(self, enabled: bool) -> None:
         with self._config_lock:
@@ -221,34 +172,6 @@ class MidiKeyboardPlayer:
     def _humanize_timing_enabled(self) -> bool:
         with self._config_lock:
             return self.humanize_timing
-
-    def set_chord_optimization(self, enabled: bool) -> None:
-        with self._config_lock:
-            enabled = bool(enabled)
-            if self.chord_optimization == enabled:
-                return
-            self.chord_optimization = enabled
-            self._mark_chord_optimization_dirty_locked()
-            self._release_requested.set()
-        if enabled:
-            self._schedule_chord_optimization()
-        else:
-            self.on_optimization_progress(None)
-
-    def set_melody_priority(self, enabled: bool) -> None:
-        with self._config_lock:
-            enabled = bool(enabled)
-            if self.melody_priority == enabled:
-                return
-            self.melody_priority = enabled
-            self._mark_chord_optimization_dirty_locked()
-        self._release_requested.set()
-        self._schedule_chord_optimization()
-
-    def request_chord_optimization_refresh(self) -> None:
-        with self._config_lock:
-            self._mark_chord_optimization_dirty_locked()
-        self._schedule_chord_optimization()
 
     def set_chord_strum(self, enabled: bool) -> None:
         with self._config_lock:
@@ -274,13 +197,10 @@ class MidiKeyboardPlayer:
     def set_playback_speed(self, speed_percent: int) -> None:
         with self._config_lock:
             speed_percent = int(speed_percent)
-            if self.playback_speed_percent != speed_percent:
-                self.playback_speed_percent = speed_percent
-                self._mark_chord_optimization_dirty_locked()
+            self.playback_speed_percent = speed_percent
             clock = self._clock
         if clock is not None:
             clock.set_speed_percent(speed_percent)
-            self._schedule_chord_optimization()
 
     def set_key_bindings(self, key_bindings: dict[int, str]) -> None:
         with self._config_lock:
@@ -303,7 +223,6 @@ class MidiKeyboardPlayer:
         if self._thread is None or threading.current_thread() is self._thread:
             return
         self._thread.join(timeout)
-        self._optimization_planner.wait(timeout=0.2)
 
     def current_position(self) -> float | None:
         with self._config_lock:
@@ -328,9 +247,6 @@ class MidiKeyboardPlayer:
                 if self._stop_event.wait(1.0):
                     return
 
-            self._refresh_chord_optimization_plan(events, force=True)
-            if self._stop_event.is_set():
-                return
             self.on_state("playing")
             self.on_position(start_time)
             with self._config_lock:
@@ -341,11 +257,7 @@ class MidiKeyboardPlayer:
             next_position_report = 0.0
             timeline = PlaybackTimeline(start_time, self._random)
             planned_events = plan_auto_sustain(events)
-            for scheduled in prepare_playback_events(
-                planned_events,
-                self._random,
-                self._chord_optimization_timing_offset,
-            ):
+            for scheduled in prepare_playback_events(planned_events, self._random):
                 event = scheduled.event
                 self._consume_release_request()
                 if event.time < start_time:
@@ -362,7 +274,6 @@ class MidiKeyboardPlayer:
                         scheduled,
                         self._humanize_timing_enabled(),
                         self._chord_strum_enabled(),
-                        self._chord_optimization_timing_offset(event),
                     )
                     delay = clock.delay_until(scheduled_time)
                     if delay <= 0:
@@ -402,8 +313,6 @@ class MidiKeyboardPlayer:
             self._octave_shift = 0
             with self._config_lock:
                 self._clock = None
-                self._current_events = None
-                self._optimization_generation += 1
             self.on_state("stopped")
 
     def _consume_release_request(self) -> None:
@@ -449,7 +358,11 @@ class MidiKeyboardPlayer:
 
             self._move_to_octave_shift(mapping.octave_shift)
             owner = self._note_owner(event.track, event.channel, event.note)
-            self._press_note_key(mapping.key, owner=owner, output_note=mapping.note)
+            self._press_note_key(
+                mapping.key,
+                owner=owner,
+                output_note=mapping.note,
+            )
             self._active_notes[owner].append(mapping.key)
 
         elif event.kind == "note_off" and event.note is not None:
@@ -491,140 +404,9 @@ class MidiKeyboardPlayer:
         return shifted_note
 
     def _playable_event_note(self, event: MidiEvent) -> int | None:
-        with self._config_lock:
-            chord_optimization = self.chord_optimization
-            auto_fit_note_range = self.auto_fit_note_range
-            plan = self._chord_optimization_plan
-            plan_auto_fit = self._chord_optimization_plan_auto_fit
-            plan_transpose = self._chord_optimization_plan_transpose
-            plan_octave = self._chord_optimization_plan_octave
-            plan_melody_priority = (
-                self._chord_optimization_plan_melody_priority
-            )
-            transpose_semitones = self.transpose_semitones
-            octave_shift = self.note_octave_shift
-            melody_priority = self.melody_priority
-        if (
-            chord_optimization
-            and plan is not None
-            and plan_auto_fit == auto_fit_note_range
-            and plan_transpose == transpose_semitones
-            and plan_octave == octave_shift
-            and plan_melody_priority == melody_priority
-        ):
-            planned, target = plan.target_for(event)
-            if planned:
-                return target
         if event.note is None:
             return None
         return self._playable_note(event.note)
-
-    def _chord_optimization_timing_offset(self, event: MidiEvent) -> float | None:
-        with self._config_lock:
-            if not self.chord_optimization or self._chord_optimization_plan is None:
-                return None
-            if (
-                self._chord_optimization_plan_auto_fit != self.auto_fit_note_range
-                or self._chord_optimization_plan_transpose != self.transpose_semitones
-                or self._chord_optimization_plan_octave != self.note_octave_shift
-                or (
-                    self._chord_optimization_plan_melody_priority
-                    != self.melody_priority
-                )
-            ):
-                return None
-            plan = self._chord_optimization_plan
-        return plan.timing_offset_for(event)
-
-    def _refresh_chord_optimization_plan(
-        self,
-        events: list[MidiEvent],
-        force: bool = False,
-    ) -> None:
-        with self._config_lock:
-            if self._current_events is None:
-                self._current_events = events
-        if force:
-            self._optimization_planner.build_now()
-        else:
-            self._schedule_chord_optimization()
-
-    def _mark_chord_optimization_dirty_locked(self) -> None:
-        self._chord_optimization_plan_dirty = True
-        self._optimization_generation += 1
-
-    def _schedule_chord_optimization(self) -> None:
-        with self._config_lock:
-            should_schedule = (
-                self._current_events is not None
-                and self.chord_optimization
-                and self._chord_optimization_plan_dirty
-            )
-        if should_schedule:
-            self._optimization_planner.schedule()
-
-    def _optimization_request(self) -> ChordOptimizationRequest | None:
-        with self._config_lock:
-            if (
-                not self.chord_optimization
-                or not self._chord_optimization_plan_dirty
-                or self._current_events is None
-            ):
-                return None
-            return ChordOptimizationRequest(
-                generation=self._optimization_generation,
-                events=self._current_events,
-                options={
-                    "auto_fit_note_range": self.auto_fit_note_range,
-                    "transpose_semitones": self.transpose_semitones,
-                    "octave_shift": self.note_octave_shift,
-                    "playback_speed_percent": self.playback_speed_percent,
-                    "prioritize_melody": self.melody_priority,
-                    "event_enabled": self._event_is_enabled,
-                },
-            )
-
-    def _optimization_request_is_current(self, generation: int) -> bool:
-        with self._config_lock:
-            return (
-                not self._stop_event.is_set()
-                and self.chord_optimization
-                and self._current_events is not None
-                and self._optimization_generation == generation
-            )
-
-    def _commit_optimization_plan(
-        self,
-        request: ChordOptimizationRequest,
-        plan: ChordOptimizationPlan,
-    ) -> bool:
-        with self._config_lock:
-            if not self._optimization_request_is_current_locked(request.generation):
-                return False
-            self._chord_optimization_plan = plan
-            self._chord_optimization_plan_auto_fit = bool(
-                request.options["auto_fit_note_range"]
-            )
-            self._chord_optimization_plan_speed = int(
-                request.options["playback_speed_percent"]
-            )
-            self._chord_optimization_plan_transpose = int(
-                request.options["transpose_semitones"]
-            )
-            self._chord_optimization_plan_octave = int(request.options["octave_shift"])
-            self._chord_optimization_plan_melody_priority = bool(
-                request.options["prioritize_melody"]
-            )
-            self._chord_optimization_plan_dirty = False
-            return True
-
-    def _optimization_request_is_current_locked(self, generation: int) -> bool:
-        return (
-            not self._stop_event.is_set()
-            and self.chord_optimization
-            and self._current_events is not None
-            and self._optimization_generation == generation
-        )
 
     def _move_to_octave_shift(self, target_shift: int) -> None:
         changed = target_shift != self._octave_shift
@@ -654,7 +436,12 @@ class MidiKeyboardPlayer:
             return
         self._reset_external_octave_to_base()
 
-    def _press_note_key(self, key: str, owner: NoteOwner, output_note: int) -> None:
+    def _press_note_key(
+        self,
+        key: str,
+        owner: NoteOwner,
+        output_note: int,
+    ) -> None:
         if key in self._active_key_owner:
             self.output.release(key)
             self._emit_key_released(key)
@@ -705,15 +492,16 @@ class MidiKeyboardPlayer:
             self.on_output_note(note, pressed)
         except Exception:
             pass
-        if owner is None:
-            return
-        source = (0 if owner[0] < 0 else owner[0], owner[1])
-        if source != self._melody_source:
-            return
-        try:
-            self.on_melody_output_note(note, pressed)
-        except Exception:
-            pass
+        if owner is not None:
+            try:
+                self.on_output_source_note(
+                    note,
+                    owner[0],
+                    owner[1],
+                    pressed,
+                )
+            except Exception:
+                pass
 
     @staticmethod
     def _note_owner(track: int | None, channel: int | None, note: int) -> NoteOwner:
