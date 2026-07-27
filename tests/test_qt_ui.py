@@ -3016,7 +3016,7 @@ class QtUiTests(unittest.TestCase):
 
         self.assertEqual(
             (perfect[2:], great[2:], good[2:]),
-            ((17, 2, 7), (10, 1, 4), (5, 0, 2)),
+            ((2,), (1,), (0,)),
         )
         self.assertEqual(
             {effect[0].name() for effect in (perfect, great, good)},
@@ -3032,7 +3032,13 @@ class QtUiTests(unittest.TestCase):
             roll._impact_duration("GREAT"),
             roll._impact_duration("GOOD"),
         )
-        self.assertEqual(roll.IMPACT_PARTICLE_SPREAD_SCALE, 0.50)
+        judgment_source = (
+            inspect.getsource(roll._draw_impact_core)
+            + inspect.getsource(roll._draw_impact_burst_direct)
+        )
+        self.assertNotIn("drawLine", judgment_source)
+        self.assertNotIn("ray_count", judgment_source)
+        self.assertNotIn("mote", judgment_source)
 
     def test_falling_note_hit_events_keep_state_while_lane_glow_is_hidden(self) -> None:
         roll = FallingNotesWidget()
@@ -3093,7 +3099,7 @@ class QtUiTests(unittest.TestCase):
             draw_burst.call_args.args[3].name(),
             QColor(track_channel_color(*source)).name(),
         )
-        self.assertEqual(draw_burst.call_args.args[5:], (1.5, 17, 2, 7))
+        self.assertEqual(draw_burst.call_args.args[5:], (1.5, 2))
         roll.close()
 
     def test_falling_note_ignores_removed_miss_effect(self) -> None:

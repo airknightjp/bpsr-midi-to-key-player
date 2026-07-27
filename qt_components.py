@@ -1206,13 +1206,11 @@ class FallingNotesWidget(QWidget):
         "GOOD": 0.12,
     }
     IMPACT_SIZE_SCALE = 1.0
-    IMPACT_PARTICLE_SPREAD_SCALE = 0.50
     IMPACT_OPACITY = 1.0
     PERFECT_IMPACT_OPACITY = 0.50
     PERFECT_RELEASE_IMPACT_OPACITY = 0.20
     RELEASE_IMPACT_SIZE_SCALE = 0.60
     RELEASE_IMPACT_OPACITY = 0.70
-    RELEASE_IMPACT_PARTICLE_SCALE = 0.50
     LANE_FADE_SECONDS = 0.15
     HELD_LANE_OPACITY = 0.28
     LANE_GLOW_ENABLED = False
@@ -1899,28 +1897,6 @@ class FallingNotesWidget(QWidget):
             )
         )
 
-        accent = QColor(color).darker(108)
-        accent.setAlpha(round(225 * intensity))
-        painter.setPen(
-            QPen(
-                accent,
-                max(1.1 * self._scale, radius * 0.28),
-                Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap,
-            )
-        )
-        for start, end in (
-            (
-                QPointF(center_x, center_y - radius * 0.88),
-                QPointF(center_x, center_y + radius * 0.88),
-            ),
-            (
-                QPointF(center_x - radius * 0.88, center_y),
-                QPointF(center_x + radius * 0.88, center_y),
-            ),
-        ):
-            painter.drawLine(start, end)
-
     def _draw_light_bar(
         self,
         painter: QPainter,
@@ -2317,9 +2293,7 @@ class FallingNotesWidget(QWidget):
         color: QColor,
         progress: float,
         intensity: float = 1.0,
-        ray_count: int = 11,
         ring_count: int = 1,
-        mote_count: int = 4,
         *,
         rainbow: bool = False,
         key_width_scale: float = 1.0,
@@ -2334,9 +2308,7 @@ class FallingNotesWidget(QWidget):
                 color,
                 progress,
                 intensity,
-                ray_count,
                 ring_count,
-                mote_count,
                 rainbow=rainbow,
                 key_width_scale=key_width_scale,
                 effect_size_scale=effect_size_scale,
@@ -2353,9 +2325,7 @@ class FallingNotesWidget(QWidget):
             color.rgba(),
             progress_bucket,
             round(float(intensity), 3),
-            int(ray_count),
             int(ring_count),
-            int(mote_count),
             bool(rainbow),
             round(float(key_width_scale), 3),
             round(float(effect_size_scale), 3),
@@ -2378,9 +2348,7 @@ class FallingNotesWidget(QWidget):
                 color,
                 progress_bucket / max(1, self.IMPACT_PROGRESS_STEPS - 1),
                 intensity,
-                ray_count,
                 ring_count,
-                mote_count,
                 rainbow=rainbow,
                 key_width_scale=key_width_scale,
                 effect_size_scale=effect_size_scale,
@@ -2398,9 +2366,7 @@ class FallingNotesWidget(QWidget):
         color: QColor,
         progress: float,
         intensity: float = 1.0,
-        ray_count: int = 11,
         ring_count: int = 1,
-        mote_count: int = 4,
         *,
         rainbow: bool = False,
         key_width_scale: float = 1.0,
@@ -2473,109 +2439,6 @@ class FallingNotesWidget(QWidget):
                 ring_radius * 0.52,
             )
 
-        particle_radius = (
-            max(0.75 * self._scale, 1.55 * self._scale * fade)
-            * spatial_scale
-        )
-        ray_count = max(1, int(ray_count))
-        angles = tuple(
-            270.0
-            if ray_count == 1
-            else 195.0 + 150.0 * index / (ray_count - 1)
-            for index in range(ray_count)
-        )
-        for index, angle in enumerate(angles):
-            ray_color = (
-                self._rainbow_impact_color(index, ray_count, progress)
-                if rainbow
-                else QColor(color).lighter(135)
-            )
-            ray_color.setAlpha(round(220 * fade))
-            particle_color = (
-                QColor(ray_color).lighter(145)
-                if rainbow
-                else QColor(color).lighter(155)
-            )
-            particle_color.setAlpha(round(235 * fade))
-            painter.setPen(
-                QPen(
-                    ray_color,
-                    max(0.8 * self._scale, 1.4 * self._scale * fade),
-                    Qt.PenStyle.SolidLine,
-                    Qt.PenCapStyle.RoundCap,
-                )
-            )
-            radians = math.radians(angle)
-            spread = 0.86 + 0.18 * (index % 3)
-            start_distance = (
-                base_radius * 0.52
-                + 2.5
-                * self._scale
-                * progress
-                * spatial_scale
-                * self.IMPACT_PARTICLE_SPREAD_SCALE
-            )
-            end_distance = (
-                base_radius
-                + (3.0 + 14.0 * progress)
-                * self._scale
-                * spread
-                * spatial_scale
-                * self.IMPACT_PARTICLE_SPREAD_SCALE
-            )
-            start = QPointF(
-                center_x + math.cos(radians) * start_distance,
-                center_y + math.sin(radians) * start_distance,
-            )
-            end = QPointF(
-                center_x + math.cos(radians) * end_distance,
-                center_y + math.sin(radians) * end_distance,
-            )
-            painter.drawLine(start, end)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(particle_color)
-            painter.drawEllipse(end, particle_radius, particle_radius)
-            painter.setPen(
-                QPen(
-                    ray_color,
-                    max(0.8 * self._scale, 1.4 * self._scale * fade),
-                    Qt.PenStyle.SolidLine,
-                    Qt.PenCapStyle.RoundCap,
-                )
-            )
-        mote_angles = (205, 225, 245, 285, 305, 325, 345)
-        for mote_index, angle in enumerate(
-            mote_angles[:max(0, min(len(mote_angles), mote_count))]
-        ):
-            radians = math.radians(angle)
-            distance = (
-                base_radius
-                + (8.0 + 20.0 * progress)
-                * self._scale
-                * spatial_scale
-                * self.IMPACT_PARTICLE_SPREAD_SCALE
-            )
-            mote = QPointF(
-                center_x + math.cos(radians) * distance,
-                center_y + math.sin(radians) * distance,
-            )
-            mote_color = (
-                self._rainbow_impact_color(
-                    mote_index + 2,
-                    max(7, mote_count),
-                    progress,
-                ).lighter(130)
-                if rainbow
-                else QColor(color).lighter(175)
-            )
-            mote_color.setAlpha(round(205 * fade))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(mote_color)
-            mote_radius = (
-                max(0.8 * self._scale, 1.8 * self._scale * fade)
-                * spatial_scale
-            )
-            painter.drawEllipse(mote, mote_radius, mote_radius)
         painter.restore()
 
     @staticmethod
@@ -2595,22 +2458,20 @@ class FallingNotesWidget(QWidget):
         self,
         judgment: str,
         source: tuple[int, int] | None = None,
-    ) -> tuple[QColor, float, int, int, int]:
+    ) -> tuple[QColor, float, int]:
         source_color = (
             QColor(track_channel_color(*source))
             if source is not None
             else None
         )
         if judgment == "PERFECT":
-            return source_color or QColor("#ffd84d"), 1.50, 17, 2, 7
+            return source_color or QColor("#ffd84d"), 1.50, 2
         if judgment == "GREAT":
-            return source_color or QColor("#52e5ff"), 1.05, 10, 1, 4
+            return source_color or QColor("#52e5ff"), 1.05, 1
         return (
             source_color or QColor(self._scheduled).lighter(120),
             0.72,
-            5,
             0,
-            2,
         )
 
     def _impact_key_width_scale(
@@ -2689,7 +2550,7 @@ class FallingNotesWidget(QWidget):
                 effect_margin,
             ):
                 continue
-            color, intensity, ray_count, ring_count, mote_count = (
+            color, intensity, ring_count = (
                 self._impact_style(impact.judgment, impact.source)
             )
             effect_size_scale = 1.0
@@ -2705,13 +2566,6 @@ class FallingNotesWidget(QWidget):
                     if impact.judgment == "PERFECT"
                     else self.RELEASE_IMPACT_OPACITY
                 )
-                ray_count = max(
-                    1,
-                    round(ray_count * self.RELEASE_IMPACT_PARTICLE_SCALE),
-                )
-                mote_count = round(
-                    mote_count * self.RELEASE_IMPACT_PARTICLE_SCALE
-                )
             self._draw_impact_burst(
                 painter,
                 x,
@@ -2719,9 +2573,7 @@ class FallingNotesWidget(QWidget):
                 color,
                 elapsed / duration,
                 intensity,
-                ray_count,
                 ring_count,
-                mote_count,
                 rainbow=False,
                 key_width_scale=self._impact_key_width_scale(
                     note_width,
