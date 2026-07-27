@@ -113,6 +113,9 @@ class MidiParserTests(unittest.TestCase):
             b"\x00\xff\x03\x06Melody"
             + b"\x00\xff\x04\x05Piano"
             + b"\x00\xff\x58\x04\x03\x02\x18\x08"
+            + b"\x00\xff\x59\x02\xff\x01"
+            + b"\x00\xff\x06\x05Verse"
+            + b"\x00\xff\x05\x02La"
             + b"\x00\xc0\x28"
             + b"\x00\x90\x3c\x50"
             + b"\x60\x90\x3c\x40"
@@ -140,6 +143,12 @@ class MidiParserTests(unittest.TestCase):
             (3, 4),
         )
         self.assertEqual(summary.program_changes[0].program, 40)
+        self.assertEqual(summary.key_signatures[0].sharps_flats, -1)
+        self.assertTrue(summary.key_signatures[0].minor)
+        self.assertEqual(
+            [(event.kind, event.text) for event in summary.text_events],
+            [("lyrics", "La"), ("marker", "Verse")],
+        )
         self.assertEqual(
             [event.note_id for event in note_ons],
             [0, 1],

@@ -4,7 +4,7 @@ import inspect
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import app_controller
 from app_controller import AppController
@@ -88,6 +88,410 @@ class AppControllerTests(unittest.TestCase):
     def test_controller_has_no_qt_dependency(self) -> None:
         source = inspect.getsource(app_controller)
         self.assertNotIn("PySide6", source)
+
+    def test_cached_piano_arrangement_drives_sound_and_key_conversion(self) -> None:
+        controller = self.make_controller(play_sound=False)
+        path = Path("arranged.mid")
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        arranged_events = [
+            MidiEvent(0.0, "note_on", 0, 72, 90, track=0, note_id=10),
+            MidiEvent(1.0, "note_off", 0, 72, 0, track=0, note_id=10),
+            MidiEvent(1.0, "end"),
+        ]
+        summary = MidiSummary(
+            path=path,
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            note_range=(60, 60),
+            file_hash="a" * 64,
+        )
+        cached_plan = MagicMock()
+        cached_plan.duration = 1.0
+        cached_plan.to_midi_events.return_value = arranged_events
+        with (
+            patch.object(
+                controller.midi_parser_process,
+                "parse",
+                return_value=(source_events, summary),
+            ),
+            patch(
+                "app_controller.cached_piano_arrangement",
+                return_value=cached_plan,
+            ),
+        ):
+            self.assertTrue(controller._load_midi_file(path, stop_playback=False))
+
+        self.assertIs(controller.source_events, source_events)
+        self.assertIs(controller.events, arranged_events)
+        self.assertEqual(controller.state.arrangement_status, "ready")
+
+        with (
+            patch("app_controller.MidiKeyboardPlayer", FakePlayer),
+            patch("app_controller.KeyboardOutput"),
+        ):
+            controller.play_keyboard(countdown=False)
+        self.assertIs(FakePlayer.instance.play_args[0], arranged_events)
+        controller.stop_playback()
+
+        with patch("app_controller.MidiSoundPlayer", FakePlayer):
+            controller.play_sound(start_time=0.0)
+        self.assertIs(FakePlayer.instance.play_args[0], arranged_events)
+
+    def test_arrangement_setting_switches_between_source_and_cached_events(
+        self,
+    ) -> None:
+        controller = self.make_controller(use_piano_arrangement=False)
+        path = Path("arranged.mid")
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        arranged_events = [
+            MidiEvent(0.0, "note_on", 0, 72, 90, track=0, note_id=10),
+            MidiEvent(1.0, "note_off", 0, 72, 0, track=0, note_id=10),
+            MidiEvent(1.0, "end"),
+        ]
+        summary = MidiSummary(
+            path=path,
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            note_range=(60, 60),
+            file_hash="a" * 64,
+        )
+        cached_plan = MagicMock()
+        cached_plan.duration = 1.0
+        cached_plan.to_midi_events.return_value = arranged_events
+        with (
+            patch.object(
+                controller.midi_parser_process,
+                "parse",
+                return_value=(source_events, summary),
+            ),
+            patch(
+                "app_controller.cached_piano_arrangement",
+                return_value=cached_plan,
+            ),
+        ):
+            self.assertTrue(
+                controller._load_midi_file(path, stop_playback=False)
+            )
+            self.assertIs(controller.events, source_events)
+            controller.set_option("use_piano_arrangement", True)
+            self.assertIs(controller.events, arranged_events)
+            controller.set_option("use_piano_arrangement", False)
+            self.assertIs(controller.events, source_events)
+
+        self.assertFalse(
+            controller.current_settings().use_piano_arrangement
+        )
+
+    def test_arrangement_checkbox_switches_sound_playback_immediately(
+        self,
+    ) -> None:
+        controller = self.make_controller(use_piano_arrangement=False)
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        arranged_events = [
+            MidiEvent(0.0, "note_on", 0, 72, 90, track=0, note_id=10),
+            MidiEvent(1.0, "note_off", 0, 72, 0, track=0, note_id=10),
+            MidiEvent(1.0, "end"),
+        ]
+        controller.source_events = source_events
+        controller.events = source_events
+        controller.summary = MidiSummary(
+            path=Path("current.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            file_hash="b" * 64,
+        )
+        controller.state.current_mode = "sound"
+        controller.sound_player = MagicMock()
+        controller.sound_player.is_playing = True
+        controller.sound_player.current_position.return_value = 0.4
+        plan = MagicMock()
+        plan.duration = 1.0
+        plan.to_midi_events.return_value = arranged_events
+
+        with patch(
+            "app_controller.cached_piano_arrangement",
+            return_value=plan,
+        ):
+            controller.set_option("use_piano_arrangement", True)
+            controller.set_option("use_piano_arrangement", False)
+
+        self.assertEqual(
+            controller.sound_player.switch.call_args_list,
+            [
+                call(arranged_events, start_time=0.4),
+                call(source_events, start_time=0.4),
+            ],
+        )
+        self.assertIs(controller.events, source_events)
+
+    def test_arrangement_checkbox_restarts_keyboard_conversion_immediately(
+        self,
+    ) -> None:
+        controller = self.make_controller(use_piano_arrangement=False)
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        arranged_events = [
+            MidiEvent(0.0, "note_on", 0, 72, 90, track=0, note_id=10),
+            MidiEvent(1.0, "note_off", 0, 72, 0, track=0, note_id=10),
+            MidiEvent(1.0, "end"),
+        ]
+        controller.source_events = source_events
+        controller.events = source_events
+        controller.summary = MidiSummary(
+            path=Path("current.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            file_hash="b" * 64,
+        )
+        controller.state.current_mode = "keys"
+        controller.player = MagicMock()
+        controller.player.is_playing = True
+        controller.player.current_position.return_value = 0.6
+        plan = MagicMock()
+        plan.duration = 1.0
+        plan.to_midi_events.return_value = arranged_events
+
+        with (
+            patch(
+                "app_controller.cached_piano_arrangement",
+                return_value=plan,
+            ),
+            patch.object(controller, "seek") as seek,
+        ):
+            controller.set_option("use_piano_arrangement", True)
+
+        self.assertIs(controller.events, arranged_events)
+        seek.assert_called_once_with(0.6)
+
+    def test_stale_arrangement_completion_is_not_applied_to_another_midi(self) -> None:
+        controller = self.make_controller()
+        controller.summary = MidiSummary(
+            path=Path("current.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=0,
+            file_hash="b" * 64,
+        )
+        controller.state.arrangement_status = "analyzing"
+        controller.worker_queue.put(
+            (
+                "arrangement_complete",
+                "a" * 64,
+                controller.current_piano_arrangement_config().cache_key(),
+            )
+        )
+
+        controller.process_pending_events()
+
+        self.assertEqual(controller.state.arrangement_status, "idle")
+        self.assertIsNone(controller.arrangement_plan)
+
+    def test_arrangement_can_run_in_every_playback_state(self) -> None:
+        for current_mode, midi_input_running in (
+            (None, False),
+            ("sound", False),
+            ("sound_paused", False),
+            ("keys", False),
+            ("keys_paused", False),
+            (None, True),
+            ("sound", True),
+        ):
+            with self.subTest(
+                current_mode=current_mode,
+                midi_input_running=midi_input_running,
+            ):
+                controller = self.make_controller()
+                controller.summary = MidiSummary(
+                    path=Path("current.mid"),
+                    duration=1.0,
+                    channels=(0,),
+                    event_count=0,
+                    file_hash="b" * 64,
+                )
+                controller.state.current_mode = current_mode
+                controller.state.midi_input_running = midi_input_running
+
+                with patch.object(
+                    controller.piano_arrangement_process,
+                    "start",
+                ) as start:
+                    controller.analyze_selected_midi()
+
+                start.assert_called_once()
+                self.assertEqual(
+                    controller.state.arrangement_status,
+                    "analyzing",
+                )
+
+    def test_arrangement_completed_during_sound_playback_applies_immediately(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        arranged_events = [
+            MidiEvent(0.0, "note_on", 0, 72, 90, track=0, note_id=10),
+            MidiEvent(1.0, "note_off", 0, 72, 0, track=0, note_id=10),
+            MidiEvent(1.0, "end"),
+        ]
+        controller.source_events = source_events
+        controller.events = source_events
+        controller.summary = MidiSummary(
+            path=Path("current.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            file_hash="b" * 64,
+        )
+        controller._set_enabled_sources(((0, 0),))
+        controller.state.current_mode = "sound"
+        controller.state.position = 0.25
+        controller.state.arrangement_status = "analyzing"
+        controller.sound_player = MagicMock()
+        controller.sound_player.is_playing = True
+        controller.sound_player.current_position.return_value = 0.4
+        controller.worker_queue.put(
+            (
+                "arrangement_complete",
+                "b" * 64,
+                controller.current_piano_arrangement_config().cache_key(),
+            )
+        )
+        plan = MagicMock()
+        plan.duration = 1.0
+        plan.to_midi_events.return_value = arranged_events
+
+        with patch(
+            "app_controller.cached_piano_arrangement",
+            return_value=plan,
+        ) as load_cache:
+            controller.process_pending_events()
+            load_cache.assert_called_once()
+            self.assertIs(controller.events, arranged_events)
+            self.assertEqual(
+                controller.state.arrangement_status,
+                "ready",
+            )
+            controller.sound_player.switch.assert_called_once_with(
+                arranged_events,
+                start_time=0.4,
+            )
+
+    def test_arrangement_completion_does_not_restart_source_when_use_is_off(
+        self,
+    ) -> None:
+        controller = self.make_controller(use_piano_arrangement=False)
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        controller.source_events = source_events
+        controller.events = source_events
+        controller.summary = MidiSummary(
+            path=Path("current.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            file_hash="b" * 64,
+        )
+        controller.state.current_mode = "sound"
+        controller.state.arrangement_status = "analyzing"
+        controller.sound_player = MagicMock()
+        controller.sound_player.is_playing = True
+        controller.worker_queue.put(
+            (
+                "arrangement_complete",
+                "b" * 64,
+                controller.current_piano_arrangement_config().cache_key(),
+            )
+        )
+        plan = MagicMock()
+        plan.duration = 1.0
+
+        with patch(
+            "app_controller.cached_piano_arrangement",
+            return_value=plan,
+        ):
+            controller.process_pending_events()
+
+        self.assertIs(controller.events, source_events)
+        controller.sound_player.switch.assert_not_called()
+        self.assertEqual(controller.state.arrangement_status, "ready")
+
+    def test_arrangement_completed_during_keyboard_conversion_applies_immediately(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        source_events = [
+            MidiEvent(0.0, "note_on", 0, 60, 80, track=0, note_id=0),
+            MidiEvent(1.0, "note_off", 0, 60, 0, track=0, note_id=0),
+        ]
+        arranged_events = [
+            MidiEvent(0.0, "note_on", 0, 72, 90, track=0, note_id=10),
+            MidiEvent(1.0, "note_off", 0, 72, 0, track=0, note_id=10),
+            MidiEvent(1.0, "end"),
+        ]
+        controller.source_events = source_events
+        controller.events = source_events
+        controller.summary = MidiSummary(
+            path=Path("current.mid"),
+            duration=1.0,
+            channels=(0,),
+            event_count=2,
+            tracks=(MidiTrackSummary(0, (0,)),),
+            file_hash="b" * 64,
+        )
+        controller.state.current_mode = "keys"
+        controller.state.arrangement_status = "analyzing"
+        controller.player = MagicMock()
+        controller.player.is_playing = True
+        controller.player.current_position.return_value = 0.6
+        controller.worker_queue.put(
+            (
+                "arrangement_complete",
+                "b" * 64,
+                controller.current_piano_arrangement_config().cache_key(),
+            )
+        )
+        plan = MagicMock()
+        plan.duration = 1.0
+        plan.to_midi_events.return_value = arranged_events
+
+        with (
+            patch(
+                "app_controller.cached_piano_arrangement",
+                return_value=plan,
+            ),
+            patch.object(controller, "seek") as seek,
+        ):
+            controller.process_pending_events()
+
+        self.assertIs(controller.events, arranged_events)
+        seek.assert_called_once_with(0.6)
+        self.assertEqual(controller.state.arrangement_status, "ready")
 
     def test_worker_messages_coalesce_event_dispatch_notifications(self) -> None:
         controller = self.make_controller()

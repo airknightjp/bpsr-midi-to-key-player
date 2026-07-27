@@ -68,7 +68,30 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.5.0
+    "en": """v1.6.0
+
+This release improves performance visualization by assigning clear colors to
+each track/channel source and restores chord revoicing without melody-source
+priority.
+
+[Main changes]
+
+- Keyboard and falling-note displays now use distinct colors for each
+  track/channel source. The corresponding track/channel buttons use the same
+  colors.
+- Removed the previous melody-source detection and highlighting so visual
+  identity is based consistently on the actual track/channel source.
+- Restored Chord revoicing for MIDI-file keyboard conversion and MIDI sound
+  playback without automatically prioritizing a detected melody source.
+- Simplified timing-judgment effects by removing radial lines and particles
+  while retaining note-based visual feedback.
+- Added an internal, versioned piano-arrangement analysis and cache foundation.
+  Its controls remain disabled in this release while the beta workflow is
+  finalized.
+
+[v1.5.0]
+
+v1.5.0
 
 This release separates the GUI, software synthesizer, and MIDI parser into
 multiple processes to distribute processing load and improve UI responsiveness
@@ -197,7 +220,27 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.5.0
+    "ja": """v1.6.0
+
+本バージョンでは、トラック／チャンネルごとの色分けによって演奏表示を
+分かりやすくし、メロディー判定へ依存しない和音の再配置を復活しました。
+
+【主な変更】
+
+- 鍵盤と音ゲー欄をトラック／チャンネルごとの異なる色で表示し、
+  対応するトラック／チャンネルボタンにも同じ色を表示します。
+- 従来のメロディー判定と強調表示を削除し、実際のトラック／チャンネルを
+  基準に一貫した色分けを行うようにしました。
+- MIDIファイル入力変換とMIDI音源再生へ、メロディーを自動優先しない
+  「和音の再配置」を復活しました。
+- タイミング判定時の放射状の線と粒子を削除し、ノーツを基準とした
+  視覚フィードバックへ整理しました。
+- バージョン管理されたピアノ編曲解析とキャッシュの内部基盤を追加しました。
+  解析βの操作画面は調整中のため、本バージョンでは無効です。
+
+【v1.5.0】
+
+v1.5.0
 
 本バージョンでは、GUI、ソフトウェア音源、MIDI解析を
 マルチプロセス化し、処理負荷の分散、操作応答性、
@@ -335,7 +378,25 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.5.0
+    "zh": """v1.6.0
+
+本版本通过为每个音轨／通道分配不同颜色，使演奏显示更容易识别，
+并恢复了不依赖旋律来源优先级的和弦重排功能。
+
+【主要变更】
+
+- 键盘和下落音符显示会按音轨／通道使用不同颜色，对应的音轨／通道按钮
+  也会显示相同颜色。
+- 删除旧的旋律来源检测和强调显示，统一按实际音轨／通道进行颜色区分。
+- 恢复用于MIDI文件键盘转换和MIDI声音播放的和弦重排，
+  不再自动优先检测到的旋律来源。
+- 删除节奏判定时的放射线和粒子效果，保留以音符为基础的视觉反馈。
+- 添加带版本管理的钢琴编曲分析与缓存内部基础。
+  解析β界面仍在调整中，因此本版本暂时不可操作。
+
+【v1.5.0】
+
+v1.5.0
 
 本版本将界面、软件合成器和MIDI解析分离到多个进程中，
 以分担处理负载并改善界面响应和音频输出稳定性。
@@ -466,6 +527,13 @@ TEXT = {
         "stop_midi": "Stop MIDI",
         "color_theme": "Theme",
         "sound_source": "Sound Source",
+        "use_piano_arrangement": "Use analysis",
+        "arrangement_quality": "Arrangement quality",
+        "arrangement_quality_beta": "Analysis \u03b2",
+        "analyze_arrangement": "Analyze",
+        "cancel_arrangement": "Cancel {percent}%",
+        "arrangement_cached": "Analyzed",
+        "arrangement_title": "Piano Solo Analysis",
         "check_for_updates": "Check for Updates",
         "no_updates": "No updates are available.",
         "update_check_failed": "Could not check for updates.\n{error}",
@@ -569,6 +637,13 @@ TEXT = {
         "stop_midi": "MIDI\u505c\u6b62",
         "color_theme": "\u30c6\u30fc\u30de",
         "sound_source": "\u97f3\u6e90",
+        "use_piano_arrangement": "\u89e3\u6790\u3092\u4f7f\u3046",
+        "arrangement_quality": "\u7de8\u66f2\u54c1\u8cea",
+        "arrangement_quality_beta": "\u89e3\u6790\u03b2",
+        "analyze_arrangement": "\u89e3\u6790",
+        "cancel_arrangement": "\u4e2d\u6b62 {percent}%",
+        "arrangement_cached": "\u89e3\u6790\u6e08\u307f",
+        "arrangement_title": "\u30d4\u30a2\u30ce\u30bd\u30ed\u89e3\u6790",
         "check_for_updates": "\u66f4\u65b0\u3092\u78ba\u8a8d",
         "no_updates": "\u66f4\u65b0\u306f\u3042\u308a\u307e\u305b\u3093\u3002",
         "update_check_failed": (
@@ -672,6 +747,13 @@ TEXT = {
         "stop_midi": "\u505c\u6b62 MIDI",
         "color_theme": "\u4e3b\u9898",
         "sound_source": "\u97f3\u6e90",
+        "use_piano_arrangement": "\u4f7f\u7528\u5206\u6790",
+        "arrangement_quality": "\u7f16\u66f2\u8d28\u91cf",
+        "arrangement_quality_beta": "\u89e3\u6790\u03b2",
+        "analyze_arrangement": "\u5206\u6790",
+        "cancel_arrangement": "\u53d6\u6d88 {percent}%",
+        "arrangement_cached": "\u5df2\u5206\u6790",
+        "arrangement_title": "\u94a2\u7434\u72ec\u594f\u5206\u6790",
         "check_for_updates": "\u68c0\u67e5\u66f4\u65b0",
         "no_updates": "\u6ca1\u6709\u53ef\u7528\u66f4\u65b0\u3002",
         "update_check_failed": "\u65e0\u6cd5\u68c0\u67e5\u66f4\u65b0\u3002\n{error}",

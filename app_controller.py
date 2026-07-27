@@ -53,6 +53,13 @@ from keyboard_output import KeyboardOutput
 from live_midi_input import MidiInputKeyboardBridge, list_midi_input_devices
 from midi_parser import MidiEvent, MidiSummary
 from midi_parser_process import MidiParserProcess
+from piano_arrangement import cached_piano_arrangement
+from piano_arrangement_models import (
+    ArrangementPlan,
+    PianoArrangementConfig,
+    normalize_arrangement_quality,
+)
+from piano_arrangement_process import PianoArrangementProcess
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 from player import MidiKeyboardPlayer
 from rhythm_judgment import RhythmJudge, RhythmJudgment
@@ -104,6 +111,10 @@ class AppController:
             countdown_seconds=self.settings.countdown_seconds,
             midi_sound_volume=self.settings.midi_sound_volume,
             sound_source=self.settings.sound_source,
+            arrangement_quality=normalize_arrangement_quality(
+                self.settings.arrangement_quality
+            ).value,
+            use_piano_arrangement=self.settings.use_piano_arrangement,
             playback_speed_percent=self.settings.playback_speed_percent,
             sound_playback_mode=normalize_sound_playback_mode(
                 self.settings.sound_playback_mode
@@ -164,8 +175,11 @@ class AppController:
         )
         self.view: ControllerView = NullView()
         self.midi_parser_process = MidiParserProcess()
+        self.piano_arrangement_process = PianoArrangementProcess()
+        self.source_events: list[MidiEvent] = []
         self.events: list[MidiEvent] = []
         self.summary: MidiSummary | None = None
+        self.arrangement_plan: ArrangementPlan | None = None
         self.midi_files: list[Path] = []
         self._midi_cache_root: Path | None = None
         self._midi_file_stats: dict[Path, tuple[int, int]] = {}
@@ -399,8 +413,13 @@ class AppController:
             if restart_metadata_scan:
                 self._start_metadata_scan([])
             if not preserve_sound:
+                self.cancel_piano_arrangement(notify=False)
+                self.source_events = []
                 self.events = []
                 self.summary = None
+                self.arrangement_plan = None
+                self.state.arrangement_status = "idle"
+                self.state.arrangement_progress = 0
                 self.state.duration = 0.0
                 self.state.position = 0.0
                 self.state.selected_midi_index = -1
@@ -499,6 +518,7 @@ class AppController:
         self._notify()
 
     def _load_midi_file(self, path: Path, *, stop_playback: bool) -> bool:
+        self.cancel_piano_arrangement(notify=False)
         if stop_playback and self._playback_mode_is_active():
             self.stop_playback()
         try:
@@ -507,12 +527,132 @@ class AppController:
             self._message("error", "load_failed_title", str(exc))
             return False
         self._reset_rhythm_judgments()
+        self.source_events = events
         self.events = events
         self.summary = summary
+        self.arrangement_plan = None
         self.state.duration = summary.duration
         self.state.position = 0.0
         self._set_track_channels(summary)
+        self._load_cached_piano_arrangement()
         return True
+
+    def current_piano_arrangement_config(self) -> PianoArrangementConfig:
+        return PianoArrangementConfig(
+            quality=normalize_arrangement_quality(
+                self.state.arrangement_quality
+            )
+        ).normalized()
+
+    def analyze_selected_midi(self) -> None:
+        if self.state.arrangement_status == "analyzing":
+            self.cancel_piano_arrangement()
+            return
+        if self.summary is None:
+            self._message("info", "no_midi_title", self.text("load_midi_first"))
+            return
+        config = self.current_piano_arrangement_config()
+        source_path = self.summary.path
+        self.state.arrangement_status = "analyzing"
+        self.state.arrangement_progress = 0
+        self._notify()
+        try:
+            self.piano_arrangement_process.start(
+                source_path,
+                config,
+                on_progress=lambda value: self._queue_worker_message(
+                    ("arrangement_progress", int(value))
+                ),
+                on_complete=lambda source_hash, config_key: self._queue_worker_message(
+                    ("arrangement_complete", source_hash, config_key)
+                ),
+                on_error=lambda message: self._queue_worker_message(
+                    ("arrangement_error", message)
+                ),
+                on_cancelled=lambda: self._queue_worker_message(
+                    ("arrangement_cancelled",)
+                ),
+            )
+        except Exception as exc:
+            self.state.arrangement_status = "error"
+            self.state.arrangement_progress = 0
+            self._notify()
+            self._message("error", "arrangement_title", str(exc))
+
+    def cancel_piano_arrangement(self, *, notify: bool = True) -> None:
+        self.piano_arrangement_process.cancel()
+        if self.state.arrangement_status == "analyzing":
+            self.state.arrangement_status = (
+                "ready" if self.arrangement_plan is not None else "idle"
+            )
+            self.state.arrangement_progress = 0
+            if notify:
+                self._notify()
+
+    def _load_cached_piano_arrangement(self) -> bool:
+        summary = self.summary
+        if summary is None or not summary.file_hash:
+            self.arrangement_plan = None
+            self.events = self.source_events
+            self.state.arrangement_status = "idle"
+            self.state.arrangement_progress = 0
+            return False
+        plan = cached_piano_arrangement(
+            summary.file_hash,
+            self.current_piano_arrangement_config(),
+        )
+        if plan is None:
+            self.arrangement_plan = None
+            self.events = self.source_events
+            self.state.duration = summary.duration
+            self.state.arrangement_status = "idle"
+            self.state.arrangement_progress = 0
+            return False
+        self.arrangement_plan = plan
+        if self.state.use_piano_arrangement:
+            self.events = plan.to_midi_events()
+            self.state.duration = plan.duration
+        else:
+            self.events = self.source_events
+            self.state.duration = summary.duration
+        self.state.arrangement_status = "ready"
+        self.state.arrangement_progress = 100
+        return True
+
+    def _reload_piano_arrangement(self, *, apply_live: bool) -> bool:
+        previous_events = self.events
+        loaded = self._load_cached_piano_arrangement()
+        if apply_live and self.events is not previous_events:
+            self._apply_current_events_to_active_playback()
+        return loaded
+
+    def _apply_current_events_to_active_playback(self) -> None:
+        position = self.state.position
+        if self.state.keyboard_playing and self.player and self.player.is_playing:
+            current_position = self.player.current_position()
+            if current_position is not None:
+                position = current_position
+            self.seek(position)
+            return
+        if (
+            self.state.sound_playing
+            and self.sound_player
+            and self.sound_player.is_playing
+        ):
+            current_position = self.sound_player.current_position()
+            if current_position is not None:
+                position = current_position
+            position = max(0.0, min(self.state.duration, position))
+            self._next_position_generation()
+            self._reset_rhythm_judgments()
+            self._clear_active_output_notes("sound")
+            self.state.position = position
+            self.sound_player.switch(self.events, start_time=position)
+            return
+        self.state.position = max(
+            0.0,
+            min(self.state.duration, self.state.position),
+        )
 
     def start_keyboard_conversion_from_shortcut(self) -> None:
         if (
@@ -622,9 +762,7 @@ class AppController:
             return
         position = self.state.position
         self.state.current_mode = None
-        self.play_sound(
-            start_time=position,
-        )
+        self.play_sound(start_time=position)
 
     def select_previous_midi(self) -> None:
         self._select_adjacent_midi(-1)
@@ -1133,6 +1271,15 @@ class AppController:
             self.state.color_theme = normalize_color_theme(value)
         elif name == "sound_source":
             self.state.sound_source = normalize_sound_source(value)
+        elif name == "arrangement_quality":
+            self.cancel_piano_arrangement(notify=False)
+            self.state.arrangement_quality = normalize_arrangement_quality(
+                value
+            ).value
+            self._reload_piano_arrangement(apply_live=True)
+        elif name == "use_piano_arrangement":
+            self.state.use_piano_arrangement = bool(value)
+            self._reload_piano_arrangement(apply_live=True)
         elif name == "midi_input_device":
             self.state.midi_input_device = str(value)
         elif name == "input_conversion_mode":
@@ -1318,6 +1465,48 @@ class AppController:
                 except queue.Empty:
                     break
                 kind = str(message[0])
+                if kind == "arrangement_progress":
+                    if self.state.arrangement_status == "analyzing":
+                        self.state.arrangement_progress = self._clamp_int(
+                            message[1], 0, 100, 0
+                        )
+                        changed = True
+                    continue
+                if kind == "arrangement_complete":
+                    source_hash = str(message[1])
+                    config_key = str(message[2])
+                    if (
+                        self.summary is not None
+                        and self.summary.file_hash == source_hash
+                        and self.current_piano_arrangement_config().cache_key()
+                        == config_key
+                    ):
+                        self._reload_piano_arrangement(apply_live=True)
+                    else:
+                        self.state.arrangement_status = "idle"
+                        self.state.arrangement_progress = 0
+                    changed = True
+                    continue
+                if kind == "arrangement_cancelled":
+                    if self.state.arrangement_status == "analyzing":
+                        self.state.arrangement_status = (
+                            "ready"
+                            if self.arrangement_plan is not None
+                            else "idle"
+                        )
+                        self.state.arrangement_progress = 0
+                        changed = True
+                    continue
+                if kind == "arrangement_error":
+                    self.state.arrangement_status = "error"
+                    self.state.arrangement_progress = 0
+                    self._message(
+                        "error",
+                        "arrangement_title",
+                        str(message[1]),
+                    )
+                    changed = True
+                    continue
                 if kind == "audio_runtime":
                     try:
                         qt_frames = max(1, int(message[1]))
@@ -1614,6 +1803,8 @@ class AppController:
             countdown_seconds=self.state.countdown_seconds,
             midi_sound_volume=self.state.midi_sound_volume,
             sound_source=self.state.sound_source,
+            arrangement_quality=self.state.arrangement_quality,
+            use_piano_arrangement=self.state.use_piano_arrangement,
             play_sound=self.state.play_sound,
             countdown_sound=self.state.countdown_sound,
             game_countdown_sound=self.state.game_countdown_sound,
@@ -1675,6 +1866,7 @@ class AppController:
         self._unbind_global_hotkeys()
         self.stop_midi_input()
         self.stop_playback()
+        self.piano_arrangement_process.shutdown()
         self.midi_parser_process.shutdown()
         self._save_settings_on_shutdown()
 

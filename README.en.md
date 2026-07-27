@@ -31,7 +31,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
-- Configure timing variation, chord spread, and automatic sustain generation.
+- Configure timing variation, chord spread, chord revoicing, and automatic sustain generation.
 - Configure rapid-repeat prevention.
 - Display used track/channel combinations as circular buttons in `11` format.
 - Toggle each track/channel combination, with immediate changes during playback.
@@ -52,6 +52,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
+- `Analysis beta` remains unavailable in v1.6.0 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -118,7 +119,14 @@ The base BPSR keyboard range is C3-B5.
 
 Transpose and octave shift apply to MIDI file keyboard conversion, realtime input conversion, MIDI sound playback, and realtime preview sound. Range fitting or normal out-of-range handling is applied after the pitch shift.
 
-## Performance Timing
+## Chord Revoicing And Performance Timing
+
+When `Chord revoicing` is enabled, notes starting within approximately 35 ms are analyzed as a chord and moved by octaves into a playable layout.
+
+- The top voice, bass, common tones, voice order, and smooth movement between adjacent chords are considered while excessive spacing, physical-key collisions, and frequent range switches are discouraged.
+- With `Fit to 3 octaves` enabled, the result stays inside C3-B5. Otherwise, low, normal, and high ranges are compared and range-switch keys are used only where needed.
+- Available switching time is evaluated using the current playback speed, allowing a wider range at slower speeds and discouraging frequent switches at faster speeds.
+- This applies to MIDI-file keyboard conversion and MIDI sound playback, not realtime input conversion.
 
 `Timing variation` adds a small timing variation while keeping notes with the same original onset together.
 
@@ -193,7 +201,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.5.0
+v1.6.0
 
 ## Copyright
 

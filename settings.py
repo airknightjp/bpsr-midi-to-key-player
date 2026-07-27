@@ -44,6 +44,7 @@ from audio_buffer import (
     normalize_qt_audio_frames,
 )
 from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
+from piano_arrangement_models import normalize_arrangement_quality
 
 
 SETTINGS_FILE_NAME = "settings.json"
@@ -55,6 +56,8 @@ class AppSettings:
     countdown_seconds: int = DEFAULT_COUNTDOWN_SECONDS
     midi_sound_volume: int = 80
     sound_source: str = DEFAULT_SOUND_SOURCE
+    arrangement_quality: str = "beta"
+    use_piano_arrangement: bool = True
     play_sound: bool = True
     countdown_sound: bool = False
     game_countdown_sound: bool = False
@@ -171,6 +174,13 @@ def load_settings() -> AppSettings:
             default=80,
         ),
         sound_source=normalize_sound_source(data.get("sound_source")),
+        arrangement_quality=normalize_arrangement_quality(
+            data.get("arrangement_quality")
+        ).value,
+        use_piano_arrangement=_parse_bool(
+            data.get("use_piano_arrangement"),
+            default=True,
+        ),
         play_sound=_parse_bool(data.get("play_sound"), default=True),
         countdown_sound=_parse_bool(data.get("countdown_sound"), default=False),
         game_countdown_sound=_parse_bool(data.get("game_countdown_sound"), default=False),
@@ -267,6 +277,10 @@ def save_settings(settings: AppSettings) -> None:
             "countdown_seconds": settings.countdown_seconds,
             "midi_sound_volume": settings.midi_sound_volume,
             "sound_source": settings.sound_source,
+            "arrangement_quality": normalize_arrangement_quality(
+                settings.arrangement_quality
+            ).value,
+            "use_piano_arrangement": settings.use_piano_arrangement,
             "play_sound": settings.play_sound,
             "countdown_sound": settings.countdown_sound,
             "game_countdown_sound": settings.game_countdown_sound,

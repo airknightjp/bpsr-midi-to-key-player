@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPoint, QEvent, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QCloseEvent, QColor, QDesktopServices, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -84,7 +84,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 KEYBOARD_PANEL_HEIGHT = 71
@@ -94,6 +94,18 @@ KEYBOARD_PANEL_MARGIN = 7
 def resource_path(relative: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / relative
+
+
+class DownwardComboBox(QComboBox):
+    def showPopup(self) -> None:
+        super().showPopup()
+        self._position_popup_below()
+        QTimer.singleShot(0, self._position_popup_below)
+
+    def _position_popup_below(self) -> None:
+        popup = self.view().window()
+        position = self.mapToGlobal(QPoint(0, self.height()))
+        popup.move(position)
 
 
 class MidiMainWindow(QMainWindow):
@@ -131,6 +143,7 @@ class MidiMainWindow(QMainWindow):
             lambda: self._set_midi_reload_feedback(False)
         )
         self._focus_clear_controls = (
+            self.arrangement_quality_combo,
             self.sound_source_combo,
             self.audio_qt_combo,
             self.audio_buffer_combo,
@@ -648,7 +661,41 @@ class MidiMainWindow(QMainWindow):
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             )
         grid.setColumnStretch(3, 1)
+        self._build_arrangement_controls()
+        grid.addWidget(
+            self.arrangement_controls,
+            0,
+            4,
+            2,
+            1,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
         self.settings_layout.addLayout(grid)
+
+    def _build_arrangement_controls(self) -> None:
+        self.arrangement_controls = QWidget()
+        arrangement_layout = QHBoxLayout(self.arrangement_controls)
+        arrangement_layout.setContentsMargins(0, 0, 0, 0)
+        arrangement_layout.setSpacing(4)
+        self.arrangement_layout = arrangement_layout
+        self.use_arrangement_check = QCheckBox()
+        self.use_arrangement_check.toggled.connect(
+            lambda value: self._set_option("use_piano_arrangement", value)
+        )
+        self.arrangement_quality_combo = DownwardComboBox()
+        self.arrangement_quality_combo.currentIndexChanged.connect(
+            self._arrangement_quality_changed
+        )
+        self.arrangement_analyze_button = QPushButton()
+        self.arrangement_analyze_button.setObjectName(
+            "ArrangementAnalyzeButton"
+        )
+        self.arrangement_analyze_button.clicked.connect(
+            self.controller.analyze_selected_midi
+        )
+        arrangement_layout.addWidget(self.use_arrangement_check)
+        arrangement_layout.addWidget(self.arrangement_quality_combo)
+        arrangement_layout.addWidget(self.arrangement_analyze_button)
 
     def _option_check(self, name: str) -> QCheckBox:
         check = QCheckBox()
@@ -1224,6 +1271,21 @@ class MidiMainWindow(QMainWindow):
             )
             if self._signature_changed("player_controls", player_controls_signature):
                 self._render_player_controls(state)
+            arrangement_signature = (
+                state.language,
+                state.arrangement_quality,
+                state.use_piano_arrangement,
+                state.arrangement_status,
+                state.arrangement_progress,
+                state.selected_midi_index,
+                state.current_mode,
+                state.midi_input_running,
+            )
+            if self._signature_changed(
+                "arrangement_controls",
+                arrangement_signature,
+            ):
+                self._render_arrangement_controls(state)
             transport_signature = (
                 state.language,
                 state.color_theme,
@@ -1306,6 +1368,19 @@ class MidiMainWindow(QMainWindow):
         self.transpose_control.label.setText(text["transpose_semitones"])
         self.octave_control.label.setText(text["octave_shift"])
         self.sound_source_label.setText(text["sound_source"])
+        self.use_arrangement_check.setText(text["use_piano_arrangement"])
+        self.arrangement_quality_combo.setToolTip(
+            text["arrangement_quality"]
+        )
+        self.arrangement_quality_combo.setAccessibleName(
+            text["arrangement_quality"]
+        )
+        with QSignalBlocker(self.arrangement_quality_combo):
+            self.arrangement_quality_combo.clear()
+            self.arrangement_quality_combo.addItem(
+                text["arrangement_quality_beta"],
+                "beta",
+            )
         with QSignalBlocker(self.sound_source_combo):
             self.sound_source_combo.clear()
             for source, title in SOUND_SOURCE_NAMES[state.language].items():
@@ -1457,6 +1532,11 @@ class MidiMainWindow(QMainWindow):
         self._set_spacer_width(self.transport_right_layout, 3, px(1))
         self._update_transport_side_widths(scale)
         self.sound_source_controls.setFixedHeight(list_control_height)
+        self.arrangement_controls.setFixedHeight(px(28))
+        self.arrangement_quality_combo.setFixedWidth(px(92))
+        self.arrangement_analyze_button.setFixedSize(px(96), px(24))
+        self.arrangement_layout.setContentsMargins(0, 0, 0, 0)
+        self.arrangement_layout.setSpacing(px(4))
         self.sound_source_combo.setFixedWidth(px(138))
         self.sound_source_layout.setContentsMargins(0, 0, 0, px(2))
         self.sound_source_layout.setSpacing(px(4))
@@ -1489,8 +1569,6 @@ class MidiMainWindow(QMainWindow):
         self._set_spacer_width(self.shortcut_group_layout, 7, px(6))
         self._set_spacer_width(self.shortcut_group_layout, 9, px(2))
         self._set_spacer_width(self.shortcut_group_layout, 11, px(6))
-        self._set_spacer_width(self.tab_row, 1, px(8))
-        self._set_spacer_width(self.tab_row, 3, px(8))
         self.player_body_gap.setFixedHeight(0)
         self._update_section_gaps(
             self.state,
@@ -2015,6 +2093,37 @@ class MidiMainWindow(QMainWindow):
                 with QSignalBlocker(combo):
                     combo.setCurrentIndex(index)
 
+    def _render_arrangement_controls(self, state: AppState) -> None:
+        text = TEXT[state.language]
+        index = self.arrangement_quality_combo.findData(
+            state.arrangement_quality
+        )
+        if index >= 0 and self.arrangement_quality_combo.currentIndex() != index:
+            with QSignalBlocker(self.arrangement_quality_combo):
+                self.arrangement_quality_combo.setCurrentIndex(index)
+        running = state.arrangement_status == "analyzing"
+        ready = state.arrangement_status == "ready"
+        with QSignalBlocker(self.use_arrangement_check):
+            self.use_arrangement_check.setChecked(
+                state.use_piano_arrangement
+            )
+        self.use_arrangement_check.setEnabled(False)
+        self.arrangement_quality_combo.setEnabled(False)
+        self.arrangement_analyze_button.setEnabled(False)
+        if running:
+            caption = text["cancel_arrangement"].format(
+                percent=state.arrangement_progress
+            )
+        elif ready:
+            caption = text["arrangement_cached"]
+        else:
+            caption = text["analyze_arrangement"]
+        if self.arrangement_analyze_button.text() != caption:
+            self.arrangement_analyze_button.setText(caption)
+        self.arrangement_analyze_button.setToolTip(
+            text["arrangement_title"]
+        )
+
     def _render_transport_controls(self, state: AppState) -> None:
         text = TEXT[state.language]
         palette = THEMES.get(state.color_theme, THEMES["sky_blue"])
@@ -2422,6 +2531,13 @@ class MidiMainWindow(QMainWindow):
         sound_source = self.sound_source_combo.itemData(index)
         if sound_source:
             self.controller.set_option("sound_source", sound_source)
+
+    def _arrangement_quality_changed(self, index: int) -> None:
+        if self._rendering or index < 0:
+            return
+        quality = self.arrangement_quality_combo.itemData(index)
+        if quality:
+            self.controller.set_option("arrangement_quality", quality)
 
     def show_message(self, level: str, title: str, message: str) -> None:
         icon = {

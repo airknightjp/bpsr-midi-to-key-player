@@ -51,6 +51,25 @@ class MidiProgramChange:
 
 
 @dataclass(frozen=True)
+class MidiKeySignature:
+    tick: int
+    beat: float
+    second: float
+    sharps_flats: int
+    minor: bool
+
+
+@dataclass(frozen=True)
+class MidiTextEvent:
+    tick: int
+    beat: float
+    second: float
+    track: int
+    kind: str
+    text: str
+
+
+@dataclass(frozen=True)
 class MidiTrackSummary:
     index: int
     channels: tuple[int, ...]
@@ -71,6 +90,8 @@ class MidiSummary:
     tempo_changes: tuple[MidiTempoChange, ...] = ()
     time_signatures: tuple[MidiTimeSignature, ...] = ()
     program_changes: tuple[MidiProgramChange, ...] = ()
+    key_signatures: tuple[MidiKeySignature, ...] = ()
+    text_events: tuple[MidiTextEvent, ...] = ()
     file_hash: str = ""
 
 
@@ -80,6 +101,8 @@ class _ParsedTrack:
     tempos: tuple[tuple[int, int], ...]
     time_signatures: tuple[tuple[int, int, int, bool], ...]
     program_changes: tuple[tuple[int, int, int, int], ...]
+    key_signatures: tuple[tuple[int, int, bool], ...]
+    text_events: tuple[tuple[int, str, str], ...]
     end_tick: int
     name: str
     instrument_name: str
@@ -93,6 +116,8 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
     tempo_changes: list[tuple[int, int]] = [(0, 500_000)]
     time_signatures: list[tuple[int, int, int, bool]] = []
     program_changes: list[tuple[int, int, int, int, int]] = []
+    key_signatures: list[tuple[int, int, bool]] = []
+    text_events: list[tuple[int, int, str, str]] = []
     track_metadata: list[tuple[str, str]] = []
     end_tick = 0
 
@@ -104,6 +129,11 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
         program_changes.extend(
             (tick, track_index, channel, program, epoch)
             for tick, channel, program, epoch in parsed.program_changes
+        )
+        key_signatures.extend(parsed.key_signatures)
+        text_events.extend(
+            (tick, track_index, kind, text)
+            for tick, kind, text in parsed.text_events
         )
         track_metadata.append((parsed.name, parsed.instrument_name))
         end_tick = max(end_tick, parsed.end_tick)
@@ -199,6 +229,27 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
         )
         for tick, track, channel, program, epoch in sorted(program_changes)
     )
+    normalized_keys = tuple(
+        MidiKeySignature(
+            tick=tick,
+            beat=tick / ticks_per_beat,
+            second=_tick_to_seconds(tick, tempo_map, ticks_per_beat),
+            sharps_flats=sharps_flats,
+            minor=minor,
+        )
+        for tick, sharps_flats, minor in sorted(key_signatures)
+    )
+    normalized_text = tuple(
+        MidiTextEvent(
+            tick=tick,
+            beat=tick / ticks_per_beat,
+            second=_tick_to_seconds(tick, tempo_map, ticks_per_beat),
+            track=track,
+            kind=kind,
+            text=text,
+        )
+        for tick, track, kind, text in sorted(text_events)
+    )
     summary = MidiSummary(
         path=midi_path,
         duration=duration,
@@ -211,6 +262,8 @@ def parse_midi(path: str | Path) -> tuple[list[MidiEvent], MidiSummary]:
         tempo_changes=normalized_tempos,
         time_signatures=normalized_signatures,
         program_changes=normalized_programs,
+        key_signatures=normalized_keys,
+        text_events=normalized_text,
         file_hash=hashlib.sha256(data).hexdigest(),
     )
     return events, summary
@@ -273,6 +326,8 @@ def _parse_track(track: bytes, track_index: int) -> _ParsedTrack:
     tempos: list[tuple[int, int]] = []
     signatures: list[tuple[int, int, int, bool]] = []
     program_changes: list[tuple[int, int, int, int]] = []
+    key_signatures: list[tuple[int, int, bool]] = []
+    text_events: list[tuple[int, str, str]] = []
     channel_programs = [0] * 16
     channel_program_epochs = [0] * 16
     name = ""
@@ -322,6 +377,24 @@ def _parse_track(track: bytes, track_index: int) -> _ParsedTrack:
                 name = _decode_midi_text(payload)
             elif meta_type == 0x04 and not instrument_name:
                 instrument_name = _decode_midi_text(payload)
+            elif meta_type == 0x59 and length >= 2:
+                sharps_flats = int.from_bytes(
+                    payload[:1],
+                    "big",
+                    signed=True,
+                )
+                if -7 <= sharps_flats <= 7 and payload[1] in (0, 1):
+                    key_signatures.append(
+                        (tick, sharps_flats, bool(payload[1]))
+                    )
+            elif meta_type in (0x05, 0x06):
+                text_events.append(
+                    (
+                        tick,
+                        "lyrics" if meta_type == 0x05 else "marker",
+                        _decode_midi_text(payload),
+                    )
+                )
             continue
 
         if status in (0xF0, 0xF7):
@@ -432,6 +505,8 @@ def _parse_track(track: bytes, track_index: int) -> _ParsedTrack:
         tempos=tuple(tempos),
         time_signatures=tuple(signatures),
         program_changes=tuple(program_changes),
+        key_signatures=tuple(key_signatures),
+        text_events=tuple(text_events),
         end_tick=tick,
         name=name,
         instrument_name=instrument_name,

@@ -147,6 +147,102 @@ class QtUiTests(unittest.TestCase):
     def test_player_has_only_the_midi_list_tab(self) -> None:
         self.assertEqual(self.window.tab_bar.count(), 1)
 
+    def test_piano_arrangement_controls_offer_beta_analysis(self) -> None:
+        self.assertTrue(
+            self.window.settings_panel.isAncestorOf(
+                self.window.arrangement_controls
+            )
+        )
+        self.assertFalse(
+            self.window.player_panel.isAncestorOf(
+                self.window.arrangement_controls
+            )
+        )
+        self.assertTrue(self.window.use_arrangement_check.isChecked())
+        self.assertFalse(self.window.use_arrangement_check.isEnabled())
+        self.assertEqual(
+            [
+                self.window.arrangement_quality_combo.itemData(index)
+                for index in range(
+                    self.window.arrangement_quality_combo.count()
+                )
+            ],
+            ["beta"],
+        )
+        self.controller.state.selected_midi_index = 0
+        self.controller.state.midi_rows = [
+            MidiListRow(Path("song.mid"), "song.mid")
+        ]
+        self.controller._notify()
+        self.assertFalse(self.window.arrangement_analyze_button.isEnabled())
+
+        self.controller.state.arrangement_status = "analyzing"
+        self.controller.state.arrangement_progress = 42
+        self.controller._notify()
+        self.assertIn("42", self.window.arrangement_analyze_button.text())
+        self.assertFalse(self.window.arrangement_quality_combo.isEnabled())
+        self.assertFalse(self.window.use_arrangement_check.isEnabled())
+
+    def test_arrangement_quality_is_beta(self) -> None:
+        self.assertEqual(self.controller.state.arrangement_quality, "beta")
+        self.assertEqual(
+            self.window.arrangement_quality_combo.currentData(),
+            "beta",
+        )
+
+    def test_arrangement_quality_popup_opens_below_combo(self) -> None:
+        combo = self.window.arrangement_quality_combo
+        combo.showPopup()
+        QApplication.processEvents()
+        expected_top = combo.mapToGlobal(QPoint(0, combo.height())).y()
+        self.assertGreaterEqual(combo.view().window().y(), expected_top)
+        combo.hidePopup()
+
+    def test_use_arrangement_checkbox_updates_controller_state(self) -> None:
+        self.window.use_arrangement_check.setChecked(False)
+
+        self.assertFalse(
+            self.controller.state.use_piano_arrangement
+        )
+        self.assertFalse(
+            self.controller.current_settings().use_piano_arrangement
+        )
+
+    def test_arrangement_controls_remain_available_in_every_playback_state(
+        self,
+    ) -> None:
+        self.controller.state.selected_midi_index = 0
+        self.controller.state.midi_rows = [
+            MidiListRow(Path("song.mid"), "song.mid")
+        ]
+        for current_mode, midi_input_running in (
+            (None, False),
+            ("sound", False),
+            ("sound_paused", False),
+            ("keys", False),
+            ("keys_paused", False),
+            (None, True),
+            ("sound", True),
+        ):
+            with self.subTest(
+                current_mode=current_mode,
+                midi_input_running=midi_input_running,
+            ):
+                self.controller.state.current_mode = current_mode
+                self.controller.state.midi_input_running = midi_input_running
+                self.controller.state.arrangement_status = "idle"
+                self.controller._notify()
+
+                self.assertFalse(
+                    self.window.arrangement_analyze_button.isEnabled()
+                )
+                self.assertFalse(
+                    self.window.arrangement_quality_combo.isEnabled()
+                )
+                self.assertFalse(
+                    self.window.use_arrangement_check.isEnabled()
+                )
+
     def test_position_change_does_not_recalculate_output_note_range(self) -> None:
         self.controller.events = [
             MidiEvent(
@@ -246,7 +342,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.5.0")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.6.0")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (

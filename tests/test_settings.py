@@ -43,6 +43,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.audio_fallback_interval_ms, 4)
         self.assertEqual(settings.input_conversion_mode, "midi_file")
         self.assertEqual(settings.sound_playback_mode, "off")
+        self.assertEqual(settings.arrangement_quality, "beta")
+        self.assertTrue(settings.use_piano_arrangement)
         self.assertTrue(settings.play_sound)
         self.assertFalse(settings.hide_release_notes_on_startup)
         self.assertEqual(settings.last_update_check_at, 0)
@@ -77,6 +79,8 @@ class SettingsTests(unittest.TestCase):
                     countdown_seconds=2,
                     midi_sound_volume=70,
                     sound_source="synth",
+                    arrangement_quality="beta",
+                    use_piano_arrangement=False,
                     play_sound=False,
                     countdown_sound=True,
                     game_countdown_sound=True,
@@ -149,6 +153,8 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn("qt_audio_environment", saved_payload)
         self.assertEqual(loaded.color_theme, "orange")
         self.assertEqual(loaded.sound_source, "synth")
+        self.assertEqual(loaded.arrangement_quality, "beta")
+        self.assertFalse(loaded.use_piano_arrangement)
         self.assertTrue(loaded.always_on_top)
         self.assertTrue(loaded.tray_resident)
         self.assertTrue(loaded.hide_release_notes_on_startup)

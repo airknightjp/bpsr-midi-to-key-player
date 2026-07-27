@@ -68,6 +68,10 @@ class AppState:
     countdown_seconds: int = 0
     midi_sound_volume: int = 80
     sound_source: str = "piano"
+    arrangement_quality: str = "beta"
+    use_piano_arrangement: bool = True
+    arrangement_status: str = "idle"
+    arrangement_progress: int = 0
     audio_qt_frames: int = DEFAULT_QT_AUDIO_FRAMES
     audio_buffer_frames: int = DEFAULT_AUDIO_BUFFER_FRAMES
     audio_response_frames: int = DEFAULT_AUDIO_RESPONSE_FRAMES
