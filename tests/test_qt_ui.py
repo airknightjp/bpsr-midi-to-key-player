@@ -356,7 +356,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.6.0")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.6.1")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -1721,7 +1721,7 @@ class QtUiTests(unittest.TestCase):
                 ).y()
                 self.assertEqual(
                     marquee_top,
-                    player_header_top - round(7 * scale / 100),
+                    player_header_top - round(8 * scale / 100),
                 )
                 self.assertLessEqual(marquee_top, seek_top)
                 self.assertGreater(marquee_bottom, seek_top)
@@ -1905,7 +1905,10 @@ class QtUiTests(unittest.TestCase):
 
     def test_current_track_name_remains_static_during_playback(self) -> None:
         self.controller.state.midi_rows = [
-            MidiListRow(Path("current-song.mid"), "current-song.mid")
+            MidiListRow(
+                Path("current-song.mix.midi"),
+                "current-song.mix.midi",
+            )
         ]
         self.window.show()
         self.controller.state.selected_midi_index = 0
@@ -1913,8 +1916,9 @@ class QtUiTests(unittest.TestCase):
         self.window.render(self.controller.state)
         self.application.processEvents()
 
-        expected_name = self.controller.state.midi_rows[0].name
+        expected_name = "current-song.mix"
         self.assertEqual(self.window.current_track_marquee.text, expected_name)
+        self.assertNotIn(".midi", self.window.current_track_marquee.text)
         self.assertFalse(
             self.window.current_track_marquee.scrolling_enabled
         )

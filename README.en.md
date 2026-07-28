@@ -26,9 +26,9 @@ The `_internal` folder contains files required by the application. Do not move t
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.
 - Enable `Play sound` to hear the conversion output while sending key input.
-- Adjust volume, playback position, and playback speed (10-200%). Double-click the volume or speed label to reset it to 100%.
+- Adjust the volume slider, mute state, playback position, and playback speed (10-200%). Double-click the speed knob to reset it to 100%.
 - Adjust UI scale (100-200%) and window opacity from the View menu.
-- Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either label to reset to 0.
+- Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either knob to reset it to 0.
 - Optionally fit notes into the C3-B5 three-octave range.
 - Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
 - Configure timing variation, chord spread, chord revoicing, and automatic sustain generation.
@@ -40,7 +40,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Run the GUI, software synth/PCM output, and MIDI parsing in separate processes to distribute processing load.
 - Select the Qt audio queue and internal Buffer from the menu bar. Defaults are Qt 1024 and Buffer 512.
 - Show final output notes on a full A0-C8 keyboard and falling-note rhythm display.
-- Control Previous, Play/Pause, Next, Continuous playback, and Repeat one.
+- Control Previous, Play/Pause, Next, Continuous playback, and Repeat one. The current track is shown above the seek bar without its filename extension.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported. These shortcuts control MIDI input conversion only and do not affect realtime input conversion or MIDI sound playback.
@@ -52,7 +52,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.6.0 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.6.1 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -201,7 +201,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.6.0
+v1.6.1
 
 ## Copyright
 

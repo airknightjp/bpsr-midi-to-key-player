@@ -68,7 +68,24 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.6.0
+    "en": """v1.6.1
+
+This UI fix release refines the player controls and current-track display.
+
+[Main changes]
+
+- Reorganized and enlarged the player transport controls for clearer operation.
+- Replaced the volume knob with a horizontal slider and added one-click
+  mute/unmute.
+- Improved the speed, transpose, and octave-shift knobs, including reliable
+  double-click reset and faster tooltips.
+- Added a fixed current-track display above the seek bar. MIDI filename
+  extensions are omitted from this display.
+- Adjusted player spacing and sizing across UI scale settings.
+
+[v1.6.0]
+
+v1.6.0
 
 This release improves performance visualization by assigning clear colors to
 each track/channel source and restores chord revoicing without melody-source
@@ -220,7 +237,24 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.6.0
+    "ja": """v1.6.1
+
+本バージョンは、プレイヤー操作部と再生中曲名表示を改善するUI修正版です。
+
+【主な変更】
+
+- プレイヤーの再生操作ボタンを整理し、視認性と操作性を改善しました。
+- 音量ノブを横スライダーへ変更し、ワンクリックのミュート／解除を
+  追加しました。
+- 速度、トランスポーズ、オクターブシフトのノブ操作を改善し、
+  ダブルクリックによる初期値復帰とツールチップ表示を安定させました。
+- 再生バー上に現在の曲名を固定表示し、MIDIファイルの拡張子は
+  表示しないようにしました。
+- 拡大率を変更した場合を含め、プレイヤー内の間隔とサイズを調整しました。
+
+【v1.6.0】
+
+v1.6.0
 
 本バージョンでは、トラック／チャンネルごとの色分けによって演奏表示を
 分かりやすくし、メロディー判定へ依存しない和音の再配置を復活しました。
@@ -378,7 +412,21 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.6.0
+    "zh": """v1.6.1
+
+本版本是界面修正版，改进了播放器控制区和当前曲目显示。
+
+【主要变更】
+
+- 重新整理并放大播放器控制按钮，提高可见性和操作性。
+- 将音量旋钮改为横向滑块，并添加一键静音／取消静音。
+- 改进速度、移调和八度移位旋钮，包括稳定的双击复位和更快的工具提示。
+- 在进度条上方固定显示当前曲目名称，并隐藏MIDI文件扩展名。
+- 调整不同界面缩放比例下播放器内部的间距和尺寸。
+
+【v1.6.0】
+
+v1.6.0
 
 本版本通过为每个音轨／通道分配不同颜色，使演奏显示更容易识别，
 并恢复了不依赖旋律来源优先级的和弦重排功能。

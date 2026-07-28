@@ -87,7 +87,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -1912,7 +1912,7 @@ class MidiMainWindow(QMainWindow):
         )
         self.current_track_marquee.move(
             marquee_origin.x() + marquee_offset,
-            marquee_origin.y() - round(7 * scale),
+            marquee_origin.y() - round(8 * scale),
         )
         self.current_track_marquee.raise_()
         self._set_spacer_width(
@@ -2347,7 +2347,7 @@ class MidiMainWindow(QMainWindow):
             state.current_mode in {"sound", "sound_paused"}
             and 0 <= selected < row_count
         ):
-            current_track_name = state.midi_rows[selected].name
+            current_track_name = Path(state.midi_rows[selected].name).stem
         self.current_track_marquee.setText(current_track_name)
 
         icon_size = max(26, round(34 * state.ui_scale_percent / 100))
