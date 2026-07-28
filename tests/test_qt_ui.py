@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QStyle,
 )
 
 import main as app_main
@@ -46,7 +47,12 @@ from qt_components import (
     TrackChannelButton,
     make_feature_icon,
 )
-from qt_styles import THEMES, build_stylesheet
+from qt_styles import (
+    THEMES,
+    TOOLTIP_WAKE_UP_DELAY_MS,
+    FastTooltipStyle,
+    build_stylesheet,
+)
 from settings import AppSettings
 from source_colors import track_channel_color
 from update_service import AvailableUpdate, ReleaseAsset
@@ -75,6 +81,13 @@ class QtUiTests(unittest.TestCase):
         self.assertNotIn("MidiSoundPlayer", source)
         self.assertNotIn("MidiInputKeyboardBridge", source)
         self.assertNotIn("from settings import", source)
+
+    def test_tooltips_open_after_the_short_application_delay(self) -> None:
+        style = FastTooltipStyle("Fusion")
+        self.assertEqual(
+            style.styleHint(QStyle.StyleHint.SH_ToolTip_WakeUpDelay),
+            TOOLTIP_WAKE_UP_DELAY_MS,
+        )
 
     def test_position_change_updates_only_the_player_position_widgets(self) -> None:
         self.controller.state.duration = 120.0
@@ -862,6 +875,8 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
         controls = (
             self.window.sound_source_combo,
+            self.window.audio_qt_combo,
+            self.window.audio_buffer_combo,
             self.window.shortcut_start_edit,
             self.window.shortcut_pause_edit,
             self.window.shortcut_end_edit,
@@ -873,7 +888,7 @@ class QtUiTests(unittest.TestCase):
                 focus_target = line_edit or control
                 focus_target.setFocus()
                 self.application.processEvents()
-                self.assertIs(self.window._containing_focus_clear_control(QApplication.focusWidget()), control)
+                self.assertTrue(control.hasFocus() or focus_target.hasFocus())
 
                 QTest.mouseClick(
                     self.window.settings_panel,
@@ -882,9 +897,9 @@ class QtUiTests(unittest.TestCase):
                 )
                 self.application.processEvents()
 
-                self.assertIsNone(
-                    self.window._containing_focus_clear_control(QApplication.focusWidget())
-                )
+                self.assertFalse(control.hasFocus())
+                self.assertFalse(focus_target.hasFocus())
+                self.assertTrue(self.window.settings_panel.hasFocus())
 
     def test_clicking_inside_the_same_selector_keeps_focus(self) -> None:
         self.window.show()
@@ -895,9 +910,13 @@ class QtUiTests(unittest.TestCase):
         QTest.mouseClick(selector, Qt.MouseButton.LeftButton)
         self.application.processEvents()
 
-        self.assertIs(
-            self.window._containing_focus_clear_control(QApplication.focusWidget()),
-            selector,
+        self.assertIn(
+            QApplication.focusWidget(),
+            (
+                selector,
+                selector.view(),
+                selector.view().viewport(),
+            ),
         )
 
     def test_common_button_stays_enabled_to_stop_key_playback(self) -> None:
@@ -1280,37 +1299,20 @@ class QtUiTests(unittest.TestCase):
         self.assertFalse(hasattr(self.window, "status_label"))
         self.assertFalse(hasattr(self.window, "position_label"))
         self.assertLess(
-            self.window.position_slider.geometry().top(),
-            self.window.sound_play_pause_button.geometry().top(),
+            self.window.position_slider.mapTo(
+                self.window,
+                self.window.position_slider.rect().center(),
+            ).y(),
+            self.window.sound_play_pause_button.mapTo(
+                self.window,
+                self.window.sound_play_pause_button.rect().center(),
+            ).y(),
         )
         self.assertEqual(self.window.player_body_gap.height(), 0)
         self.assertEqual(self.window.player_detail_gap.width(), 2)
         self.assertEqual(self.window.track_channels.width(), 22)
-        self.assertEqual(self.window.volume_control.label.text(), "VOL")
-        self.assertEqual(self.window.speed_control.label.text(), "SPD")
-        self.assertEqual(
-            self.window.volume_control.geometry().top(),
-            self.window.speed_control.geometry().top(),
-        )
-        self.assertEqual(
-            self.window.volume_control.mapTo(self.window, QPoint(0, 0)).y()
-            + self.window.volume_control.height() // 2,
-            self.window.sound_play_pause_button.mapTo(self.window, QPoint(0, 0)).y()
-            + self.window.sound_play_pause_button.height() // 2,
-        )
-        player_left = self.window.player_header.mapTo(
-            self.window,
-            QPoint(0, 0),
-        ).x()
-        play_center = self.window.sound_play_pause_button.mapTo(
-            self.window,
-            self.window.sound_play_pause_button.rect().center(),
-        ).x()
-        self.assertAlmostEqual(
-            play_center,
-            player_left + self.window.player_header.width() / 2,
-            delta=1,
-        )
+        self.assertFalse(self.window.volume_control.mute_button.icon().isNull())
+        self.assertTrue(self.window.speed_control.label.isHidden())
 
     def test_section_visibility_hides_complete_panel(self) -> None:
         self.controller.set_option("input_conversion_mode", "realtime")
@@ -1405,26 +1407,47 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.minimumSize().height(), self.window.minimumSizeHint().height())
         self.assertEqual(self.window.height(), self.window.minimumSizeHint().height())
 
-    def test_value_labels_reset_speed_and_volume_to_100(self) -> None:
+    def test_speed_knob_double_click_resets_to_100(self) -> None:
         self.controller.set_option("playback_speed_percent", 170)
-        QTest.mouseDClick(self.window.speed_control.label, Qt.MouseButton.LeftButton)
+        QTest.mouseDClick(
+            self.window.speed_control.knob,
+            Qt.MouseButton.LeftButton,
+        )
 
         self.assertEqual(self.controller.state.playback_speed_percent, 100)
-        self.controller.set_option("midi_sound_volume", 40)
-        QTest.mouseDClick(self.window.volume_control.label, Qt.MouseButton.LeftButton)
-        self.assertEqual(self.controller.state.midi_sound_volume, 100)
 
-    def test_double_clicking_speed_bar_does_not_reset_to_100(self) -> None:
+    def test_volume_icon_toggles_mute_and_restores_previous_volume(self) -> None:
+        self.controller.set_option("midi_sound_volume", 40)
+        self.window.volume_control.mute_button.click()
+        self.assertEqual(self.controller.state.midi_sound_volume, 0)
+        self.assertEqual(
+            self.window.volume_control.mute_button.toolTip(),
+            "Unmute",
+        )
+
+        self.window.volume_control.mute_button.click()
+        self.assertEqual(self.controller.state.midi_sound_volume, 40)
+        self.assertEqual(
+            self.window.volume_control.mute_button.toolTip(),
+            "Mute",
+        )
+
+    def test_repeated_double_clicking_speed_knob_stays_at_100(self) -> None:
         self.controller.set_option("playback_speed_percent", 170)
         knob = self.window.speed_control.knob
 
-        QTest.mouseDClick(
-            knob,
-            Qt.MouseButton.LeftButton,
-            pos=QPoint(knob.width() // 2, 1),
-        )
-
-        self.assertNotEqual(self.controller.state.playback_speed_percent, 100)
+        for _ in range(4):
+            QTest.mouseDClick(
+                knob,
+                Qt.MouseButton.LeftButton,
+                pos=QPoint(knob.width() // 2, 1),
+            )
+            self.application.processEvents()
+            self.assertEqual(
+                self.controller.state.playback_speed_percent,
+                100,
+            )
+            self.assertEqual(knob.value(), 100)
 
     def test_double_clicking_midi_list_tab_reloads_folder(self) -> None:
         calls = []
@@ -1479,7 +1502,7 @@ class QtUiTests(unittest.TestCase):
             self.window.track_channels.horizontalHeader().isHidden()
         )
 
-    def test_all_four_knobs_share_the_transport_row(self) -> None:
+    def test_three_knobs_share_the_transport_row_and_volume_follows_playlist(self) -> None:
         for scale in (100, 125, 150, 175, 200):
             with self.subTest(scale=scale):
                 self.controller.set_option("ui_scale_percent", scale)
@@ -1487,47 +1510,43 @@ class QtUiTests(unittest.TestCase):
                 self.application.processEvents()
 
                 controls = (
-                    self.window.volume_control,
                     self.window.speed_control,
                     self.window.transpose_control,
                     self.window.octave_control,
                 )
+                control_center_y = controls[0].mapTo(
+                    self.window,
+                    controls[0].rect().center(),
+                ).y()
                 for control in controls:
-                    self.assertTrue(control.label.property("caption"))
-                    self.assertEqual(
-                        control.mapTo(self.window, QPoint(0, 0)).y(),
-                        self.window.slider_pane.mapTo(
-                            self.window,
-                            QPoint(0, 0),
-                        ).y(),
-                    )
+                    self.assertTrue(control.label.isHidden())
                     self.assertEqual(
                         control.mapTo(
                             self.window,
                             control.rect().center(),
                         ).y(),
-                        self.window.sound_play_pause_button.mapTo(
-                            self.window,
-                            self.window.sound_play_pause_button.rect().center(),
-                        ).y(),
+                        control_center_y,
                     )
+                control_gaps = [
+                    controls[index].mapTo(
+                        self.window,
+                        QPoint(0, 0),
+                    ).x()
+                    - controls[index - 1].mapTo(
+                        self.window,
+                        QPoint(controls[index - 1].width(), 0),
+                    ).x()
+                    for index in range(1, len(controls))
+                ]
                 self.assertEqual(
-                    self.window.transpose_control.label.fontMetrics().height(),
-                    self.window.volume_control.label.fontMetrics().height(),
-                )
-                self.assertEqual(
-                    self.window.octave_control.label.fontMetrics().height(),
-                    self.window.volume_control.label.fontMetrics().height(),
+                    control_gaps,
+                    [0] * (len(controls) - 1),
                 )
                 self.assertEqual(
                     self.window.octave_control.geometry().left()
                     - self.window.transpose_control.geometry().right()
                     - 1,
-                    round(12 * scale / 100),
-                )
-                self.assertEqual(
-                    self.window.transport_left.width(),
-                    self.window.transport_right.width(),
+                    0,
                 )
                 self.assertGreaterEqual(
                     self.window.previous_track_button.mapTo(
@@ -1540,73 +1559,73 @@ class QtUiTests(unittest.TestCase):
                     ).x(),
                     max(1, round(scale / 100)),
                 )
-                window_center = self.window.rect().center().x()
-                speed_center = self.window.speed_control.knob.mapTo(
-                    self.window,
-                    self.window.speed_control.knob.rect().center(),
-                ).x()
-                transpose_center = self.window.transpose_control.knob.mapTo(
-                    self.window,
-                    self.window.transpose_control.knob.rect().center(),
-                ).x()
-                self.assertAlmostEqual(
-                    speed_center + transpose_center,
-                    window_center * 2,
-                    delta=1,
-                )
-                self.assertEqual(
-                    self.window.transform_controls.mapTo(
+                control_centers = [
+                    control.knob.mapTo(
                         self.window,
-                        QPoint(0, 0),
+                        control.knob.rect().center(),
                     ).x()
-                    - self.window.sound_playback_mode_button.mapTo(
+                    for control in controls
+                ]
+                self.assertEqual(control_centers, sorted(control_centers))
+                play_button_left = self.window.sound_play_pause_button.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
+                self.assertLess(
+                    self.window.octave_control.mapTo(
                         self.window,
-                        QPoint(
-                            self.window.sound_playback_mode_button.width(),
-                            0,
-                        ),
+                        QPoint(self.window.octave_control.width(), 0),
                     ).x(),
-                    max(1, round(scale / 100)),
+                    play_button_left,
                 )
-                control_bottom = self.window.slider_pane.mapTo(
+                seek_center_y = self.window.position_slider.mapTo(
                     self.window,
-                    QPoint(0, self.window.slider_pane.height()),
-                ).y()
-                position_bottom = self.window.position_slider.mapTo(
-                    self.window,
-                    QPoint(0, self.window.position_slider.height()),
-                ).y()
-                control_top = self.window.slider_pane.mapTo(
-                    self.window,
-                    QPoint(0, 0),
-                ).y()
-                tab_top = self.window.tab_bar_container.mapTo(
-                    self.window,
-                    QPoint(0, 0),
+                    self.window.position_slider.rect().center(),
                 ).y()
                 midi_table_top = self.window.midi_table.mapTo(
                     self.window,
                     QPoint(0, 0),
                 ).y()
-                self.assertEqual(control_top, position_bottom)
-                self.assertEqual(
-                    control_bottom - tab_top,
-                    round(28 * scale / 100)
-                    - round(10 * scale / 100),
+                expected_control_center_y = (
+                    seek_center_y + midi_table_top
+                ) / 2
+                for control in controls:
+                    self.assertAlmostEqual(
+                        control.mapTo(
+                            self.window,
+                            control.rect().center(),
+                        ).y(),
+                        expected_control_center_y,
+                        delta=max(1, round(scale / 100)),
+                    )
+                repeat_left = self.window.sound_playback_mode_button.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
+                octave_right = self.window.octave_control.mapTo(
+                    self.window,
+                    QPoint(self.window.octave_control.width(), 0),
+                ).x()
+                self.assertAlmostEqual(
+                    repeat_left - octave_right,
+                    round(8 * scale / 100),
+                    delta=1,
+                )
+                playlist_right = self.window.playlist_button.mapTo(
+                    self.window,
+                    QPoint(self.window.playlist_button.width(), 0),
+                ).x()
+                volume_left = self.window.volume_control.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
+                self.assertGreaterEqual(
+                    volume_left - playlist_right,
+                    round(12 * scale / 100),
                 )
                 self.assertEqual(
-                    midi_table_top - control_bottom,
-                    round(10 * scale / 100),
-                )
-                self.assertLessEqual(
-                    self.window.tab_bar_container.mapTo(
-                        self.window,
-                        QPoint(self.window.tab_bar_container.width(), 0),
-                    ).x(),
-                    self.window.slider_pane.mapTo(
-                        self.window,
-                        QPoint(0, 0),
-                    ).x(),
+                    self.window.volume_control.slider.orientation(),
+                    Qt.Orientation.Horizontal,
                 )
                 self.assertLessEqual(
                     self.window.transform_controls.mapTo(
@@ -1619,59 +1638,327 @@ class QtUiTests(unittest.TestCase):
                     ).x(),
                 )
 
-    def test_transport_play_button_stays_centered_at_every_scale(self) -> None:
+    def test_transport_icons_stay_after_knobs_on_the_lower_row_at_every_scale(self) -> None:
         for scale in (100, 110, 125, 150, 175, 200):
             with self.subTest(scale=scale):
                 self.controller.set_option("ui_scale_percent", scale)
                 self.window.show()
                 self.application.processEvents()
 
-                player_left = self.window.player_header.mapTo(
+                transport_buttons = (
+                    self.window.sound_playback_mode_button,
+                    self.window.previous_track_button,
+                    self.window.sound_play_pause_button,
+                    self.window.next_track_button,
+                    self.window.playlist_button,
+                )
+                button_centers = [
+                    button.mapTo(
+                        self.window,
+                        button.rect().center(),
+                    ).x()
+                    for button in transport_buttons
+                ]
+                self.assertEqual(button_centers, sorted(button_centers))
+                volume_center_y = self.window.volume_control.mapTo(
+                    self.window,
+                    self.window.volume_control.rect().center(),
+                ).y()
+                transport_center = self.window.transport_right.mapTo(
+                    self.window,
+                    self.window.transport_right.rect().center(),
+                ).x()
+                self.assertAlmostEqual(
+                    transport_center,
+                    self.window.rect().center().x(),
+                    delta=1,
+                )
+                seek_center_y = self.window.position_slider.mapTo(
+                    self.window,
+                    self.window.position_slider.rect().center(),
+                ).y()
+                midi_frame_top = self.window.midi_table.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).y()
+                expected_button_center_y = (
+                    seek_center_y + midi_frame_top
+                ) / 2
+                for button in transport_buttons:
+                    self.assertAlmostEqual(
+                        button.mapTo(
+                            self.window,
+                            button.rect().center(),
+                        ).y(),
+                        expected_button_center_y,
+                        delta=max(1, round(scale / 100)),
+                    )
+                self.assertAlmostEqual(
+                    volume_center_y,
+                    expected_button_center_y,
+                    delta=max(1, round(scale / 100)),
+                )
+                marquee_top = self.window.current_track_marquee.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).y()
+                seek_bottom = self.window.position_slider.mapTo(
+                    self.window,
+                    QPoint(0, self.window.position_slider.height()),
+                ).y()
+                tab_top = self.window.tab_bar.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).y()
+                marquee_bottom = (
+                    marquee_top
+                    + self.window.current_track_marquee.height()
+                )
+                vertical_shift = round(5 * scale / 100)
+                self.assertEqual(
+                    marquee_top,
+                    seek_bottom - vertical_shift,
+                )
+                self.assertEqual(
+                    marquee_bottom,
+                    tab_top - vertical_shift,
+                )
+                self.assertAlmostEqual(
+                    self.window.current_track_marquee.height(),
+                    round(18 * scale / 100),
+                    delta=1,
+                )
+                marquee_right = self.window.current_track_marquee.mapTo(
+                    self.window,
+                    QPoint(self.window.current_track_marquee.width(), 0),
+                ).x()
+                speed_left = self.window.speed_control.mapTo(
                     self.window,
                     QPoint(0, 0),
                 ).x()
-                play_center = self.window.sound_play_pause_button.mapTo(
-                    self.window,
-                    self.window.sound_play_pause_button.rect().center(),
-                ).x()
                 self.assertAlmostEqual(
-                    play_center,
-                    player_left + self.window.player_header.width() / 2,
+                    speed_left - marquee_right,
+                    round(14 * scale / 100),
                     delta=1,
                 )
-                self.assertLess(
-                    self.window.sound_playback_mode_button.mapTo(
+                player_header_left = self.window.player_header.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
+                marquee_left = self.window.current_track_marquee.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
+                self.assertEqual(marquee_left, player_header_left)
+                panel_left = self.window.transport_controls_panel.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
+                panel_right = self.window.transport_controls_panel.mapTo(
+                    self.window,
+                    QPoint(
+                        self.window.transport_controls_panel.width(),
+                        0,
+                    ),
+                ).x()
+                volume_right = self.window.volume_control.mapTo(
+                    self.window,
+                    QPoint(self.window.volume_control.width(), 0),
+                ).x()
+                self.assertAlmostEqual(
+                    panel_left - marquee_right,
+                    round(10 * scale / 100),
+                    delta=1,
+                )
+                self.assertLessEqual(panel_left, speed_left)
+                self.assertGreaterEqual(panel_right, volume_right)
+                self.assertEqual(
+                    self.window.transport_controls_panel.height(),
+                    round(40 * scale / 100),
+                )
+                panel_top = self.window.transport_controls_panel.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).y()
+                panel_bottom = panel_top + self.window.transport_controls_panel.height()
+                controls = (
+                    self.window.speed_control,
+                    self.window.transpose_control,
+                    self.window.octave_control,
+                    self.window.sound_playback_mode_button,
+                    self.window.previous_track_button,
+                    self.window.sound_play_pause_button,
+                    self.window.next_track_button,
+                    self.window.playlist_button,
+                    self.window.volume_title_stack,
+                )
+                controls_top = min(
+                    control.mapTo(self.window, QPoint(0, 0)).y()
+                    for control in controls
+                )
+                controls_bottom = max(
+                    control.mapTo(
                         self.window,
-                        QPoint(
-                            self.window.sound_playback_mode_button.width(),
-                            0,
-                        ),
-                    ).x(),
+                        QPoint(0, control.height()),
+                    ).y()
+                    for control in controls
+                )
+                self.assertLess(panel_top, controls_top)
+                self.assertGreater(panel_bottom, controls_bottom)
+                self.assertLessEqual(
+                    abs(
+                        (controls_top - panel_top)
+                        - (panel_bottom - controls_bottom)
+                    ),
+                    1,
+                )
+                self.assertLess(
                     self.window.transform_controls.mapTo(
+                        self.window,
+                        QPoint(self.window.transform_controls.width(), 0),
+                    ).x(),
+                    self.window.previous_track_button.mapTo(
                         self.window,
                         QPoint(0, 0),
                     ).x(),
                 )
 
-    def test_transpose_and_octave_knob_labels_reset_values_on_double_click(self) -> None:
+    def test_localized_knob_tooltips_fit_without_growing_player_header(self) -> None:
+        expected = {
+            "en": ("Speed", "Transpose", "Octave shift"),
+            "ja": (
+                "\u901f\u5ea6",
+                "\u30c8\u30e9\u30f3\u30b9\u30dd\u30fc\u30ba",
+                "\u30aa\u30af\u30bf\u30fc\u30d6\u30b7\u30d5\u30c8",
+            ),
+            "zh": ("\u901f\u5ea6", "\u79fb\u8c03", "\u516b\u5ea6\u79fb\u4f4d"),
+        }
+        expected_mute = {
+            "en": "Mute",
+            "ja": "\u30df\u30e5\u30fc\u30c8",
+            "zh": "\u9759\u97f3",
+        }
+        for language in ("en", "ja", "zh"):
+            for scale in (100, 150, 200):
+                with self.subTest(language=language, scale=scale):
+                    self.controller.set_option("language", language)
+                    self.controller.set_option("ui_scale_percent", scale)
+                    self.window.show()
+                    self.application.processEvents()
+                    controls = (
+                        self.window.speed_control,
+                        self.window.transpose_control,
+                        self.window.octave_control,
+                    )
+
+                    self.assertEqual(
+                        tuple(control.knob.toolTip() for control in controls),
+                        expected[language],
+                    )
+                    self.assertEqual(
+                        self.window.volume_control.mute_button.toolTip(),
+                        expected_mute[language],
+                    )
+                    volume_right = self.window.volume_control.mapTo(
+                        self.window,
+                        QPoint(self.window.volume_control.width(), 0),
+                    ).x()
+                    sound_source_left = self.window.sound_source_controls.mapTo(
+                        self.window,
+                        QPoint(0, 0),
+                    ).x()
+                    self.assertGreaterEqual(
+                        sound_source_left - volume_right,
+                        round(8 * scale / 100),
+                    )
+                    self.assertEqual(
+                        self.window.player_header.height(),
+                        round(70 * scale / 100),
+                    )
+                    for control in controls:
+                        self.assertTrue(control.label.isHidden())
+                        self.assertGreaterEqual(
+                            control.knob.geometry().left(),
+                            0,
+                        )
+                        self.assertLessEqual(
+                            control.knob.geometry().right(),
+                            control.width() - 1,
+                        )
+
+    def test_current_track_name_scrolls_left_to_right_only_during_playback(self) -> None:
+        self.controller.state.midi_rows = [
+            MidiListRow(Path("current-song.mid"), "current-song.mid")
+        ]
+        self.window.show()
+        self.controller.state.selected_midi_index = 0
+        self.controller.state.current_mode = "sound"
+        self.window.render(self.controller.state)
+        self.application.processEvents()
+
+        expected_name = self.controller.state.midi_rows[0].name
+        self.assertEqual(self.window.current_track_marquee.text, expected_name)
+        initial_offset = self.window.current_track_marquee.scroll_offset
+        self.assertEqual(initial_offset, 0.0)
+        self.window.current_track_marquee._advance()
+        self.assertGreater(
+            self.window.current_track_marquee.scroll_offset,
+            initial_offset,
+        )
+        self.window.current_track_marquee._timer.stop()
+        text_width = (
+            self.window.current_track_marquee.fontMetrics()
+            .horizontalAdvance(expected_name)
+        )
+        cycle_width = self.window.current_track_marquee._cycle_width()
+        self.assertGreaterEqual(
+            cycle_width,
+            self.window.current_track_marquee.width(),
+        )
+        self.window.current_track_marquee._offset = (
+            self.window.current_track_marquee.width()
+            - text_width / 2
+        )
+        primary_left = self.window.current_track_marquee.scroll_offset
+        wrapped_left = primary_left - cycle_width
+        self.assertGreater(
+            primary_left + text_width,
+            self.window.current_track_marquee.width(),
+        )
+        self.assertLess(wrapped_left, 0)
+        self.assertGreater(wrapped_left + text_width, 0)
+
+        self.window.current_track_marquee._offset = cycle_width - 0.5
+        self.window.current_track_marquee._advance()
+        self.assertLess(
+            self.window.current_track_marquee.scroll_offset,
+            self.window.current_track_marquee._step,
+        )
+
+        self.controller.state.current_mode = None
+        self.window.render(self.controller.state)
+        self.assertEqual(self.window.current_track_marquee.text, "")
+
+    def test_transpose_and_octave_knobs_reset_values_on_double_click(self) -> None:
         self.controller.set_option("transpose_semitones", 5)
         self.controller.set_option("octave_shift", -2)
         self.window.show()
         self.application.processEvents()
 
-        QTest.mouseDClick(
-            self.window.transpose_control.label,
-            Qt.MouseButton.LeftButton,
-        )
-        QTest.mouseDClick(
-            self.window.octave_control.label,
-            Qt.MouseButton.LeftButton,
-        )
-
-        self.assertEqual(self.controller.state.transpose_semitones, 0)
-        self.assertEqual(self.controller.state.octave_shift, 0)
-        self.assertEqual(self.window.transpose_control.knob.value(), 0)
-        self.assertEqual(self.window.octave_control.knob.value(), 0)
+        for _ in range(4):
+            QTest.mouseDClick(
+                self.window.transpose_control.knob,
+                Qt.MouseButton.LeftButton,
+            )
+            QTest.mouseDClick(
+                self.window.octave_control.knob,
+                Qt.MouseButton.LeftButton,
+            )
+            self.application.processEvents()
+            self.assertEqual(self.controller.state.transpose_semitones, 0)
+            self.assertEqual(self.controller.state.octave_shift, 0)
+            self.assertEqual(self.window.transpose_control.knob.value(), 0)
+            self.assertEqual(self.window.octave_control.knob.value(), 0)
 
     def test_transform_knobs_scale_as_circles_with_the_ui(self) -> None:
         self.controller.set_option("ui_scale_percent", 100)
@@ -1683,15 +1970,15 @@ class QtUiTests(unittest.TestCase):
         self.controller.set_option("ui_scale_percent", 200)
         self.application.processEvents()
 
-        self.assertEqual(self.window.transpose_control.knob.size(), QSize(72, 72))
-        self.assertEqual(self.window.octave_control.knob.size(), QSize(72, 72))
+        self.assertEqual(self.window.transpose_control.knob.size(), QSize(66, 66))
+        self.assertEqual(self.window.octave_control.knob.size(), QSize(66, 66))
         self.assertGreater(
             self.window.transpose_control.width(),
             transpose_width * 1.75,
         )
         self.assertGreater(
             self.window.octave_control.width(),
-            octave_width * 1.75,
+            octave_width * 1.60,
         )
         for control in (
             self.window.transpose_control,
@@ -1699,11 +1986,12 @@ class QtUiTests(unittest.TestCase):
         ):
             self.assertGreaterEqual(
                 control.width(),
-                control.label.fontMetrics().horizontalAdvance(
-                    control.label.text()
-                )
-                + control.knob.width()
-                + control.layout().spacing(),
+                max(
+                    control.label.fontMetrics().horizontalAdvance(
+                        control.label.text()
+                    ),
+                    control.knob.width(),
+                ),
             )
 
     def test_midi_header_and_rows_have_more_vertical_room(self) -> None:
@@ -1986,6 +2274,13 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
 
         self.assertEqual(self.window.time_label.width(), 80)
+        self.assertEqual(self.window.position_row_layout.spacing(), 1)
+        self.assertEqual(
+            self.window.position_slider.width(),
+            self.window.player_header.width()
+            - self.window.time_label.width()
+            - self.window.position_row_layout.spacing(),
+        )
         self.assertGreater(self.window.position_slider.width(), 760)
         self.assertLessEqual(
             self.window.time_label.fontMetrics().horizontalAdvance("00:00 / 00:00"),
@@ -2008,10 +2303,11 @@ class QtUiTests(unittest.TestCase):
         self.application.processEvents()
 
         for button in (
+            self.window.sound_playback_mode_button,
             self.window.previous_track_button,
             self.window.sound_play_pause_button,
             self.window.next_track_button,
-            self.window.sound_playback_mode_button,
+            self.window.playlist_button,
         ):
             with self.subTest(button=button.accessibleName()):
                 self.assertEqual(button.text(), "")
@@ -2042,6 +2338,11 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(
             self.controller.state.sound_playback_mode,
             SOUND_PLAYBACK_MODE_OFF,
+        )
+        self.assertTrue(
+            self.window.playlist_button.testAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents
+            )
         )
 
     def test_play_button_changes_to_pause_while_sound_is_playing(self) -> None:
@@ -2109,7 +2410,6 @@ class QtUiTests(unittest.TestCase):
     ) -> None:
         self.window.show()
         self.application.processEvents()
-        expected_button_size = QSize(24, 28)
         buttons = (
             self.window.previous_track_button,
             self.window.sound_play_pause_button,
@@ -2119,32 +2419,34 @@ class QtUiTests(unittest.TestCase):
 
         for button in buttons:
             with self.subTest(button=button.accessibleName()):
-                self.assertEqual(button.size(), expected_button_size)
+                self.assertEqual(button.width(), 36)
+                self.assertGreaterEqual(button.height(), 35)
+                self.assertEqual(button.iconSize(), QSize(34, 34))
+                initial_size = button.size()
                 icon_size = button.iconSize()
                 QApplication.sendEvent(button, QEvent(QEvent.Type.Enter))
                 self.application.processEvents()
-                self.assertEqual(button.size(), expected_button_size)
+                self.assertEqual(button.size(), initial_size)
                 self.assertEqual(button.iconSize(), icon_size)
                 QApplication.sendEvent(button, QEvent(QEvent.Type.Leave))
+                self.assertEqual(button.size(), initial_size)
                 self.assertEqual(button.iconSize(), icon_size)
 
-    def test_dragging_round_knobs_up_increases_and_down_decreases_values(self) -> None:
+    def test_volume_bar_selects_value_and_speed_knob_drag_changes_value(self) -> None:
         self.window.show()
         self.application.processEvents()
-        volume_knob = self.window.volume_control.knob
+        volume_bar = self.window.volume_control.slider
         speed_knob = self.window.speed_control.knob
-        volume_start = volume_knob.rect().center()
         speed_start = speed_knob.rect().center()
+        self.assertEqual(volume_bar.width(), 100)
 
-        QTest.mousePress(volume_knob, Qt.MouseButton.LeftButton, pos=volume_start)
-        QTest.mouseMove(
-            volume_knob,
-            QPoint(volume_start.x(), volume_start.y() - 20),
-        )
-        QTest.mouseRelease(
-            volume_knob,
+        QTest.mouseClick(
+            volume_bar,
             Qt.MouseButton.LeftButton,
-            pos=QPoint(volume_start.x(), volume_start.y() - 20),
+            pos=QPoint(
+                round(volume_bar.width() * 0.95),
+                volume_bar.height() // 2,
+            ),
         )
         QTest.mousePress(speed_knob, Qt.MouseButton.LeftButton, pos=speed_start)
         QTest.mouseMove(
@@ -2157,13 +2459,41 @@ class QtUiTests(unittest.TestCase):
             pos=QPoint(speed_start.x(), speed_start.y() + 20),
         )
 
-        self.assertGreater(self.controller.state.midi_sound_volume, 80)
+        self.assertGreater(self.controller.state.midi_sound_volume, 90)
         self.assertLess(self.controller.state.playback_speed_percent, 100)
 
-    def test_clicking_round_knob_without_drag_does_not_change_value(self) -> None:
+    def test_volume_bar_track_remains_visible_at_zero(self) -> None:
+        self.controller.set_option("midi_sound_volume", 0)
         self.window.show()
         self.application.processEvents()
-        knob = self.window.volume_control.knob
+
+        self.assertEqual(
+            self.window.volume_control.slider.objectName(),
+            "VolumeSlider",
+        )
+        self.assertEqual(self.window.volume_control.slider.value(), 0)
+        for theme_name, palette in THEMES.items():
+            with self.subTest(theme=theme_name):
+                volume_rule = build_stylesheet(
+                    theme_name,
+                    100,
+                ).split(
+                    "QSlider#VolumeSlider::groove:horizontal {",
+                    1,
+                )[1].split("}", 1)[0]
+                self.assertIn(
+                    f"background: {palette.surface_hover}",
+                    volume_rule,
+                )
+                self.assertIn(
+                    f"border: 1px solid {palette.border}",
+                    volume_rule,
+                )
+
+    def test_clicking_speed_knob_without_drag_does_not_change_value(self) -> None:
+        self.window.show()
+        self.application.processEvents()
+        knob = self.window.speed_control.knob
 
         QTest.mouseClick(
             knob,
@@ -2171,7 +2501,7 @@ class QtUiTests(unittest.TestCase):
             pos=QPoint(knob.width() // 2, 1),
         )
 
-        self.assertEqual(self.controller.state.midi_sound_volume, 80)
+        self.assertEqual(self.controller.state.playback_speed_percent, 100)
 
     def test_track_channel_colors_reflect_enabled_state_on_first_render(self) -> None:
         self.controller.state.track_channels = [
@@ -2628,6 +2958,23 @@ class QtUiTests(unittest.TestCase):
             "background: rgba(239, 251, 255, 116)",
             build_stylesheet("sky_blue", 100),
         )
+
+    def test_player_controls_panel_uses_theme_background(self) -> None:
+        for theme_name, palette in THEMES.items():
+            with self.subTest(theme=theme_name):
+                stylesheet = build_stylesheet(theme_name, 100)
+                panel_rule = stylesheet.split(
+                    "QFrame#PlayerControlsPanel {",
+                    1,
+                )[1].split("}", 1)[0]
+                self.assertIn(
+                    f"background: {palette.panel_alt}",
+                    panel_rule,
+                )
+                self.assertIn(
+                    f"border: 1px solid {palette.border}",
+                    panel_rule,
+                )
 
     def test_ocean_background_has_visible_depth_and_surface_detail(self) -> None:
         background = ThemedBackground()
@@ -3863,7 +4210,7 @@ class QtUiTests(unittest.TestCase):
         )
         self.assertEqual(
             self.window.audio_qt_label.property("caption"),
-            self.window.volume_control.label.property("caption"),
+            self.window.volume_control.value_label.property("caption"),
         )
         runtime_center = self.window.audio_runtime_widget.mapTo(
             self.window,
@@ -3937,7 +4284,7 @@ class QtUiTests(unittest.TestCase):
         self.window.audio_buffer_combo.setCurrentIndex(buffer_index)
         self.assertEqual(self.controller.state.audio_qt_frames, 512)
         self.assertEqual(self.controller.state.audio_buffer_frames, 2_048)
-    def test_volume_knob_mirrors_octave_knob_around_window_center(self) -> None:
+    def test_three_knobs_stay_left_of_the_center_transport_button(self) -> None:
         self.window.show()
         for language in ("en", "ja", "zh"):
             for scale in (100, 150, 200):
@@ -3945,44 +4292,26 @@ class QtUiTests(unittest.TestCase):
                     self.controller.set_option("language", language)
                     self.controller.set_option("ui_scale_percent", scale)
                     self.application.processEvents()
-                    window_center = self.window.rect().center().x()
-                    volume_center = self.window.volume_control.knob.mapTo(
-                        self.window,
-                        self.window.volume_control.knob.rect().center(),
-                    ).x()
-                    octave_center = self.window.octave_control.knob.mapTo(
-                        self.window,
-                        self.window.octave_control.knob.rect().center(),
-                    ).x()
-
-                    self.assertAlmostEqual(
-                        volume_center + octave_center,
-                        window_center * 2,
-                        delta=1,
+                    controls = (
+                        self.window.speed_control,
+                        self.window.transpose_control,
+                        self.window.octave_control,
                     )
-
-    def test_speed_knob_mirrors_transpose_knob_around_window_center(self) -> None:
-        self.window.show()
-        for language in ("en", "ja", "zh"):
-            for scale in (100, 150, 200):
-                with self.subTest(language=language, scale=scale):
-                    self.controller.set_option("language", language)
-                    self.controller.set_option("ui_scale_percent", scale)
-                    self.application.processEvents()
-                    window_center = self.window.rect().center().x()
-                    speed_center = self.window.speed_control.knob.mapTo(
+                    control_centers = [
+                        control.knob.mapTo(
+                            self.window,
+                            control.knob.rect().center(),
+                        ).x()
+                        for control in controls
+                    ]
+                    self.assertEqual(control_centers, sorted(control_centers))
+                    play_button_left = self.window.sound_play_pause_button.mapTo(
                         self.window,
-                        self.window.speed_control.knob.rect().center(),
+                        QPoint(0, 0),
                     ).x()
-                    transpose_center = self.window.transpose_control.knob.mapTo(
-                        self.window,
-                        self.window.transpose_control.knob.rect().center(),
-                    ).x()
-
-                    self.assertAlmostEqual(
-                        speed_center + transpose_center,
-                        window_center * 2,
-                        delta=1,
+                    self.assertLess(
+                        max(control_centers),
+                        play_button_left,
                     )
 
     def test_round_knobs_remain_circular_when_scaled(self) -> None:
@@ -3990,12 +4319,14 @@ class QtUiTests(unittest.TestCase):
         self.window.show()
         self.application.processEvents()
 
-        self.assertEqual(self.window.volume_control.knob.size(), QSize(72, 72))
-        self.assertEqual(self.window.speed_control.knob.size(), QSize(72, 72))
-        self.assertEqual(self.window.transpose_control.knob.size(), QSize(72, 72))
-        self.assertEqual(self.window.octave_control.knob.size(), QSize(72, 72))
+        self.assertEqual(self.window.speed_control.knob.size(), QSize(66, 66))
+        self.assertEqual(self.window.transpose_control.knob.size(), QSize(66, 66))
+        self.assertEqual(self.window.octave_control.knob.size(), QSize(66, 66))
         self.assertEqual(self.window.countdown_control.knob.size(), QSize(72, 72))
-        self.assertLessEqual(self.window.volume_control.knob.width(), self.window.volume_control.width())
+        self.assertEqual(
+            self.window.volume_control.slider.orientation(),
+            Qt.Orientation.Horizontal,
+        )
         self.assertLessEqual(self.window.speed_control.knob.width(), self.window.speed_control.width())
 
     def test_fixed_layout_dimensions_follow_ui_scale(self) -> None:

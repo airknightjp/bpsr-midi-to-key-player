@@ -5,6 +5,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import QProxyStyle, QStyle
+
+
+TOOLTIP_WAKE_UP_DELAY_MS = 200
+
+
+class FastTooltipStyle(QProxyStyle):
+    def styleHint(  # type: ignore[no-untyped-def]
+        self,
+        hint,
+        option=None,
+        widget=None,
+        return_data=None,
+    ) -> int:
+        if hint == QStyle.StyleHint.SH_ToolTip_WakeUpDelay:
+            return TOOLTIP_WAKE_UP_DELAY_MS
+        return super().styleHint(hint, option, widget, return_data)
 
 
 @dataclass(frozen=True)
@@ -185,6 +202,11 @@ def build_stylesheet(
         background: {palette.panel};
         border-radius: {radius}px;
     }}
+    QFrame#PlayerControlsPanel {{
+        background: {palette.panel_alt};
+        border: 1px solid {palette.border};
+        border-radius: {radius}px;
+    }}
     QMenuBar {{ background: {palette.panel}; border-bottom: 1px solid {palette.border}; padding: 1px; }}
     QMenuBar::item {{ padding: {pad_y}px {pad_x}px; background: transparent; }}
     QMenuBar::item:selected, QMenu::item:selected {{ background: {palette.panel_alt}; }}
@@ -220,6 +242,9 @@ def build_stylesheet(
         border: none;
     }}
     QLabel[caption="true"] {{ color: {palette.muted}; font-size: {small}px; }}
+    QLabel[knobLabelBelow="true"] {{
+        font-size: {max(1, round(9 * scale))}px;
+    }}
     QLabel#UpdateStatusBadge {{
         min-width: {round(28 * scale)}px;
         max-width: {round(28 * scale)}px;
@@ -366,6 +391,12 @@ def build_stylesheet(
     QSlider::groove:horizontal {{ height: {round(5 * scale)}px; background: {palette.panel_alt}; border-radius: 2px; }}
     QSlider::sub-page:horizontal {{ background: {palette.accent}; border-radius: 2px; }}
     QSlider::handle:horizontal {{ width: {slider_handle_size}px; margin: -{slider_handle_margin}px 0; background: {palette.surface}; border: {slider_handle_border}px solid {palette.accent}; border-radius: {slider_handle_radius}px; }}
+    QSlider#VolumeSlider::groove:horizontal {{
+        height: {round(5 * scale)}px;
+        background: {palette.surface_hover};
+        border: 1px solid {palette.border};
+        border-radius: {round(3 * scale)}px;
+    }}
     QSlider::groove:vertical {{ width: {round(5 * scale)}px; background: {palette.panel_alt}; border-radius: 2px; }}
     QSlider::sub-page:vertical {{ background: {palette.panel_alt}; }}
     QSlider::add-page:vertical {{ background: {palette.accent}; border-radius: 2px; }}
@@ -435,6 +466,21 @@ def build_stylesheet(
         background: transparent;
         border: none;
         border-radius: {round(12 * scale)}px;
+    }}
+    QToolButton#VolumeMuteButton {{
+        padding: 0;
+        background: transparent;
+        border: none;
+        border-radius: {round(8 * scale)}px;
+    }}
+    QToolButton#VolumeMuteButton:hover,
+    QToolButton#VolumeMuteButton:focus {{
+        background: {palette.surface_hover};
+        border: none;
+    }}
+    QToolButton#VolumeMuteButton:pressed {{
+        background: {palette.panel_alt};
+        border: none;
     }}
     QScrollBar:vertical {{ background: {palette.panel_alt}; width: {round(10 * scale)}px; margin: 0; }}
     QScrollBar::handle:vertical {{ background: {palette.border}; min-height: {round(24 * scale)}px; border-radius: {round(5 * scale)}px; }}

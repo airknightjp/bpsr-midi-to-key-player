@@ -138,9 +138,59 @@ class I18nTests(unittest.TestCase):
                 self.assertTrue(translations["no_updates"])
                 self.assertIn("{error}", translations["update_check_failed"])
 
-    def test_english_vertical_slider_labels_use_abbreviations(self) -> None:
-        self.assertEqual(TEXT["en"]["playback_speed"], "SPD")
-        self.assertEqual(TEXT["en"]["midi_sound_volume"], "VOL")
+    def test_transport_knob_labels_are_localized(self) -> None:
+        expected = {
+            "en": ("Volume", "Speed", "Transpose", "Octave shift"),
+            "ja": (
+                "\u97f3\u91cf",
+                "\u901f\u5ea6",
+                "\u30c8\u30e9\u30f3\u30b9\u30dd\u30fc\u30ba",
+                "\u30aa\u30af\u30bf\u30fc\u30d6\u30b7\u30d5\u30c8",
+            ),
+            "zh": (
+                "\u97f3\u91cf",
+                "\u901f\u5ea6",
+                "\u79fb\u8c03",
+                "\u516b\u5ea6\u79fb\u4f4d",
+            ),
+        }
+        for language, translations in TEXT.items():
+            with self.subTest(language=language):
+                self.assertEqual(
+                    (
+                        translations["midi_sound_volume"],
+                        translations["playback_speed"],
+                        translations["transpose_semitones"],
+                        translations["octave_shift"],
+                    ),
+                    expected[language],
+                )
+
+    def test_playlist_label_is_localized(self) -> None:
+        expected = {
+            "en": "Playlist",
+            "ja": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8",
+            "zh": "\u64ad\u653e\u5217\u8868",
+        }
+        for language, translations in TEXT.items():
+            with self.subTest(language=language):
+                self.assertEqual(translations["playlist"], expected[language])
+
+    def test_mute_labels_are_localized(self) -> None:
+        expected = {
+            "en": ("Mute", "Unmute"),
+            "ja": (
+                "\u30df\u30e5\u30fc\u30c8",
+                "\u30df\u30e5\u30fc\u30c8\u89e3\u9664",
+            ),
+            "zh": ("\u9759\u97f3", "\u53d6\u6d88\u9759\u97f3"),
+        }
+        for language, translations in TEXT.items():
+            with self.subTest(language=language):
+                self.assertEqual(
+                    (translations["mute"], translations["unmute"]),
+                    expected[language],
+                )
 
     def test_color_theme_names_include_pink_for_all_languages(self) -> None:
         for language, theme_names in COLOR_THEME_NAMES.items():

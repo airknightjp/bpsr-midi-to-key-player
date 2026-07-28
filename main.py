@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 from app_controller import AppController
 from process_lifecycle import initialize_process_job
 from qt_main_window import MidiMainWindow
+from qt_styles import FastTooltipStyle
 from single_instance import SingleInstance
 from software_synth import shutdown_software_synth
 
@@ -36,7 +37,8 @@ def main() -> int:
     application = QApplication(sys.argv)
     application.setApplicationName(APP_WINDOW_TITLE)
     application.setOrganizationName("airknightjp")
-    application.setStyle("Fusion")
+    tooltip_style = FastTooltipStyle("Fusion")
+    application.setStyle(tooltip_style)
     controller = AppController()
     window = MidiMainWindow(controller)
     window.resize(controller.state.window_width, controller.state.window_height)

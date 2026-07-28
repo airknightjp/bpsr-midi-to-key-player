@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QEvent, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QCloseEvent, QColor, QDesktopServices, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -60,6 +60,8 @@ from qt_components import (
     ColumnSeparatorHeaderView,
     ContentPanel,
     FallingNotesWidget,
+    HorizontalMarqueeLabel,
+    HorizontalSliderValueControl,
     InteractiveIconButton,
     KnobValueControl,
     PanelDragHandle,
@@ -72,6 +74,7 @@ from qt_components import (
     make_feature_icon,
     make_refresh_icon,
     make_transport_icon,
+    make_volume_icon,
 )
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 from update_service import (
@@ -87,6 +90,7 @@ from update_service import (
 APP_VERSION = "1.6.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
+PLAYER_KNOB_DIAMETER = 33
 KEYBOARD_PANEL_HEIGHT = 71
 KEYBOARD_PANEL_MARGIN = 7
 
@@ -135,26 +139,18 @@ class MidiMainWindow(QMainWindow):
         self._rendered_time_text: str | None = None
         self._available_update: AvailableUpdate | None = None
         self._manual_update_check = False
+        self._volume_before_mute = max(
+            1,
+            int(controller.state.midi_sound_volume or 80),
+        )
         self._build_ui()
+        self._configure_focus_sinks()
         self._midi_reload_feedback_timer = QTimer(self)
         self._midi_reload_feedback_timer.setSingleShot(True)
         self._midi_reload_feedback_timer.setInterval(250)
         self._midi_reload_feedback_timer.timeout.connect(
             lambda: self._set_midi_reload_feedback(False)
         )
-        self._focus_clear_controls = (
-            self.arrangement_quality_combo,
-            self.sound_source_combo,
-            self.audio_qt_combo,
-            self.audio_buffer_combo,
-            self.shortcut_start_edit,
-            self.shortcut_pause_edit,
-            self.shortcut_end_edit,
-        )
-        application = QApplication.instance()
-        self._focus_filter_installed = application is not None
-        if application is not None:
-            application.installEventFilter(self)
         self._create_tray_icon()
         self.update_service = UpdateService(self)
         self.update_service.checkCompleted.connect(
@@ -307,6 +303,21 @@ class MidiMainWindow(QMainWindow):
         gap = QWidget()
         gap.setFixedHeight(height)
         return gap
+
+    def _configure_focus_sinks(self) -> None:
+        for widget in (
+            self.root_background,
+            self.conversion_control_panel,
+            self.conversion_mode_panel,
+            self.realtime_panel,
+            self.key_panel,
+            self.settings_panel,
+            self.piano_roll_panel,
+            self.settings_lower_panel,
+            self.player_panel,
+            *self._panel_gaps,
+        ):
+            widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
     def _setup_panel_reordering(self) -> None:
         self._panel_widgets = {
@@ -707,6 +718,13 @@ class MidiMainWindow(QMainWindow):
         self.player_header_layout = QGridLayout(self.player_header)
         self.player_header_layout.setContentsMargins(0, 0, 0, 0)
         self.player_header_layout.setSpacing(0)
+        self.transport_controls_panel = QFrame(self.player_header)
+        self.transport_controls_panel.setObjectName(
+            "PlayerControlsPanel"
+        )
+        self.transport_controls_panel.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
 
         position_row = QHBoxLayout()
         position_row.setContentsMargins(0, 0, 0, 0)
@@ -727,23 +745,25 @@ class MidiMainWindow(QMainWindow):
         slider_layout.setSpacing(2)
         slider_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.slider_layout = slider_layout
-        self.volume_control = KnobValueControl(
+        self.volume_control = HorizontalSliderValueControl(
             0,
             100,
             80,
-            horizontal=True,
-            horizontal_knob_size=COMPACT_KNOB_DIAMETER,
-            horizontal_minimum_width=62,
         )
-        self.volume_control.valueChanged.connect(lambda value: self._set_option("midi_sound_volume", value))
-        self.volume_control.resetRequested.connect(lambda: self._set_option("midi_sound_volume", 100))
+        self.volume_control.valueChanged.connect(
+            self._volume_value_changed
+        )
+        self.volume_control.muteRequested.connect(self._toggle_volume_mute)
         self.speed_control = KnobValueControl(
             10,
             200,
             100,
             horizontal=True,
-            horizontal_knob_size=COMPACT_KNOB_DIAMETER,
-            horizontal_minimum_width=62,
+            horizontal_knob_size=PLAYER_KNOB_DIAMETER,
+            horizontal_minimum_width=46,
+            label_below=True,
+            show_label=False,
+            reset_on_knob_double_click=True,
         )
         self.speed_control.valueChanged.connect(lambda value: self._set_option("playback_speed_percent", value))
         self.speed_control.resetRequested.connect(lambda: self._set_option("playback_speed_percent", 100))
@@ -798,8 +818,11 @@ class MidiMainWindow(QMainWindow):
             12,
             0,
             horizontal=True,
-            horizontal_knob_size=COMPACT_KNOB_DIAMETER,
-            horizontal_minimum_width=86,
+            horizontal_knob_size=PLAYER_KNOB_DIAMETER,
+            horizontal_minimum_width=46,
+            label_below=True,
+            show_label=False,
+            reset_on_knob_double_click=True,
         )
         self.transpose_control.valueChanged.connect(
             lambda value: self._set_option("transpose_semitones", value)
@@ -812,8 +835,11 @@ class MidiMainWindow(QMainWindow):
             3,
             0,
             horizontal=True,
-            horizontal_knob_size=COMPACT_KNOB_DIAMETER,
-            horizontal_minimum_width=86,
+            horizontal_knob_size=PLAYER_KNOB_DIAMETER,
+            horizontal_minimum_width=46,
+            label_below=True,
+            show_label=False,
+            reset_on_knob_double_click=True,
         )
         self.octave_control.valueChanged.connect(
             lambda value: self._set_option("octave_shift", value)
@@ -827,12 +853,11 @@ class MidiMainWindow(QMainWindow):
         transform_layout.setSpacing(0)
         self.transform_layout = transform_layout
         transform_layout.addWidget(self.transpose_control)
-        transform_layout.addSpacing(12)
         transform_layout.addWidget(self.octave_control)
 
         transport = QHBoxLayout()
         transport.setContentsMargins(0, 0, 0, 0)
-        transport.setSpacing(1)
+        transport.setSpacing(0)
         self.transport_layout = transport
         self.previous_track_button = self._make_player_transport_button(
             self.controller.select_previous_midi
@@ -846,37 +871,115 @@ class MidiMainWindow(QMainWindow):
         self.sound_playback_mode_button = self._make_player_transport_button(
             self.controller.cycle_sound_playback_mode
         )
+        self.playlist_button = self._make_player_transport_button(None)
         self.transport_left = QWidget()
         transport_left_layout = QHBoxLayout(self.transport_left)
         transport_left_layout.setContentsMargins(0, 0, 0, 0)
         transport_left_layout.setSpacing(0)
         transport_left_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.transport_left_layout = transport_left_layout
-        transport_left_layout.addWidget(self.volume_control)
-        transport_left_layout.addStretch(1)
         transport_left_layout.addWidget(self.slider_pane)
-        transport_left_layout.addSpacing(1)
-        transport_left_layout.addWidget(self.previous_track_button)
+        transport_left_layout.addWidget(self.transform_controls)
 
         self.transport_right = QWidget()
         transport_right_layout = QHBoxLayout(self.transport_right)
         transport_right_layout.setContentsMargins(0, 0, 0, 0)
         transport_right_layout.setSpacing(0)
-        transport_right_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        transport_right_layout.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
         self.transport_right_layout = transport_right_layout
-        transport_right_layout.addWidget(self.next_track_button)
-        transport_right_layout.addSpacing(1)
         transport_right_layout.addWidget(self.sound_playback_mode_button)
         transport_right_layout.addSpacing(1)
-        transport_right_layout.addWidget(self.transform_controls)
-        transport_right_layout.addStretch(1)
+        transport_right_layout.addWidget(self.previous_track_button)
+        transport_right_layout.addSpacing(1)
+        transport_right_layout.addWidget(self.sound_play_pause_button)
+        transport_right_layout.addSpacing(1)
+        transport_right_layout.addWidget(self.next_track_button)
+        transport_right_layout.addSpacing(1)
+        transport_right_layout.addWidget(self.playlist_button)
+        self.current_track_marquee = HorizontalMarqueeLabel()
+        self.current_track_marquee.setObjectName("CurrentTrackMarquee")
+        current_track_marquee_row = QHBoxLayout()
+        current_track_marquee_row.setContentsMargins(0, 0, 0, 0)
+        current_track_marquee_row.setSpacing(0)
+        self.current_track_marquee_row = current_track_marquee_row
+        current_track_marquee_row.addSpacing(0)
+        current_track_marquee_row.addWidget(
+            self.current_track_marquee,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        current_track_marquee_row.addStretch(1)
+        self.player_header_layout.addLayout(
+            current_track_marquee_row,
+            0,
+            0,
+            2,
+            1,
+            Qt.AlignmentFlag.AlignBottom,
+        )
+        self.volume_title_stack = QWidget()
+        volume_title_layout = QVBoxLayout(self.volume_title_stack)
+        volume_title_layout.setContentsMargins(0, 0, 0, 0)
+        volume_title_layout.setSpacing(0)
+        volume_title_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.volume_title_layout = volume_title_layout
+        volume_title_layout.addWidget(self.volume_control)
 
-        transport.addStretch(1)
-        transport.addWidget(self.transport_left)
-        transport.addWidget(self.sound_play_pause_button)
-        transport.addWidget(self.transport_right)
+        transport_panel_row = QHBoxLayout()
+        transport_panel_row.setContentsMargins(0, 0, 0, 0)
+        transport_panel_row.setSpacing(0)
+        self.transport_panel_row = transport_panel_row
+        transport_panel_row.addSpacing(0)
+        transport_panel_row.addWidget(
+            self.transport_controls_panel,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        transport_panel_row.addStretch(1)
+        self.player_header_layout.addLayout(
+            transport_panel_row,
+            0,
+            0,
+            2,
+            1,
+            Qt.AlignmentFlag.AlignBottom,
+        )
+
+        transport.addSpacing(0)
+        transport.addWidget(
+            self.transport_left,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
         transport.addStretch(1)
         self.player_header_layout.addLayout(transport, 1, 0)
+        transport_center_row = QHBoxLayout()
+        transport_center_row.setContentsMargins(0, 0, 0, 0)
+        transport_center_row.setSpacing(0)
+        self.transport_center_row = transport_center_row
+        transport_center_row.addStretch(1)
+        transport_center_row.addSpacing(0)
+        transport_center_row.addWidget(
+            self.transport_right,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        transport_center_row.addSpacing(0)
+        transport_center_row.addWidget(
+            self.volume_title_stack,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        transport_center_row.addSpacing(0)
+        transport_center_row.addStretch(1)
+        self.player_header_layout.addLayout(
+            transport_center_row,
+            1,
+            0,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+        )
 
         self.player_layout.addWidget(self.player_header)
         self.player_body_gap = self._make_gap(0)
@@ -999,13 +1102,21 @@ class MidiMainWindow(QMainWindow):
         self.player_layout.addLayout(body, 1)
 
     @staticmethod
-    def _make_player_transport_button(callback) -> InteractiveIconButton:  # type: ignore[no-untyped-def]
+    def _make_player_transport_button(callback=None) -> InteractiveIconButton:  # type: ignore[no-untyped-def]
         button = InteractiveIconButton()
         button.setObjectName("PlayerTransportButton")
         button.setText("")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.set_interaction_scaling_enabled(False)
-        button.clicked.connect(callback)
+        if callback is None:
+            button.setCursor(Qt.CursorShape.ArrowCursor)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                True,
+            )
+        else:
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(callback)
         return button
 
     def _create_tray_icon(self) -> None:
@@ -1261,6 +1372,8 @@ class MidiMainWindow(QMainWindow):
                     )
             player_controls_signature = (
                 state.language,
+                state.color_theme,
+                state.ui_scale_percent,
                 state.midi_sound_volume,
                 state.playback_speed_percent,
                 state.transpose_semitones,
@@ -1363,10 +1476,15 @@ class MidiMainWindow(QMainWindow):
         self.previous_track_button.setAccessibleName(text["previous_track"])
         self.next_track_button.setToolTip(text["next_track"])
         self.next_track_button.setAccessibleName(text["next_track"])
-        self.volume_control.label.setText(text["midi_sound_volume"])
-        self.speed_control.label.setText(text["playback_speed"])
-        self.transpose_control.label.setText(text["transpose_semitones"])
-        self.octave_control.label.setText(text["octave_shift"])
+        self.playlist_button.setToolTip(text["playlist"])
+        self.playlist_button.setAccessibleName(text["playlist"])
+        for knob, label in (
+            (self.speed_control.knob, text["playback_speed"]),
+            (self.transpose_control.knob, text["transpose_semitones"]),
+            (self.octave_control.knob, text["octave_shift"]),
+        ):
+            knob.setToolTip(label)
+            knob.setAccessibleName(label)
         self.sound_source_label.setText(text["sound_source"])
         self.use_arrangement_check.setText(text["use_piano_arrangement"])
         self.arrangement_quality_combo.setToolTip(
@@ -1478,21 +1596,85 @@ class MidiMainWindow(QMainWindow):
         self.output_keyboard.apply_scale(scale)
         self.piano_roll.apply_scale(scale)
         self.player_header_layout.setSpacing(0)
-        self.player_header_layout.setRowMinimumHeight(2, px(10))
-        self.position_row_layout.setSpacing(px(6))
-        self.transport_layout.setSpacing(px(1))
+        self.player_header.setFixedHeight(px(70))
+        self.player_header_layout.setRowMinimumHeight(1, px(40))
+        self.player_header_layout.setRowMinimumHeight(2, 0)
+        self.position_row_layout.setSpacing(px(1))
+        self.transport_layout.setSpacing(0)
         self.position_slider.setFixedHeight(px(24))
         self.time_label.setFixedWidth(px(80))
-        transport_button_width = px(24)
-        transport_button_height = px(28)
+        list_control_height = px(28)
+        transport_button_width = px(36)
+        transport_button_height = px(36)
         for button in (
             self.previous_track_button,
             self.sound_play_pause_button,
             self.next_track_button,
             self.sound_playback_mode_button,
+            self.playlist_button,
         ):
             button.setFixedSize(transport_button_width, transport_button_height)
+        volume_gap_before = px(12)
+        volume_gap_after = px(8)
         self.volume_control.apply_scale(scale)
+        volume_stack_width = self.volume_control.width()
+        current_track_height = max(
+            1,
+            self.player_header.height()
+            - self.position_slider.height()
+            - list_control_height,
+        )
+        self.current_track_marquee.setFixedHeight(
+            current_track_height
+        )
+        self.current_track_marquee_row.setContentsMargins(
+            0,
+            0,
+            0,
+            max(
+                0,
+                transport_button_height
+                + px(4)
+                + px(5)
+                - current_track_height,
+            ),
+        )
+        self.volume_control.setFixedHeight(px(24))
+        self.volume_title_layout.setSpacing(0)
+        self.volume_title_stack.setFixedSize(
+            volume_stack_width,
+            transport_button_height,
+        )
+        self.transport_controls_panel.setFixedHeight(
+            transport_button_height + px(4)
+        )
+        self.transport_panel_row.setContentsMargins(
+            0,
+            0,
+            0,
+            px(2),
+        )
+        self.current_track_marquee.apply_scale(scale)
+        right_side_width = (
+            volume_stack_width
+            + volume_gap_before
+            + volume_gap_after
+        )
+        self._set_spacer_width(
+            self.transport_center_row,
+            1,
+            right_side_width,
+        )
+        self._set_spacer_width(
+            self.transport_center_row,
+            3,
+            volume_gap_before,
+        )
+        self._set_spacer_width(
+            self.transport_center_row,
+            5,
+            volume_gap_after,
+        )
         self.speed_control.apply_scale(scale)
         self.audio_runtime_widget.setFixedHeight(px(24))
         self.audio_runtime_layout.setContentsMargins(0, 0, px(8), 0)
@@ -1504,32 +1686,35 @@ class MidiMainWindow(QMainWindow):
         self.transpose_control.apply_scale(scale)
         self.octave_control.apply_scale(scale)
         self.transform_layout.setContentsMargins(0, 0, 0, 0)
-        self._set_spacer_width(self.transform_layout, 1, px(12))
         self.transform_controls.setFixedWidth(
             self.transpose_control.width()
             + self.octave_control.width()
-            + px(12)
         )
         self.track_channels.apply_scale(scale)
         self.track_channel_container.setFixedWidth(self.track_channels.width())
-        player_control_height = px(36)
-        list_control_height = px(28)
         self.track_channel_layout.setContentsMargins(
             0,
             0,
             0,
             0,
         )
+        for control in (
+            self.speed_control,
+            self.transpose_control,
+            self.octave_control,
+        ):
+            control.setFixedHeight(transport_button_height)
         self.tab_bar.setFixedHeight(list_control_height)
         self.tab_bar_container.setFixedHeight(list_control_height)
         self.tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.slider_pane.setFixedHeight(player_control_height)
-        self.transform_controls.setFixedHeight(player_control_height)
-        self.transport_left.setFixedHeight(player_control_height)
-        self.transport_right.setFixedHeight(player_control_height)
-        self._set_spacer_width(self.transport_left_layout, 3, px(1))
+        self.slider_pane.setFixedHeight(transport_button_height)
+        self.transform_controls.setFixedHeight(transport_button_height)
+        self.transport_left.setFixedHeight(transport_button_height)
+        self.transport_right.setFixedHeight(transport_button_height)
         self._set_spacer_width(self.transport_right_layout, 1, px(1))
         self._set_spacer_width(self.transport_right_layout, 3, px(1))
+        self._set_spacer_width(self.transport_right_layout, 5, px(1))
+        self._set_spacer_width(self.transport_right_layout, 7, px(1))
         self._update_transport_side_widths(scale)
         self.sound_source_controls.setFixedHeight(list_control_height)
         self.arrangement_controls.setFixedHeight(px(28))
@@ -1540,6 +1725,20 @@ class MidiMainWindow(QMainWindow):
         self.sound_source_combo.setFixedWidth(px(138))
         self.sound_source_layout.setContentsMargins(0, 0, 0, px(2))
         self.sound_source_layout.setSpacing(px(4))
+        sound_source_width = self.sound_source_controls.sizeHint().width()
+        player_header_safety_gap = px(8)
+        self.player_header.setMinimumWidth(
+            (
+                2
+                * (
+                    sound_source_width
+                    + player_header_safety_gap
+                    + volume_gap_before
+                    + volume_stack_width
+                )
+                + self.transport_right.width()
+            )
+        )
         self.player_detail_gap.setFixedWidth(px(2))
         self.tab_row.setContentsMargins(
             self.track_channels.width() + self.player_detail_gap.width(),
@@ -1634,7 +1833,6 @@ class MidiMainWindow(QMainWindow):
         )
         self.midi_header.set_separator_color(palette.border)
         for control in (
-            self.volume_control,
             self.speed_control,
             self.transpose_control,
             self.octave_control,
@@ -1696,87 +1894,65 @@ class MidiMainWindow(QMainWindow):
 
     def _update_transport_side_widths(self, scale: float) -> None:
         gap = max(1, round(scale))
-        self._set_spacer_width(self.transport_left_layout, 3, gap)
         left_content_width = (
-            self.volume_control.width()
-            + self.slider_pane.width()
-            + gap
-            + self.previous_track_button.minimumWidth()
-        )
-        right_content_width = (
-            self.next_track_button.minimumWidth()
-            + gap
-            + self.sound_playback_mode_button.minimumWidth()
-            + gap
+            self.slider_pane.width()
             + self.transform_controls.width()
         )
-        volume_knob_offset = (
-            self.volume_control.width()
-            - self.volume_control.knob.width()
-            + self.volume_control.knob.rect().center().x()
+        right_content_width = (
+            self.sound_playback_mode_button.minimumWidth()
+            + self.previous_track_button.minimumWidth()
+            + self.sound_play_pause_button.minimumWidth()
+            + self.next_track_button.minimumWidth()
+            + self.playlist_button.minimumWidth()
+            + gap * 4
         )
-        octave_knob_offset = (
-            right_content_width
-            - self.octave_control.knob.width()
-            + self.octave_control.knob.rect().center().x()
+        knob_to_repeat_gap = max(1, round(8 * scale))
+        marquee_to_knob_gap = max(1, round(14 * scale))
+        panel_to_knob_lead = max(1, round(4 * scale))
+        centered_transport_left = (
+            self.player_header.width() - right_content_width
+        ) / 2
+        knob_offset = round(
+            centered_transport_left
+            - knob_to_repeat_gap
+            - left_content_width
         )
-        mirrored_side_width = volume_knob_offset + octave_knob_offset + gap
-        transport_side_width = max(
-            left_content_width,
-            right_content_width,
-            mirrored_side_width,
+        marquee_offset = 0
+        marquee_width = max(
+            1,
+            knob_offset - marquee_to_knob_gap - marquee_offset,
         )
-        self.transport_left.setFixedWidth(transport_side_width)
-        self.transport_right.setFixedWidth(transport_side_width)
-        self.volume_control.layout().activate()
-        self.octave_control.layout().activate()
-        self.transform_layout.activate()
-        self.transport_left_layout.activate()
-        self.transport_right_layout.activate()
-        volume_center = self.volume_control.knob.mapTo(
-            self.transport_left,
-            self.volume_control.knob.rect().center(),
-        ).x()
-        octave_center = self.octave_control.knob.mapTo(
-            self.transport_right,
-            self.octave_control.knob.rect().center(),
-        ).x()
-        measured_side_width = volume_center + octave_center + gap
-        if measured_side_width > transport_side_width:
-            self.transport_left.setFixedWidth(measured_side_width)
-            self.transport_right.setFixedWidth(measured_side_width)
-            self.transport_left_layout.activate()
-            self.transport_right_layout.activate()
-        volume_center = self.volume_control.knob.mapTo(
-            self.transport_left,
-            self.volume_control.knob.rect().center(),
-        ).x()
-        octave_center = self.octave_control.knob.mapTo(
-            self.transport_right,
-            self.octave_control.knob.rect().center(),
-        ).x()
-        speed_center = self.speed_control.knob.mapTo(
-            self.transport_left,
-            self.speed_control.knob.rect().center(),
-        ).x()
-        transpose_center = self.transpose_control.knob.mapTo(
-            self.transport_right,
-            self.transpose_control.knob.rect().center(),
-        ).x()
-        speed_gap = max(
-            gap,
-            gap
-            + speed_center
-            + transpose_center
-            - volume_center
-            - octave_center,
+        self.current_track_marquee.setFixedWidth(marquee_width)
+        self._set_spacer_width(
+            self.current_track_marquee_row,
+            0,
+            marquee_offset,
         )
         self._set_spacer_width(
-            self.transport_left_layout,
-            3,
-            speed_gap,
+            self.transport_layout,
+            0,
+            knob_offset,
         )
-        self.transport_left_layout.activate()
+        panel_padding = max(1, round(6 * scale))
+        volume_gap_before = max(1, round(12 * scale))
+        panel_offset = knob_offset - panel_to_knob_lead
+        panel_right = (
+            centered_transport_left
+            + right_content_width
+            + volume_gap_before
+            + self.volume_title_stack.width()
+            + panel_padding
+        )
+        self.transport_controls_panel.setFixedWidth(
+            max(1, round(panel_right - panel_offset))
+        )
+        self._set_spacer_width(
+            self.transport_panel_row,
+            0,
+            panel_offset,
+        )
+        self.transport_left.setFixedWidth(left_content_width)
+        self.transport_right.setFixedWidth(right_content_width)
 
     @staticmethod
     def _effective_section_visibility(state: AppState) -> tuple[bool, ...]:
@@ -2077,6 +2253,28 @@ class MidiMainWindow(QMainWindow):
 
     def _render_player_controls(self, state: AppState) -> None:
         self.volume_control.set_value(state.midi_sound_volume)
+        if state.midi_sound_volume > 0:
+            self._volume_before_mute = state.midi_sound_volume
+        text = TEXT[state.language]
+        palette = THEMES.get(state.color_theme, THEMES["sky_blue"])
+        muted = state.midi_sound_volume == 0
+        mute_text = text["unmute"] if muted else text["mute"]
+        self.volume_control.mute_button.setToolTip(mute_text)
+        self.volume_control.mute_button.setAccessibleName(mute_text)
+        volume_icon_size = max(
+            16,
+            round(20 * state.ui_scale_percent / 100),
+        )
+        self.volume_control.mute_button.setIcon(
+            make_volume_icon(
+                muted,
+                palette.muted if muted else palette.text,
+                volume_icon_size,
+            )
+        )
+        self.volume_control.mute_button.set_base_icon_size(
+            QSize(volume_icon_size, volume_icon_size)
+        )
         self.speed_control.set_value(state.playback_speed_percent)
         self.transpose_control.set_value(state.transpose_semitones)
         self.octave_control.set_value(state.octave_shift)
@@ -2157,8 +2355,15 @@ class MidiMainWindow(QMainWindow):
             mode_text = text["playback_mode_off"]
         self.sound_playback_mode_button.setToolTip(mode_text)
         self.sound_playback_mode_button.setAccessibleName(mode_text)
+        current_track_name = ""
+        if (
+            state.current_mode in {"sound", "sound_paused"}
+            and 0 <= selected < row_count
+        ):
+            current_track_name = state.midi_rows[selected].name
+        self.current_track_marquee.setText(current_track_name)
 
-        icon_size = max(16, round(20 * state.ui_scale_percent / 100))
+        icon_size = max(26, round(34 * state.ui_scale_percent / 100))
         navigation_color = palette.text
         disabled_color = palette.disabled
         button_icons = (
@@ -2189,6 +2394,11 @@ class MidiMainWindow(QMainWindow):
                 palette.accent
                 if mode != SOUND_PLAYBACK_MODE_OFF
                 else navigation_color,
+            ),
+            (
+                self.playlist_button,
+                "playlist",
+                navigation_color,
             ),
         )
         for button, action, color in button_icons:
@@ -2436,6 +2646,22 @@ class MidiMainWindow(QMainWindow):
         if not self._rendering:
             self.controller.set_option(name, value)
 
+    def _volume_value_changed(self, value: int) -> None:
+        if value > 0:
+            self._volume_before_mute = value
+        self._set_option("midi_sound_volume", value)
+
+    def _toggle_volume_mute(self) -> None:
+        current_volume = self.controller.state.midi_sound_volume
+        if current_volume > 0:
+            self._volume_before_mute = current_volume
+            self._set_option("midi_sound_volume", 0)
+        else:
+            self._set_option(
+                "midi_sound_volume",
+                max(1, self._volume_before_mute),
+            )
+
     def _set_audio_combo_option(
         self,
         name: str,
@@ -2444,36 +2670,6 @@ class MidiMainWindow(QMainWindow):
         value = combo.currentData()
         if value is not None:
             self._set_option(name, value)
-
-    def eventFilter(self, watched, event) -> bool:  # type: ignore[no-untyped-def]
-        if event.type() == QEvent.Type.MouseButtonPress:
-            self._clear_input_focus_for_external_click(watched)
-        return super().eventFilter(watched, event)
-
-    def _clear_input_focus_for_external_click(self, watched: object) -> None:
-        focused_widget = QApplication.focusWidget()
-        focused_control = self._containing_focus_clear_control(focused_widget)
-        if focused_control is None:
-            return
-        if self._containing_focus_clear_control(watched) is focused_control:
-            return
-        if focused_widget is not None:
-            focused_widget.clearFocus()
-        focused_control.clearFocus()
-
-    def _containing_focus_clear_control(self, widget: object) -> QWidget | None:
-        current = widget if isinstance(widget, QWidget) else None
-        while current is not None:
-            for control in self._focus_clear_controls:
-                if current is control:
-                    return control
-                if isinstance(control, QComboBox) and (
-                    current is control.view()
-                    or current is control.view().viewport()
-                ):
-                    return control
-            current = current.parentWidget()
-        return None
 
     def _choose_midi_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, TEXT[self.state.language]["load_midi"])
@@ -2800,15 +2996,14 @@ class MidiMainWindow(QMainWindow):
         self._closing_for_exit = True
         self.controller.set_event_notifier(None)
         self._output_note_release_timer.stop()
-        if self._focus_filter_installed:
-            application = QApplication.instance()
-            if application is not None:
-                application.removeEventFilter(self)
-            self._focus_filter_installed = False
         event.accept()
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
+        if hasattr(self, "transport_layout"):
+            self._update_transport_side_widths(
+                self.state.ui_scale_percent / 100
+            )
         if not self._rendering and self.isVisible() and not self.isMaximized():
             self._sync_full_visibility_height()
             self.controller.set_window_geometry(self.width(), self.height())

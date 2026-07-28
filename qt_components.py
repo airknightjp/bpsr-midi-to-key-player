@@ -221,6 +221,31 @@ def make_transport_icon(action: str, color: str, size: int) -> QIcon:
                 QPointF(size * 0.32, size * 0.68),
                 QPointF(size * 0.68, size * 0.32),
             )
+    elif action == "playlist":
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(
+            QPen(
+                icon_color,
+                max(1.0, size / 15),
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        for y in (0.38, 0.50, 0.62):
+            painter.drawLine(
+                QPointF(size * 0.42, size * y),
+                QPointF(size * 0.68, size * y),
+            )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(icon_color))
+        dot_radius = max(1.0, size * 0.035)
+        for y in (0.38, 0.50, 0.62):
+            painter.drawEllipse(
+                QPointF(size * 0.32, size * y),
+                dot_radius,
+                dot_radius,
+            )
     else:
         painter.drawPolygon(
             QPolygonF(
@@ -230,6 +255,61 @@ def make_transport_icon(action: str, color: str, size: int) -> QIcon:
                     QPointF(size * 0.70, size * 0.50),
                 ]
             )
+        )
+    painter.end()
+    return QIcon(pixmap)
+
+
+def make_volume_icon(muted: bool, color: str, size: int) -> QIcon:
+    size = max(14, size)
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    icon_color = QColor(color)
+    stroke = max(1.25, size / 12)
+    painter.setPen(
+        QPen(
+            icon_color,
+            stroke,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+    )
+    painter.setBrush(QBrush(icon_color))
+    painter.drawPolygon(
+        QPolygonF(
+            [
+                QPointF(size * 0.18, size * 0.42),
+                QPointF(size * 0.34, size * 0.42),
+                QPointF(size * 0.52, size * 0.27),
+                QPointF(size * 0.52, size * 0.73),
+                QPointF(size * 0.34, size * 0.58),
+                QPointF(size * 0.18, size * 0.58),
+            ]
+        )
+    )
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    if muted:
+        painter.drawLine(
+            QPointF(size * 0.63, size * 0.39),
+            QPointF(size * 0.82, size * 0.61),
+        )
+        painter.drawLine(
+            QPointF(size * 0.82, size * 0.39),
+            QPointF(size * 0.63, size * 0.61),
+        )
+    else:
+        painter.drawArc(
+            QRectF(size * 0.51, size * 0.35, size * 0.22, size * 0.30),
+            -50 * 16,
+            100 * 16,
+        )
+        painter.drawArc(
+            QRectF(size * 0.48, size * 0.25, size * 0.42, size * 0.50),
+            -50 * 16,
+            100 * 16,
         )
     painter.end()
     return QIcon(pixmap)
@@ -414,6 +494,85 @@ class InteractiveIconButton(QToolButton):
         width = max(1, round(self._base_icon_size.width() * factor))
         height = max(1, round(self._base_icon_size.height() * factor))
         self.setIconSize(QSize(width, height))
+
+
+class HorizontalMarqueeLabel(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._text = ""
+        self._offset = 0.0
+        self._step = 1.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(32)
+        self._timer.timeout.connect(self._advance)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def scroll_offset(self) -> float:
+        return self._offset
+
+    def setText(self, text: str) -> None:
+        text = str(text)
+        if text == self._text:
+            return
+        self._text = text
+        self.setAccessibleName(text)
+        self._reset_offset()
+        self._sync_timer()
+        self.update()
+
+    def apply_scale(self, scale: float) -> None:
+        self._step = max(1.0, float(scale))
+        self._reset_offset()
+        self.update()
+
+    def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().showEvent(event)
+        self._sync_timer()
+
+    def hideEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
+        if not self._text:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setPen(self.palette().text().color())
+        metrics = painter.fontMetrics()
+        baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2
+        cycle_width = self._cycle_width()
+        painter.drawText(
+            QPointF(self._offset - cycle_width, baseline),
+            self._text,
+        )
+        painter.drawText(QPointF(self._offset, baseline), self._text)
+
+    def _advance(self) -> None:
+        if not self._text:
+            self._timer.stop()
+            return
+        cycle_width = self._cycle_width()
+        self._offset = (self._offset + self._step) % cycle_width
+        self.update()
+
+    def _cycle_width(self) -> float:
+        text_width = self.fontMetrics().horizontalAdvance(self._text)
+        return float(max(1, self.width(), text_width + 12))
+
+    def _reset_offset(self) -> None:
+        self._offset = 0.0
+
+    def _sync_timer(self) -> None:
+        if self._text and self.isVisible():
+            self._timer.start()
+        else:
+            self._timer.stop()
 
 
 class PanelDragHandle(QWidget):
@@ -2718,6 +2877,70 @@ class PositionSlider(QSlider):
         super().mouseReleaseEvent(event)
 
 
+class HorizontalSliderValueControl(QWidget):
+    valueChanged = Signal(int)
+    muteRequested = Signal()
+
+    def __init__(
+        self,
+        minimum: int,
+        maximum: int,
+        value: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.mute_button = InteractiveIconButton()
+        self.mute_button.setObjectName("VolumeMuteButton")
+        self.mute_button.setText("")
+        self.mute_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mute_button.set_interaction_scaling_enabled(False)
+        self.slider = PositionSlider(Qt.Orientation.Horizontal)
+        self.slider.setObjectName("VolumeSlider")
+        self.slider.setRange(minimum, maximum)
+        self.slider.setValue(value)
+        self.slider.setTracking(True)
+        self.value_label = QLabel(str(value))
+        self.value_label.setProperty("caption", True)
+        self.value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        layout.addWidget(self.mute_button)
+        layout.addWidget(self.slider, 1)
+        layout.addWidget(self.value_label)
+        self.slider.valueChanged.connect(self._value_changed)
+        self.mute_button.clicked.connect(self.muteRequested.emit)
+
+    def set_value(self, value: int) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(value)
+        self.slider.blockSignals(False)
+        self.value_label.setText(str(value))
+
+    def apply_scale(self, scale: float) -> None:
+        scale = max(0.5, float(scale))
+        self.layout().setSpacing(max(1, round(3 * scale)))
+        button_size = max(18, round(24 * scale))
+        self.mute_button.setFixedSize(button_size, button_size)
+        self.slider.setFixedWidth(max(48, round(100 * scale)))
+        self.slider.setFixedHeight(max(16, round(24 * scale)))
+        value_width = self.value_label.fontMetrics().horizontalAdvance("100")
+        self.value_label.setFixedWidth(value_width + max(1, round(2 * scale)))
+        self.setFixedWidth(
+            self.mute_button.width()
+            + self.slider.width()
+            + self.value_label.width()
+            + self.layout().spacing() * 2
+        )
+
+    def _value_changed(self, value: int) -> None:
+        self.value_label.setText(str(value))
+        self.valueChanged.emit(value)
+
+
 class RoundKnob(QDial):
     BASE_SIZE = 46
     START_ANGLE = 135.0
@@ -2741,6 +2964,7 @@ class RoundKnob(QDial):
         self._accent_hover = QColor("#1d4ed8")
         self._hovered = False
         self._drag_active = False
+        self._suppress_next_left_release = False
         self._drag_start_y = 0.0
         self._drag_start_value = value
         self._base_size = self.BASE_SIZE
@@ -2818,12 +3042,24 @@ class RoundKnob(QDial):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._suppress_next_left_release
+        ):
+            self._suppress_next_left_release = False
+            self._drag_active = False
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._drag_active:
             self._set_value_from_vertical_drag(event.position().y())
             self._drag_active = False
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def prepare_for_double_click_reset(self) -> None:
+        self._drag_active = False
+        self._suppress_next_left_release = True
 
     def enterEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         self._hovered = True
@@ -2927,44 +3163,76 @@ class KnobValueControl(QWidget):
         horizontal_knob_size: int = 20,
         horizontal_minimum_width: int = 58,
         caption: bool = True,
+        label_below: bool = False,
+        show_label: bool = True,
+        reset_on_knob_double_click: bool = False,
     ) -> None:
         super().__init__(parent)
         self._horizontal = horizontal
+        self._label_below = bool(label_below)
+        self._show_label = bool(show_label)
+        self._reset_on_knob_double_click = bool(
+            reset_on_knob_double_click
+        )
         self._horizontal_knob_size = max(1, int(horizontal_knob_size))
         self._horizontal_minimum_width = max(
             1,
             int(horizontal_minimum_width),
         )
-        layout = QHBoxLayout(self) if horizontal else QVBoxLayout(self)
+        layout = (
+            QHBoxLayout(self)
+            if horizontal and not self._label_below
+            else QVBoxLayout(self)
+        )
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         layout.setAlignment(
-            Qt.AlignmentFlag.AlignVCenter
-            if horizontal
+            Qt.AlignmentFlag.AlignCenter
+            if not self._show_label
+            else Qt.AlignmentFlag.AlignVCenter
+            if horizontal and not self._label_below
             else Qt.AlignmentFlag.AlignHCenter
         )
-        self.label = QLabel()
+        self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setProperty("caption", caption)
-        self.label.installEventFilter(self)
+        self.label.setProperty("knobLabelBelow", self._label_below)
+        if self._show_label:
+            self.label.installEventFilter(self)
+        else:
+            self.label.hide()
         self.knob = RoundKnob(minimum, maximum, value)
-        layout.addWidget(self.label)
+        if self._reset_on_knob_double_click:
+            self.knob.installEventFilter(self)
+        if self._show_label and not self._label_below:
+            layout.addWidget(self.label)
         layout.addWidget(
             self.knob,
             0,
             (
                 Qt.AlignmentFlag.AlignVCenter
-                if horizontal
+                if horizontal and not self._label_below
                 else Qt.AlignmentFlag.AlignHCenter
             ),
         )
+        if self._show_label and self._label_below:
+            layout.addWidget(
+                self.label,
+                0,
+                Qt.AlignmentFlag.AlignHCenter,
+            )
         self.knob.valueChanged.connect(self._emit_value)
 
     def _emit_value(self, value: int) -> None:
         self.valueChanged.emit(value)
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[no-untyped-def]
-        if watched is self.label and event.type() == QEvent.Type.MouseButtonDblClick:
+        reset_target = watched is self.label or (
+            self._reset_on_knob_double_click and watched is self.knob
+        )
+        if reset_target and event.type() == QEvent.Type.MouseButtonDblClick:
+            if watched is self.knob:
+                self.knob.prepare_for_double_click_reset()
             self.resetRequested.emit()
             return True
         return super().eventFilter(watched, event)
@@ -2975,7 +3243,7 @@ class KnobValueControl(QWidget):
         self.knob.blockSignals(False)
 
     def apply_scale(self, scale: float) -> None:
-        spacing = 3 if self._horizontal else 2
+        spacing = 0 if self._label_below else (3 if self._horizontal else 2)
         knob_size = (
             self._horizontal_knob_size
             if self._horizontal
@@ -2985,13 +3253,32 @@ class KnobValueControl(QWidget):
         self.layout().setSpacing(scaled_spacing)
         self.knob.apply_scale(scale, knob_size)
         if self._horizontal:
-            text_width = self.label.fontMetrics().horizontalAdvance(
-                self.label.text()
+            text_width = (
+                self.label.fontMetrics().horizontalAdvance(
+                    self.label.text()
+                )
+                if self._show_label
+                else 0
             )
-            control_width = max(
-                round(self._horizontal_minimum_width * scale),
-                text_width + self.knob.width() + scaled_spacing + round(2 * scale),
-            )
+            if not self._show_label:
+                control_width = max(
+                    round(self._horizontal_minimum_width * scale),
+                    self.knob.width(),
+                )
+            elif self._label_below:
+                control_width = max(
+                    round(self._horizontal_minimum_width * scale),
+                    text_width + round(4 * scale),
+                    self.knob.width(),
+                )
+            else:
+                control_width = max(
+                    round(self._horizontal_minimum_width * scale),
+                    text_width
+                    + self.knob.width()
+                    + scaled_spacing
+                    + round(2 * scale),
+                )
         else:
             control_width = round(68 * scale)
         self.setFixedWidth(max(1, control_width))
