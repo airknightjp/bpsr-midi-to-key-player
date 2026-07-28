@@ -54,6 +54,17 @@ THEMES = {
 }
 
 
+def opaque_rgba(color: str) -> str:
+    value = color.removeprefix("#")
+    if len(value) != 6:
+        raise ValueError(f"Expected #RRGGBB color, got {color!r}")
+    red, green, blue = (
+        int(value[index:index + 2], 16)
+        for index in (0, 2, 4)
+    )
+    return f"rgba({red}, {green}, {blue}, 255)"
+
+
 def register_windows_fonts() -> None:
     if QFontDatabase.families():
         return
@@ -70,6 +81,8 @@ def build_stylesheet(
     scale_percent: int = 100,
 ) -> str:
     palette = THEMES.get(theme_name, THEMES["sky_blue"])
+    player_panel_background = opaque_rgba(palette.panel_alt)
+    player_panel_border = opaque_rgba(palette.border)
     scale = max(1.0, scale_percent / 100)
     font = round(12 * scale)
     small = round(11 * scale)
@@ -203,8 +216,8 @@ def build_stylesheet(
         border-radius: {radius}px;
     }}
     QFrame#PlayerControlsPanel {{
-        background: {palette.panel_alt};
-        border: 1px solid {palette.border};
+        background: {player_panel_background};
+        border: 1px solid {player_panel_border};
         border-radius: {radius}px;
     }}
     QMenuBar {{ background: {palette.panel}; border-bottom: 1px solid {palette.border}; padding: 1px; }}

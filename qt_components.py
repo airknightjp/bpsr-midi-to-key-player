@@ -497,11 +497,17 @@ class InteractiveIconButton(QToolButton):
 
 
 class HorizontalMarqueeLabel(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        scrolling_enabled: bool = True,
+    ) -> None:
         super().__init__(parent)
         self._text = ""
         self._offset = 0.0
         self._step = 1.0
+        self._scrolling_enabled = bool(scrolling_enabled)
         self._timer = QTimer(self)
         self._timer.setInterval(32)
         self._timer.timeout.connect(self._advance)
@@ -514,6 +520,10 @@ class HorizontalMarqueeLabel(QWidget):
     @property
     def scroll_offset(self) -> float:
         return self._offset
+
+    @property
+    def scrolling_enabled(self) -> bool:
+        return self._scrolling_enabled
 
     def setText(self, text: str) -> None:
         text = str(text)
@@ -546,6 +556,9 @@ class HorizontalMarqueeLabel(QWidget):
         painter.setPen(self.palette().text().color())
         metrics = painter.fontMetrics()
         baseline = (self.height() + metrics.ascent() - metrics.descent()) / 2
+        if not self._scrolling_enabled:
+            painter.drawText(QPointF(0.0, baseline), self._text)
+            return
         cycle_width = self._cycle_width()
         painter.drawText(
             QPointF(self._offset - cycle_width, baseline),
@@ -554,7 +567,8 @@ class HorizontalMarqueeLabel(QWidget):
         painter.drawText(QPointF(self._offset, baseline), self._text)
 
     def _advance(self) -> None:
-        if not self._text:
+        if not self._scrolling_enabled or not self._text:
+            self._offset = 0.0
             self._timer.stop()
             return
         cycle_width = self._cycle_width()
@@ -569,7 +583,11 @@ class HorizontalMarqueeLabel(QWidget):
         self._offset = 0.0
 
     def _sync_timer(self) -> None:
-        if self._text and self.isVisible():
+        if (
+            self._scrolling_enabled
+            and self._text
+            and self.isVisible()
+        ):
             self._timer.start()
         else:
             self._timer.stop()

@@ -723,6 +723,9 @@ class MidiMainWindow(QMainWindow):
             "PlayerControlsPanel"
         )
         self.transport_controls_panel.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground
+        )
+        self.transport_controls_panel.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents
         )
 
@@ -898,26 +901,13 @@ class MidiMainWindow(QMainWindow):
         transport_right_layout.addWidget(self.next_track_button)
         transport_right_layout.addSpacing(1)
         transport_right_layout.addWidget(self.playlist_button)
-        self.current_track_marquee = HorizontalMarqueeLabel()
-        self.current_track_marquee.setObjectName("CurrentTrackMarquee")
-        current_track_marquee_row = QHBoxLayout()
-        current_track_marquee_row.setContentsMargins(0, 0, 0, 0)
-        current_track_marquee_row.setSpacing(0)
-        self.current_track_marquee_row = current_track_marquee_row
-        current_track_marquee_row.addSpacing(0)
-        current_track_marquee_row.addWidget(
-            self.current_track_marquee,
-            0,
-            Qt.AlignmentFlag.AlignTop,
+        self.current_track_marquee = HorizontalMarqueeLabel(
+            self.player_panel,
+            scrolling_enabled=False
         )
-        current_track_marquee_row.addStretch(1)
-        self.player_header_layout.addLayout(
-            current_track_marquee_row,
-            0,
-            0,
-            2,
-            1,
-            Qt.AlignmentFlag.AlignBottom,
+        self.current_track_marquee.setObjectName("CurrentTrackMarquee")
+        self.current_track_marquee.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
         )
         self.volume_title_stack = QWidget()
         volume_title_layout = QVBoxLayout(self.volume_title_stack)
@@ -1602,7 +1592,7 @@ class MidiMainWindow(QMainWindow):
         self.position_row_layout.setSpacing(px(1))
         self.transport_layout.setSpacing(0)
         self.position_slider.setFixedHeight(px(24))
-        self.time_label.setFixedWidth(px(80))
+        self.time_label.setFixedWidth(px(72))
         list_control_height = px(28)
         transport_button_width = px(36)
         transport_button_height = px(36)
@@ -1627,17 +1617,11 @@ class MidiMainWindow(QMainWindow):
         self.current_track_marquee.setFixedHeight(
             current_track_height
         )
-        self.current_track_marquee_row.setContentsMargins(
-            0,
-            0,
-            0,
-            max(
-                0,
-                transport_button_height
-                + px(4)
-                + px(5)
-                - current_track_height,
-            ),
+        current_track_font = self.current_track_marquee.font()
+        current_track_font.setPixelSize(px(10))
+        self.current_track_marquee.setFont(current_track_font)
+        self.current_track_marquee.setStyleSheet(
+            f"font-size: {px(10)}px;"
         )
         self.volume_control.setFixedHeight(px(24))
         self.volume_title_layout.setSpacing(0)
@@ -1907,7 +1891,6 @@ class MidiMainWindow(QMainWindow):
             + gap * 4
         )
         knob_to_repeat_gap = max(1, round(8 * scale))
-        marquee_to_knob_gap = max(1, round(14 * scale))
         panel_to_knob_lead = max(1, round(4 * scale))
         centered_transport_left = (
             self.player_header.width() - right_content_width
@@ -1920,14 +1903,18 @@ class MidiMainWindow(QMainWindow):
         marquee_offset = 0
         marquee_width = max(
             1,
-            knob_offset - marquee_to_knob_gap - marquee_offset,
+            self.player_header.width() - marquee_offset,
         )
         self.current_track_marquee.setFixedWidth(marquee_width)
-        self._set_spacer_width(
-            self.current_track_marquee_row,
-            0,
-            marquee_offset,
+        marquee_origin = self.player_header.mapTo(
+            self.player_panel,
+            QPoint(0, 0),
         )
+        self.current_track_marquee.move(
+            marquee_origin.x() + marquee_offset,
+            marquee_origin.y() - round(7 * scale),
+        )
+        self.current_track_marquee.raise_()
         self._set_spacer_width(
             self.transport_layout,
             0,

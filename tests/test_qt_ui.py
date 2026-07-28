@@ -52,6 +52,7 @@ from qt_styles import (
     TOOLTIP_WAKE_UP_DELAY_MS,
     FastTooltipStyle,
     build_stylesheet,
+    opaque_rgba,
 )
 from settings import AppSettings
 from source_colors import track_channel_color
@@ -1702,45 +1703,52 @@ class QtUiTests(unittest.TestCase):
                     self.window,
                     QPoint(0, 0),
                 ).y()
+                seek_top = self.window.position_slider.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).y()
                 seek_bottom = self.window.position_slider.mapTo(
                     self.window,
                     QPoint(0, self.window.position_slider.height()),
-                ).y()
-                tab_top = self.window.tab_bar.mapTo(
-                    self.window,
-                    QPoint(0, 0),
                 ).y()
                 marquee_bottom = (
                     marquee_top
                     + self.window.current_track_marquee.height()
                 )
-                vertical_shift = round(5 * scale / 100)
+                player_header_top = self.window.player_header.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).y()
                 self.assertEqual(
                     marquee_top,
-                    seek_bottom - vertical_shift,
+                    player_header_top - round(7 * scale / 100),
                 )
-                self.assertEqual(
-                    marquee_bottom,
-                    tab_top - vertical_shift,
-                )
+                self.assertLessEqual(marquee_top, seek_top)
+                self.assertGreater(marquee_bottom, seek_top)
+                self.assertLessEqual(marquee_bottom, seek_bottom)
                 self.assertAlmostEqual(
                     self.window.current_track_marquee.height(),
                     round(18 * scale / 100),
                     delta=1,
                 )
+                self.assertEqual(
+                    self.window.current_track_marquee.font().pixelSize(),
+                    round(10 * scale / 100),
+                )
+                self.assertTrue(
+                    self.window.current_track_marquee.testAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                    )
+                )
                 marquee_right = self.window.current_track_marquee.mapTo(
                     self.window,
                     QPoint(self.window.current_track_marquee.width(), 0),
                 ).x()
-                speed_left = self.window.speed_control.mapTo(
+                player_header_right = self.window.player_header.mapTo(
                     self.window,
-                    QPoint(0, 0),
+                    QPoint(self.window.player_header.width(), 0),
                 ).x()
-                self.assertAlmostEqual(
-                    speed_left - marquee_right,
-                    round(14 * scale / 100),
-                    delta=1,
-                )
+                self.assertEqual(marquee_right, player_header_right)
                 player_header_left = self.window.player_header.mapTo(
                     self.window,
                     QPoint(0, 0),
@@ -1750,6 +1758,10 @@ class QtUiTests(unittest.TestCase):
                     QPoint(0, 0),
                 ).x()
                 self.assertEqual(marquee_left, player_header_left)
+                speed_left = self.window.speed_control.mapTo(
+                    self.window,
+                    QPoint(0, 0),
+                ).x()
                 panel_left = self.window.transport_controls_panel.mapTo(
                     self.window,
                     QPoint(0, 0),
@@ -1765,11 +1777,6 @@ class QtUiTests(unittest.TestCase):
                     self.window,
                     QPoint(self.window.volume_control.width(), 0),
                 ).x()
-                self.assertAlmostEqual(
-                    panel_left - marquee_right,
-                    round(10 * scale / 100),
-                    delta=1,
-                )
                 self.assertLessEqual(panel_left, speed_left)
                 self.assertGreaterEqual(panel_right, volume_right)
                 self.assertEqual(
@@ -1875,6 +1882,16 @@ class QtUiTests(unittest.TestCase):
                         self.window.player_header.height(),
                         round(70 * scale / 100),
                     )
+                    self.assertEqual(
+                        self.window.time_label.width(),
+                        round(72 * scale / 100),
+                    )
+                    self.assertGreaterEqual(
+                        self.window.time_label.width(),
+                        self.window.time_label.fontMetrics().horizontalAdvance(
+                            self.window.time_label.text()
+                        ),
+                    )
                     for control in controls:
                         self.assertTrue(control.label.isHidden())
                         self.assertGreaterEqual(
@@ -1886,7 +1903,7 @@ class QtUiTests(unittest.TestCase):
                             control.width() - 1,
                         )
 
-    def test_current_track_name_scrolls_left_to_right_only_during_playback(self) -> None:
+    def test_current_track_name_remains_static_during_playback(self) -> None:
         self.controller.state.midi_rows = [
             MidiListRow(Path("current-song.mid"), "current-song.mid")
         ]
@@ -1898,42 +1915,17 @@ class QtUiTests(unittest.TestCase):
 
         expected_name = self.controller.state.midi_rows[0].name
         self.assertEqual(self.window.current_track_marquee.text, expected_name)
+        self.assertFalse(
+            self.window.current_track_marquee.scrolling_enabled
+        )
         initial_offset = self.window.current_track_marquee.scroll_offset
         self.assertEqual(initial_offset, 0.0)
         self.window.current_track_marquee._advance()
-        self.assertGreater(
+        self.assertEqual(
             self.window.current_track_marquee.scroll_offset,
             initial_offset,
         )
-        self.window.current_track_marquee._timer.stop()
-        text_width = (
-            self.window.current_track_marquee.fontMetrics()
-            .horizontalAdvance(expected_name)
-        )
-        cycle_width = self.window.current_track_marquee._cycle_width()
-        self.assertGreaterEqual(
-            cycle_width,
-            self.window.current_track_marquee.width(),
-        )
-        self.window.current_track_marquee._offset = (
-            self.window.current_track_marquee.width()
-            - text_width / 2
-        )
-        primary_left = self.window.current_track_marquee.scroll_offset
-        wrapped_left = primary_left - cycle_width
-        self.assertGreater(
-            primary_left + text_width,
-            self.window.current_track_marquee.width(),
-        )
-        self.assertLess(wrapped_left, 0)
-        self.assertGreater(wrapped_left + text_width, 0)
-
-        self.window.current_track_marquee._offset = cycle_width - 0.5
-        self.window.current_track_marquee._advance()
-        self.assertLess(
-            self.window.current_track_marquee.scroll_offset,
-            self.window.current_track_marquee._step,
-        )
+        self.assertFalse(self.window.current_track_marquee._timer.isActive())
 
         self.controller.state.current_mode = None
         self.window.render(self.controller.state)
@@ -2968,13 +2960,20 @@ class QtUiTests(unittest.TestCase):
                     1,
                 )[1].split("}", 1)[0]
                 self.assertIn(
-                    f"background: {palette.panel_alt}",
+                    f"background: {opaque_rgba(palette.panel_alt)}",
                     panel_rule,
                 )
                 self.assertIn(
-                    f"border: 1px solid {palette.border}",
+                    f"border: 1px solid {opaque_rgba(palette.border)}",
                     panel_rule,
                 )
+                self.assertIn(", 255)", panel_rule)
+
+        self.assertTrue(
+            self.window.transport_controls_panel.testAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground
+            )
+        )
 
     def test_ocean_background_has_visible_depth_and_surface_detail(self) -> None:
         background = ThemedBackground()
