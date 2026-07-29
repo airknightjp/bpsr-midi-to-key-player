@@ -290,6 +290,7 @@ class UpdateServiceTests(unittest.TestCase):
 
     def test_worker_only_downloads_verifies_and_replaces_payload(self) -> None:
         self.assertNotIn('"settings.json"', _POWERSHELL_UPDATE_WORKER)
+        self.assertNotIn('"playlists.json"', _POWERSHELL_UPDATE_WORKER)
         self.assertIn('$ProgressForm.Show()', _POWERSHELL_UPDATE_WORKER)
         self.assertIn("$Request.GetResponse()", _POWERSHELL_UPDATE_WORKER)
         self.assertIn("Get-FileHash", _POWERSHELL_UPDATE_WORKER)
@@ -316,6 +317,7 @@ class UpdateServiceTests(unittest.TestCase):
 
     def test_supervisor_monitors_rolls_back_cleans_and_restarts(self) -> None:
         self.assertNotIn('"settings.json"', _POWERSHELL_UPDATE_SUPERVISOR)
+        self.assertNotIn('"playlists.json"', _POWERSHELL_UPDATE_SUPERVISOR)
         self.assertNotIn(
             "$Request.GetResponse()",
             _POWERSHELL_UPDATE_SUPERVISOR,

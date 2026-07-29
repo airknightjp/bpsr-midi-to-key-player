@@ -81,6 +81,7 @@ class AppSettings:
     window_width: int = 900
     window_height: int = 560
     midi_column_widths: tuple[int, int, int] = DEFAULT_MIDI_COLUMN_WIDTHS
+    playlist_name_width: int = 240
     last_midi_folder: str = ""
     keyboard_play_shortcut: str = DEFAULT_KEYBOARD_PLAY_SHORTCUT
     keyboard_pause_shortcut: str = DEFAULT_KEYBOARD_PAUSE_SHORTCUT
@@ -229,6 +230,12 @@ def load_settings() -> AppSettings:
         midi_column_widths=normalize_midi_column_widths(
             data.get("midi_column_widths")
         ),
+        playlist_name_width=_clamp_int(
+            data.get("playlist_name_width"),
+            minimum=80,
+            maximum=2000,
+            default=240,
+        ),
         last_midi_folder=_parse_str(data.get("last_midi_folder")),
         keyboard_play_shortcut=keyboard_shortcuts[0],
         keyboard_pause_shortcut=keyboard_shortcuts[1],
@@ -309,6 +316,12 @@ def save_settings(settings: AppSettings) -> None:
             "window_height": settings.window_height,
             "midi_column_widths": list(
                 normalize_midi_column_widths(settings.midi_column_widths)
+            ),
+            "playlist_name_width": _clamp_int(
+                settings.playlist_name_width,
+                minimum=80,
+                maximum=2000,
+                default=240,
             ),
             "last_midi_folder": settings.last_midi_folder,
             "keyboard_play_shortcut": settings.keyboard_play_shortcut,
@@ -391,6 +404,10 @@ def _application_directory() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def application_directory() -> Path:
+    return _application_directory()
 
 
 def _temporary_settings_path(path: Path) -> Path:

@@ -15,6 +15,7 @@ from config import (
     SOUND_PLAYBACK_MODE_REPEAT_ONE,
 )
 from midi_parser import MidiEvent, MidiSummary, MidiTrackSummary
+from playlist_store import Playlist, PlaylistTrack
 from settings import AppSettings
 from source_colors import track_channel_color
 
@@ -804,6 +805,183 @@ class AppControllerTests(unittest.TestCase):
         play_sound.assert_not_called()
         self.assertIsNone(controller.state.current_mode)
         self.assertEqual(controller.state.position, 60.0)
+
+    def test_playlist_natural_end_schedules_next_before_playback_mode(self) -> None:
+        controller = self.make_controller(
+            sound_playback_mode=SOUND_PLAYBACK_MODE_REPEAT_ONE
+        )
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (
+                    PlaylistTrack(Path("first.mid"), "first.mid", "01:00"),
+                    PlaylistTrack(Path("second.mid"), "second.mid", "02:00"),
+                ),
+            )
+        ]
+        controller.state.active_playlist_id = "set"
+        controller.state.playlist_playback_active = True
+        controller.state.playlist_current_track_index = 0
+        controller.sound_player = FakePlayer()
+        controller.state.current_mode = "sound"
+        controller.playback_id = 13
+        controller.worker_queue.put(("sound_state", 13, "sound ended"))
+
+        with (
+            patch.object(
+                controller,
+                "_schedule_next_playlist_track",
+            ) as schedule_next,
+            patch.object(controller, "play_sound") as play_sound,
+        ):
+            controller.process_pending_events()
+
+        schedule_next.assert_called_once_with(1)
+        play_sound.assert_not_called()
+
+    def test_playlist_toggle_stops_regular_midi_before_starting_playlist(self) -> None:
+        controller = self.make_controller()
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (PlaylistTrack(Path("one.mid"), "one.mid", "01:00"),),
+            )
+        ]
+        controller.state.selected_playlist_index = 0
+        controller.state.current_mode = "sound"
+
+        with (
+            patch.object(controller, "stop_playback") as stop_playback,
+            patch.object(
+                controller,
+                "play_selected_playlist",
+            ) as play_selected_playlist,
+        ):
+            controller.toggle_playlist_playback()
+
+        stop_playback.assert_called_once_with()
+        play_selected_playlist.assert_not_called()
+
+    def test_playlist_cannot_start_while_regular_midi_is_playing(self) -> None:
+        controller = self.make_controller()
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (PlaylistTrack(Path("one.mid"), "one.mid", "01:00"),),
+            )
+        ]
+        controller.state.selected_playlist_index = 0
+        controller.state.current_mode = "sound"
+
+        with (
+            patch.object(controller, "stop_playback") as stop_playback,
+            patch.object(controller, "_play_playlist_track") as play_track,
+        ):
+            controller.play_selected_playlist()
+
+        stop_playback.assert_not_called()
+        play_track.assert_not_called()
+        self.assertFalse(controller.state.playlist_playback_active)
+
+    def test_playlist_can_start_from_paused_regular_midi(self) -> None:
+        controller = self.make_controller()
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (PlaylistTrack(Path("one.mid"), "one.mid", "01:00"),),
+            )
+        ]
+        controller.state.selected_playlist_index = 0
+        controller.state.current_mode = "sound_paused"
+
+        with (
+            patch.object(controller, "stop_playback") as stop_playback,
+            patch.object(controller, "_play_playlist_track") as play_track,
+        ):
+            controller.play_selected_playlist()
+
+        stop_playback.assert_called_once_with()
+        play_track.assert_called_once_with(0)
+        self.assertTrue(controller.state.playlist_playback_active)
+
+    def test_playlist_final_track_completes_and_stops(self) -> None:
+        controller = self.make_controller(
+            sound_playback_mode=SOUND_PLAYBACK_MODE_CONTINUOUS
+        )
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (PlaylistTrack(Path("only.mid"), "only.mid", "01:00"),),
+            )
+        ]
+        controller.state.active_playlist_id = "set"
+        controller.state.playlist_playback_active = True
+        controller.state.playlist_current_track_index = 0
+        controller.sound_player = FakePlayer()
+        controller.state.current_mode = "sound"
+        controller.playback_id = 15
+        controller.worker_queue.put(("sound_state", 15, "sound ended"))
+
+        with patch.object(controller, "play_sound") as play_sound:
+            controller.process_pending_events()
+
+        play_sound.assert_not_called()
+        self.assertFalse(controller.state.playlist_playback_active)
+        self.assertTrue(controller.state.playlist_completed)
+        self.assertEqual(controller.state.playlist_current_track_index, 1)
+        self.assertIsNone(controller.state.current_mode)
+
+    def test_playlist_countdown_uses_existing_countdown_settings(self) -> None:
+        controller = self.make_controller(
+            countdown_seconds=2,
+            countdown_sound=True,
+        )
+        cancel_event = MagicMock()
+        cancel_event.is_set.return_value = False
+        cancel_event.wait.return_value = False
+
+        with patch.object(controller, "_play_countdown_tick") as tick:
+            controller._playlist_countdown_worker(
+                4,
+                1,
+                2,
+                cancel_event,
+            )
+
+        self.assertEqual(tick.call_args_list, [call(2), call(1)])
+        self.assertEqual(cancel_event.wait.call_args_list, [call(1.0), call(1.0)])
+        self.assertEqual(
+            controller.worker_queue.get_nowait(),
+            ("playlist_next", 4, 1),
+        )
+
+    def test_playlist_zero_second_transition_has_no_countdown(self) -> None:
+        controller = self.make_controller(
+            countdown_seconds=0,
+            countdown_sound=True,
+            game_countdown_sound=True,
+        )
+        cancel_event = MagicMock()
+
+        with patch.object(controller, "_play_countdown_tick") as tick:
+            controller._playlist_countdown_worker(
+                5,
+                2,
+                0,
+                cancel_event,
+            )
+
+        tick.assert_not_called()
+        cancel_event.wait.assert_not_called()
+        self.assertEqual(
+            controller.worker_queue.get_nowait(),
+            ("playlist_next", 5, 2),
+        )
 
     def test_common_input_conversion_toggle_dispatches_selected_mode(self) -> None:
         controller = self.make_controller(input_conversion_mode="realtime")

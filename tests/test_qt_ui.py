@@ -37,8 +37,10 @@ from config import (
 from i18n import TEXT
 from midi_parser import MidiEvent, MidiSummary, MidiTrackSummary
 from note_visualization import PianoRollNote
+from playlist_store import Playlist, PlaylistTrack
 from qt_main_window import KeyBindingsDialog, MidiMainWindow
 from qt_components import (
+    ColumnSeparatorHeaderView,
     ContentPanel,
     FallingNotesWidget,
     InteractiveIconButton,
@@ -158,8 +160,221 @@ class QtUiTests(unittest.TestCase):
             self.window.render_position(1.0, 120.0)
             set_text.assert_called_once_with("00:01 / 02:00")
 
-    def test_player_has_only_the_midi_list_tab(self) -> None:
-        self.assertEqual(self.window.tab_bar.count(), 1)
+    def test_player_has_midi_and_playlist_tabs(self) -> None:
+        self.assertEqual(self.window.tab_bar.count(), 2)
+        self.assertEqual(self.window.player_content_stack.count(), 2)
+        self.assertFalse(self.window.tab_bar.usesScrollButtons())
+        self.assertTrue(self.window.playlist_list.alternatingRowColors())
+        self.assertTrue(
+            self.window.playlist_track_table.alternatingRowColors()
+        )
+        self.assertIsInstance(
+            self.window.playlist_list.horizontalHeader(),
+            ColumnSeparatorHeaderView,
+        )
+        self.assertIsInstance(
+            self.window.playlist_track_table.horizontalHeader(),
+            ColumnSeparatorHeaderView,
+        )
+        self.assertEqual(self.window.playlist_list.columnCount(), 1)
+        self.assertTrue(self.window.playlist_list.horizontalHeader().isHidden())
+        self.window.show()
+        self.window.tab_bar.setCurrentIndex(1)
+        self.application.processEvents()
+        self.assertGreaterEqual(
+            self.window.tab_bar.width(),
+            sum(
+                self.window.tab_bar.tabRect(index).width()
+                for index in range(self.window.tab_bar.count())
+            ),
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.x(),
+            self.window.playlist_list.x()
+            + self.window.playlist_list.width()
+            + 5,
+        )
+        initial_playlist_width = self.window.playlist_list.width()
+        self.window.playlist_splitter.moveSplitter(
+            initial_playlist_width + 20,
+            1,
+        )
+        self.application.processEvents()
+        self.assertGreater(
+            self.window.playlist_list.width(),
+            initial_playlist_width,
+        )
+        self.assertEqual(
+            self.controller.current_settings().playlist_name_width,
+            self.controller.state.playlist_name_width,
+        )
+        self.assertGreater(
+            self.controller.state.playlist_name_width,
+            240,
+        )
+        for language in ("en", "ja", "zh"):
+            with self.subTest(language=language):
+                self.controller.set_option("language", language)
+                self.application.processEvents()
+                self.assertFalse(self.window.tab_bar.usesScrollButtons())
+                self.assertGreaterEqual(
+                    self.window.tab_bar.width(),
+                    sum(
+                        self.window.tab_bar.tabRect(index).width()
+                        for index in range(self.window.tab_bar.count())
+                    ),
+                )
+
+    def test_playlist_tab_renders_playing_waiting_and_played_states(self) -> None:
+        self.controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (
+                    PlaylistTrack(Path("one.mid"), "one.mid", "01:00"),
+                    PlaylistTrack(Path("two.mid"), "two.mid", "02:00"),
+                    PlaylistTrack(Path("three.mid"), "three.mid", "03:00"),
+                ),
+            )
+        ]
+        self.controller.state.selected_playlist_index = 0
+        self.controller.state.active_playlist_id = "set"
+        self.controller.state.playlist_playback_active = True
+        self.controller.state.playlist_current_track_index = 1
+        self.controller._notify()
+
+        self.assertEqual(self.window.playlist_list.item(0, 0).text(), "Set")
+        self.assertEqual(
+            self.window.playlist_track_table.horizontalHeaderItem(0).text(),
+            "Name",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(0, 0).text(),
+            "one",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(0, 2).text(),
+            "Played",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(1, 2).text(),
+            "Playing",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(2, 2).text(),
+            "Waiting",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(0, 2)
+            .foreground()
+            .color()
+            .name(),
+            "#188a45",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(1, 2)
+            .foreground()
+            .color()
+            .name(),
+            "#0077cc",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(2, 2)
+            .foreground()
+            .color()
+            .name(),
+            "#d6a400",
+        )
+        for row in range(3):
+            for column in (0, 1):
+                self.assertEqual(
+                    self.window.playlist_track_table.item(row, column)
+                    .foreground()
+                    .style(),
+                    Qt.BrushStyle.NoBrush,
+                )
+        self.controller.set_option("color_theme", "dark")
+        self.application.processEvents()
+        self.assertEqual(
+            self.window.playlist_track_table.item(0, 2)
+            .foreground()
+            .color()
+            .name(),
+            "#66bb6a",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(1, 2)
+            .foreground()
+            .color()
+            .name(),
+            "#64b5f6",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(2, 2)
+            .foreground()
+            .color()
+            .name(),
+            "#ffd54f",
+        )
+        for row in range(3):
+            for column in (0, 1):
+                self.assertEqual(
+                    self.window.playlist_track_table.item(row, column)
+                    .foreground()
+                    .style(),
+                    Qt.BrushStyle.NoBrush,
+                )
+        self.controller.set_option("language", "ja")
+        self.application.processEvents()
+        self.assertEqual(
+            self.window.playlist_track_table.item(0, 2).text(),
+            "\u5b8c\u4e86",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(1, 2).text(),
+            "\u5b9f\u884c\u4e2d",
+        )
+        self.assertEqual(
+            self.window.playlist_track_table.item(2, 2).text(),
+            "\u30ad\u30e5\u30fc\u30a4\u30f3\u30b0",
+        )
+
+    def test_play_button_starts_selected_playlist_on_playlist_tab(self) -> None:
+        self.controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (PlaylistTrack(Path("one.mid"), "one.mid", "01:00"),),
+            )
+        ]
+        self.controller.state.selected_playlist_index = 0
+        self.controller._notify()
+        self.window.tab_bar.setCurrentIndex(1)
+
+        with patch.object(
+            self.controller,
+            "toggle_playlist_playback",
+        ) as toggle_playlist:
+            self.window.sound_play_pause_button.click()
+
+        toggle_playlist.assert_called_once_with()
+
+    def test_playlist_tab_can_stop_regular_midi_without_a_playlist(self) -> None:
+        self.controller.state.playlists = []
+        self.controller.state.selected_playlist_index = -1
+        self.controller.state.current_mode = "sound"
+        self.controller._notify()
+        self.window.tab_bar.setCurrentIndex(1)
+        self.application.processEvents()
+
+        self.assertTrue(self.window.sound_play_pause_button.isEnabled())
+        with patch.object(
+            self.controller,
+            "toggle_playlist_playback",
+        ) as toggle_playlist:
+            self.window.sound_play_pause_button.click()
+
+        toggle_playlist.assert_called_once_with()
 
     def test_piano_arrangement_controls_offer_beta_analysis(self) -> None:
         self.assertTrue(
@@ -356,7 +571,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.6.1")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.7.0")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -2024,7 +2239,7 @@ class QtUiTests(unittest.TestCase):
                 self.window.midi_table.item(0, column).text()
                 for column in range(3)
             ],
-            ["song.mid", "Library > Album", "01:23"],
+            ["song", "Library > Album", "01:23"],
         )
         self.assertEqual(
             self.window.midi_table.item(0, 1).toolTip(),
@@ -2122,7 +2337,7 @@ class QtUiTests(unittest.TestCase):
                     1,
                 )
 
-    def test_midi_column_widths_are_resizable_saved_and_scale_aware(self) -> None:
+    def test_midi_name_width_is_saved_and_duration_width_is_fixed(self) -> None:
         self.window.show()
         self.application.processEvents()
         header = self.window.midi_table.horizontalHeader()
@@ -2145,6 +2360,23 @@ class QtUiTests(unittest.TestCase):
         )
 
         duration_left = header.sectionViewportPosition(2)
+        duration_width = header.sectionSize(2)
+        self.assertLess(duration_width, 80)
+        self.assertGreaterEqual(duration_width, 64)
+        self.assertGreater(
+            duration_width,
+            header.fontMetrics().horizontalAdvance(
+                self.window.midi_table.horizontalHeaderItem(2).text()
+            ),
+        )
+        self.assertEqual(
+            self.window.midi_table.fontMetrics().elidedText(
+                "00:00",
+                Qt.TextElideMode.ElideRight,
+                duration_width - 20,
+            ),
+            "00:00",
+        )
         folder_left = header.sectionViewportPosition(1)
         header.resizeSection(0, 560)
         self.application.processEvents()
@@ -2158,7 +2390,6 @@ class QtUiTests(unittest.TestCase):
         )
         self.assertNotEqual(header.sectionViewportPosition(1), folder_left)
         self.assertEqual(header.sectionViewportPosition(2), duration_left)
-        duration_width = header.sectionSize(2)
         duration_right = (
             header.sectionViewportPosition(2) + duration_width
         )
@@ -2167,10 +2398,6 @@ class QtUiTests(unittest.TestCase):
         QTest.mouseMove(
             header.viewport(),
             QPoint(duration_boundary, header_y),
-        )
-        self.assertEqual(
-            header.viewport().cursor().shape(),
-            Qt.CursorShape.SplitHCursor,
         )
         QTest.mousePress(
             header.viewport(),
@@ -2187,14 +2414,14 @@ class QtUiTests(unittest.TestCase):
             pos=QPoint(duration_boundary - 20, header_y),
         )
         self.application.processEvents()
-        self.assertEqual(header.sectionSize(2), duration_width + 20)
+        self.assertEqual(header.sectionSize(2), duration_width)
         self.assertEqual(
             header.sectionViewportPosition(2) + header.sectionSize(2),
             duration_right,
         )
         self.assertEqual(
             self.controller.state.midi_column_widths,
-            (560, 180, 100),
+            (560, 180, 80),
         )
 
         self.controller.set_option("ui_scale_percent", 200)
@@ -2203,9 +2430,9 @@ class QtUiTests(unittest.TestCase):
             self.window.midi_table.columnWidth(0),
             1120,
         )
-        self.assertEqual(
+        self.assertGreater(
             self.window.midi_table.columnWidth(2),
-            200,
+            duration_width,
         )
         self.assertEqual(
             header.sectionViewportPosition(2) + header.sectionSize(2),
@@ -2335,7 +2562,7 @@ class QtUiTests(unittest.TestCase):
             self.controller.state.sound_playback_mode,
             SOUND_PLAYBACK_MODE_OFF,
         )
-        self.assertTrue(
+        self.assertFalse(
             self.window.playlist_button.testAttribute(
                 Qt.WidgetAttribute.WA_TransparentForMouseEvents
             )

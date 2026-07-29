@@ -14,3 +14,5 @@ github_upload_v*/
 release_v*/
 *.zip
 settings.json
+playlists.json
+playlists.json.tmp

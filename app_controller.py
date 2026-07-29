@@ -60,6 +60,7 @@ from piano_arrangement_models import (
     normalize_arrangement_quality,
 )
 from piano_arrangement_process import PianoArrangementProcess
+from playlist_store import Playlist, PlaylistStore, normalize_playlists
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 from player import MidiKeyboardPlayer
 from rhythm_judgment import RhythmJudge, RhythmJudgment
@@ -102,8 +103,15 @@ class NullView:
 class AppController:
     """UI-independent application state and orchestration layer."""
 
-    def __init__(self, settings: AppSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: AppSettings | None = None,
+        *,
+        playlist_store: PlaylistStore | None = None,
+    ) -> None:
         self.settings = settings or load_settings()
+        self.playlist_store = playlist_store or PlaylistStore()
+        playlists = self.playlist_store.load()
         self.state = AppState(
             language=self.settings.language,
             color_theme=self.settings.color_theme,
@@ -149,6 +157,12 @@ class AppController:
             midi_column_widths=normalize_midi_column_widths(
                 self.settings.midi_column_widths
             ),
+            playlist_name_width=self._clamp_int(
+                self.settings.playlist_name_width,
+                80,
+                2000,
+                240,
+            ),
             midi_input_device=self.settings.midi_input_device,
             input_conversion_mode=normalize_input_conversion_mode(
                 self.settings.input_conversion_mode
@@ -172,6 +186,8 @@ class AppController:
             audio_fallback_interval_ms=normalize_audio_fallback_interval_ms(
                 self.settings.audio_fallback_interval_ms
             ),
+            playlists=playlists,
+            selected_playlist_index=0 if playlists else -1,
         )
         self.view: ControllerView = NullView()
         self.midi_parser_process = MidiParserProcess()
@@ -223,6 +239,8 @@ class AppController:
         self.global_hotkeys: GlobalHotkeyManager | None = None
         self.settings_save_error = ""
         self._settings_dirty = False
+        self._playlist_generation = 0
+        self._playlist_countdown_cancel = threading.Event()
         self.exiting = False
 
     def attach_view(self, view: ControllerView) -> None:
@@ -490,9 +508,16 @@ class AppController:
             preserve_sound_playback=True,
         )
 
-    def select_midi(self, index: int) -> None:
+    def select_midi(
+        self,
+        index: int,
+        *,
+        preserve_playlist: bool = False,
+    ) -> None:
         if not 0 <= index < len(self.midi_files):
             return
+        if not preserve_playlist:
+            self._cancel_playlist_playback(notify=False)
         selected = self.midi_files[index]
         switch_sound = self._sound_playback_is_active()
         preserve_sound_pause = self.state.sound_paused
@@ -787,6 +812,233 @@ class AppController:
         self.request_save()
         self._notify()
 
+    def select_playlist(self, index: int) -> None:
+        if not 0 <= index < len(self.state.playlists):
+            return
+        if self.state.selected_playlist_index == index:
+            return
+        self.state.selected_playlist_index = index
+        self._notify()
+
+    def replace_playlists(self, playlists: object) -> bool:
+        normalized = normalize_playlists(playlists)
+        selected_id = self._selected_playlist_id()
+        if self.state.playlist_playback_active:
+            self.stop_playback()
+        try:
+            self.playlist_store.save(normalized)
+        except Exception as exc:
+            self._message(
+                "error",
+                "playlist_save_failed_title",
+                str(exc),
+            )
+            return False
+        self.state.playlists = normalized
+        self.state.selected_playlist_index = next(
+            (
+                index
+                for index, playlist in enumerate(normalized)
+                if playlist.playlist_id == selected_id
+            ),
+            0 if normalized else -1,
+        )
+        self._reset_playlist_status()
+        self._notify()
+        return True
+
+    def play_selected_playlist(self) -> None:
+        index = self.state.selected_playlist_index
+        if not 0 <= index < len(self.state.playlists):
+            self._message(
+                "info",
+                "playlist_title",
+                self.text("playlist_select_first"),
+            )
+            return
+        playlist = self.state.playlists[index]
+        if not playlist.tracks:
+            self._message(
+                "info",
+                "playlist_title",
+                self.text("playlist_empty"),
+            )
+            return
+        if self.state.keyboard_playing or self.state.keyboard_paused:
+            return
+        if self.state.sound_playing:
+            return
+        if self.state.sound_paused:
+            self.stop_playback()
+        self._cancel_playlist_playback(notify=False)
+        self.state.active_playlist_id = playlist.playlist_id
+        self.state.playlist_playback_active = True
+        self.state.playlist_current_track_index = 0
+        self.state.playlist_waiting_for_next = False
+        self.state.playlist_completed = False
+        self.state.playlist_unavailable_track_indices = frozenset()
+        self._play_playlist_track(0)
+
+    def toggle_playlist_playback(self) -> None:
+        if self.state.playlist_playback_active:
+            if self._selected_playlist_id() != self.state.active_playlist_id:
+                if self.state.sound_playing:
+                    self.stop_playback()
+                    return
+                self.play_selected_playlist()
+                return
+            if self.state.sound_playing:
+                self.pause_sound()
+            elif self.state.sound_paused:
+                self.resume_sound()
+            return
+        if self.state.sound_playing:
+            self.stop_playback()
+            return
+        self.play_selected_playlist()
+
+    def _play_playlist_track(self, track_index: int) -> bool:
+        playlist = self._active_playlist()
+        if playlist is None or not 0 <= track_index < len(playlist.tracks):
+            self._finish_playlist_playback()
+            return False
+        track = playlist.tracks[track_index]
+        self.state.playlist_current_track_index = track_index
+        self.state.playlist_waiting_for_next = False
+        path = track.path
+        if not path.is_file():
+            missing = set(self.state.playlist_unavailable_track_indices)
+            missing.add(track_index)
+            self.state.playlist_unavailable_track_indices = frozenset(missing)
+            self._schedule_next_playlist_track(track_index + 1)
+            self._notify()
+            return False
+
+        midi_index = self._find_midi_index(path)
+        if midi_index >= 0:
+            self.select_midi(midi_index, preserve_playlist=True)
+            loaded = self.state.selected_midi_index == midi_index
+        else:
+            loaded = self._load_midi_file(path, stop_playback=False)
+            if loaded:
+                self.state.selected_midi_index = -1
+        if not loaded:
+            missing = set(self.state.playlist_unavailable_track_indices)
+            missing.add(track_index)
+            self.state.playlist_unavailable_track_indices = frozenset(missing)
+            self._schedule_next_playlist_track(track_index + 1)
+            self._notify()
+            return False
+        self.play_sound(start_time=0.0)
+        if self.state.sound_playing:
+            return True
+        self._schedule_next_playlist_track(track_index + 1)
+        return False
+
+    def _continue_playlist_after_end(self) -> bool:
+        previous_player = self.sound_player
+        if previous_player:
+            previous_player.wait_until_stopped(timeout=0.5)
+        self.sound_player = None
+        playlist = self._active_playlist()
+        if playlist is None:
+            self._reset_playlist_status()
+            return True
+        next_index = self.state.playlist_current_track_index + 1
+        if next_index >= len(playlist.tracks):
+            self._finish_playlist_playback()
+            return True
+        self._schedule_next_playlist_track(next_index)
+        return True
+
+    def _schedule_next_playlist_track(self, track_index: int) -> None:
+        playlist = self._active_playlist()
+        if playlist is None:
+            return
+        if track_index >= len(playlist.tracks):
+            self._finish_playlist_playback()
+            return
+        self.state.playlist_current_track_index = track_index
+        self.state.playlist_waiting_for_next = True
+        generation = self._playlist_generation
+        cancel_event = self._playlist_countdown_cancel
+        countdown_seconds = max(0, int(self.state.countdown_seconds))
+
+        threading.Thread(
+            target=self._playlist_countdown_worker,
+            args=(
+                generation,
+                track_index,
+                countdown_seconds,
+                cancel_event,
+            ),
+            name="PlaylistCountdown",
+            daemon=True,
+        ).start()
+
+    def _playlist_countdown_worker(
+        self,
+        generation: int,
+        track_index: int,
+        countdown_seconds: int,
+        cancel_event: threading.Event,
+    ) -> None:
+        for remaining in range(countdown_seconds, 0, -1):
+            if cancel_event.is_set():
+                return
+            if self._countdown_tick_enabled():
+                self._play_countdown_tick(remaining)
+            if cancel_event.wait(1.0):
+                return
+        self._queue_worker_message(
+            ("playlist_next", generation, track_index)
+        )
+
+    def _finish_playlist_playback(self) -> None:
+        playlist = self._active_playlist()
+        self._playlist_countdown_cancel.set()
+        self.state.playlist_playback_active = False
+        self.state.playlist_waiting_for_next = False
+        self.state.playlist_completed = True
+        self.state.playlist_current_track_index = (
+            len(playlist.tracks) if playlist is not None else -1
+        )
+        self.state.current_mode = None
+        self.state.status = self.text("waiting")
+
+    def _cancel_playlist_playback(self, *, notify: bool) -> None:
+        self._playlist_generation += 1
+        self._playlist_countdown_cancel.set()
+        self._playlist_countdown_cancel = threading.Event()
+        self._reset_playlist_status()
+        if notify:
+            self._notify()
+
+    def _reset_playlist_status(self) -> None:
+        self.state.active_playlist_id = ""
+        self.state.playlist_playback_active = False
+        self.state.playlist_current_track_index = -1
+        self.state.playlist_waiting_for_next = False
+        self.state.playlist_completed = False
+        self.state.playlist_unavailable_track_indices = frozenset()
+
+    def _selected_playlist_id(self) -> str:
+        index = self.state.selected_playlist_index
+        if 0 <= index < len(self.state.playlists):
+            return self.state.playlists[index].playlist_id
+        return ""
+
+    def _active_playlist(self) -> Playlist | None:
+        playlist_id = self.state.active_playlist_id
+        return next(
+            (
+                playlist
+                for playlist in self.state.playlists
+                if playlist.playlist_id == playlist_id
+            ),
+            None,
+        )
+
     def play_keyboard(
         self,
         *,
@@ -1077,6 +1329,7 @@ class AppController:
             )
 
     def stop_playback(self) -> None:
+        self._cancel_playlist_playback(notify=False)
         self._next_playback_id()
         self._next_position_generation()
         player = self.player
@@ -1465,6 +1718,19 @@ class AppController:
                 except queue.Empty:
                     break
                 kind = str(message[0])
+                if kind == "playlist_next":
+                    generation = int(message[1])
+                    track_index = int(message[2])
+                    if (
+                        generation == self._playlist_generation
+                        and self.state.playlist_playback_active
+                        and self.state.playlist_waiting_for_next
+                        and track_index
+                        == self.state.playlist_current_track_index
+                    ):
+                        self.state.playlist_waiting_for_next = False
+                        self._play_playlist_track(track_index)
+                    continue
                 if kind == "arrangement_progress":
                     if self.state.arrangement_status == "analyzing":
                         self.state.arrangement_progress = self._clamp_int(
@@ -1744,6 +2010,8 @@ class AppController:
             self._complete_event_dispatch()
 
     def _continue_sound_after_end(self, mode: str) -> bool:
+        if self.state.playlist_playback_active:
+            return self._continue_playlist_after_end()
         previous_player = self.sound_player
         if previous_player:
             previous_player.wait_until_stopped(timeout=0.5)
@@ -1776,6 +2044,13 @@ class AppController:
         if normalized == self.state.midi_column_widths:
             return
         self.state.midi_column_widths = normalized
+        self.request_save()
+
+    def set_playlist_name_width(self, width: object) -> None:
+        normalized = self._clamp_int(width, 80, 2000, 240)
+        if normalized == self.state.playlist_name_width:
+            return
+        self.state.playlist_name_width = normalized
         self.request_save()
 
     def record_update_check(self, checked_at: int) -> bool:
@@ -1832,6 +2107,7 @@ class AppController:
             midi_column_widths=normalize_midi_column_widths(
                 self.state.midi_column_widths
             ),
+            playlist_name_width=self.state.playlist_name_width,
             last_midi_folder=self.last_midi_folder,
             keyboard_play_shortcut=self.state.keyboard_play_shortcut,
             keyboard_pause_shortcut=self.state.keyboard_pause_shortcut,

@@ -27,6 +27,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.ui_scale_percent, 100)
         self.assertEqual(settings.window_width, 900)
         self.assertEqual(settings.midi_column_widths, (630, 180, 80))
+        self.assertEqual(settings.playlist_name_width, 240)
         self.assertEqual(settings.keyboard_play_shortcut, "F9")
         self.assertEqual(settings.keyboard_pause_shortcut, "F10")
         self.assertEqual(settings.keyboard_stop_shortcut, "F11")
@@ -104,6 +105,7 @@ class SettingsTests(unittest.TestCase):
                     window_width=1280,
                     window_height=720,
                     midi_column_widths=(720, 240, 96),
+                    playlist_name_width=320,
                     last_midi_folder=str(settings_dir / "midis"),
                     keyboard_play_shortcut="Ctrl+P",
                     keyboard_pause_shortcut="Ctrl+R",
@@ -163,6 +165,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.window_width, 1280)
         self.assertEqual(loaded.window_height, 720)
         self.assertEqual(loaded.midi_column_widths, (720, 240, 96))
+        self.assertEqual(loaded.playlist_name_width, 320)
         self.assertTrue(loaded.countdown_sound)
         self.assertTrue(loaded.game_countdown_sound)
         self.assertFalse(loaded.play_sound)

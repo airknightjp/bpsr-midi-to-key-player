@@ -41,6 +41,8 @@ The `_internal` folder contains files required by the application. Do not move t
 - Select the Qt audio queue and internal Buffer from the menu bar. Defaults are Qt 1024 and Buffer 512.
 - Show final output notes on a full A0-C8 keyboard and falling-note rhythm display.
 - Control Previous, Play/Pause, Next, Continuous playback, and Repeat one. The current track is shown above the seek bar without its filename extension.
+- Create, rename, reorder, and save playlists by dragging songs from the MIDI list.
+- Play a playlist once from top to bottom, wait for the configured countdown between tracks, and show each track's playback status.
 - Configure a countdown before MIDI input conversion starts.
 - Play countdown sound and optionally press the in-game C3 key for ensemble use.
 - Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported. These shortcuts control MIDI input conversion only and do not affect realtime input conversion or MIDI sound playback.
@@ -52,7 +54,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.6.1 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.7.0 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -201,7 +203,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.6.1
+v1.7.0
 
 ## Copyright
 

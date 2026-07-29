@@ -68,7 +68,26 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.6.1
+    "en": """v1.7.0
+
+This release adds saved playlists and sequential MIDI playback.
+
+[Main changes]
+
+- Added a Playlist tab that shows each playlist and its tracks with name,
+  duration, and playback status.
+- Added a playlist editor. Create, rename, and delete playlists; drag songs
+  from the MIDI list; reorder or remove tracks; and save the result.
+- Play the selected playlist once from top to bottom and stop automatically
+  after the final track.
+- Wait for the configured countdown between playlist tracks. A countdown of
+  0 seconds starts the next track immediately.
+- Save playlists in playlists.json beside the application and remember the
+  playlist-list pane width.
+
+[v1.6.1]
+
+v1.6.1
 
 This UI fix release refines the player controls and current-track display.
 
@@ -237,7 +256,26 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.6.1
+    "ja": """v1.7.0
+
+本バージョンでは、保存可能なプレイリストとMIDIの順次再生を追加しました。
+
+【主な変更】
+
+- プレイリスト一覧と、曲名、長さ、状態を表示するプレイリストタブを
+  追加しました。
+- プレイリストの新規作成、名前変更、削除、MIDI一覧からのドラッグ追加、
+  曲順変更、曲の削除、保存に対応しました。
+- 選択したプレイリストを上から1回だけ順番に再生し、最終曲の終了後に
+  自動停止します。
+- 曲間は設定中のカウントダウン秒数だけ待機します。0秒の場合は
+  待機せず次の曲を開始します。
+- プレイリストをアプリと同じ場所のplaylists.jsonへ保存し、
+  プレイリスト一覧の表示幅も保持します。
+
+【v1.6.1】
+
+v1.6.1
 
 本バージョンは、プレイヤー操作部と再生中曲名表示を改善するUI修正版です。
 
@@ -412,7 +450,22 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.6.1
+    "zh": """v1.7.0
+
+本版本新增了可保存的播放列表和MIDI顺序播放功能。
+
+【主要变更】
+
+- 新增播放列表标签页，显示播放列表及其中曲目的名称、时长和播放状态。
+- 新增播放列表编辑器，可新建、重命名和删除播放列表，从MIDI列表拖入曲目，
+  调整顺序、移除曲目并保存。
+- 所选播放列表会从上到下播放一次，并在最后一首结束后自动停止。
+- 曲目之间按照当前倒计时秒数等待；设为0秒时会立即播放下一首。
+- 播放列表保存在应用程序旁的playlists.json中，并保存播放列表窗格宽度。
+
+【v1.6.1】
+
+v1.6.1
 
 本版本是界面修正版，改进了播放器控制区和当前曲目显示。
 
@@ -650,6 +703,35 @@ TEXT = {
         "playback_mode_continuous": "Continuous playback",
         "playback_mode_repeat_one": "Repeat one",
         "playlist": "Playlist",
+        "playlist_editor": "Playlist Editor",
+        "playlist_names": "Playlists",
+        "playlist_name": "Playlist name",
+        "playlist_total_duration": "Total duration: {duration}",
+        "status": "Status",
+        "playlist_status_playing": "Playing",
+        "playlist_status_waiting": "Waiting",
+        "playlist_status_played": "Played",
+        "playlist_status_missing": "File missing",
+        "playlist_drop_hint": "Drag MIDI songs here",
+        "playlist_new_title": "New playlist",
+        "playlist_rename_title": "Rename playlist",
+        "playlist_delete_title": "Delete playlist",
+        "playlist_delete_confirm": 'Delete "{name}"?',
+        "playlist_create_first": "Create or select a playlist first.",
+        "playlist_select_first": "Select a playlist first.",
+        "playlist_empty": "The selected playlist has no songs.",
+        "playlist_save_failed_title": "Playlist save failed",
+        "playlist_unsaved_title": "Unsaved playlist",
+        "playlist_unsaved_message": "Save the playlist changes?",
+        "new": "New",
+        "rename": "Rename",
+        "delete": "Delete",
+        "remove": "Remove",
+        "move_up": "Move up",
+        "move_down": "Move down",
+        "save": "Save",
+        "discard": "Discard",
+        "cancel": "Cancel",
         "midi_list": "MIDI List",
         "name": "Name",
         "folder": "Folder",
@@ -763,6 +845,35 @@ TEXT = {
         "playback_mode_continuous": "\u9023\u7d9a\u518d\u751f",
         "playback_mode_repeat_one": "1\u66f2\u30eb\u30fc\u30d7\u518d\u751f",
         "playlist": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8",
+        "playlist_editor": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u7de8\u96c6",
+        "playlist_names": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u4e00\u89a7",
+        "playlist_name": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u540d",
+        "playlist_total_duration": "\u5408\u8a08\u6642\u9593: {duration}",
+        "status": "\u72b6\u614b",
+        "playlist_status_playing": "\u5b9f\u884c\u4e2d",
+        "playlist_status_waiting": "\u30ad\u30e5\u30fc\u30a4\u30f3\u30b0",
+        "playlist_status_played": "\u5b8c\u4e86",
+        "playlist_status_missing": "\u30d5\u30a1\u30a4\u30eb\u306a\u3057",
+        "playlist_drop_hint": "MIDI\u4e00\u89a7\u304b\u3089\u66f2\u3092\u30c9\u30e9\u30c3\u30b0",
+        "playlist_new_title": "\u65b0\u898f\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8",
+        "playlist_rename_title": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u540d\u3092\u5909\u66f4",
+        "playlist_delete_title": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u3092\u524a\u9664",
+        "playlist_delete_confirm": "\u300c{name}\u300d\u3092\u524a\u9664\u3057\u307e\u3059\u304b\uff1f",
+        "playlist_create_first": "\u5148\u306b\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u3092\u4f5c\u6210\u307e\u305f\u306f\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+        "playlist_select_first": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+        "playlist_empty": "\u9078\u629e\u3057\u305f\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u306b\u66f2\u304c\u3042\u308a\u307e\u305b\u3093\u3002",
+        "playlist_save_failed_title": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u4fdd\u5b58\u5931\u6557",
+        "playlist_unsaved_title": "\u672a\u4fdd\u5b58\u306e\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8",
+        "playlist_unsaved_message": "\u30d7\u30ec\u30a4\u30ea\u30b9\u30c8\u306e\u5909\u66f4\u3092\u4fdd\u5b58\u3057\u307e\u3059\u304b\uff1f",
+        "new": "\u65b0\u898f",
+        "rename": "\u540d\u524d\u5909\u66f4",
+        "delete": "\u524a\u9664",
+        "remove": "\u66f2\u3092\u524a\u9664",
+        "move_up": "\u4e0a\u3078",
+        "move_down": "\u4e0b\u3078",
+        "save": "\u4fdd\u5b58",
+        "discard": "\u4fdd\u5b58\u3057\u306a\u3044",
+        "cancel": "\u30ad\u30e3\u30f3\u30bb\u30eb",
         "midi_list": "MIDI\u4e00\u89a7",
         "name": "\u540d\u524d",
         "folder": "\u30d5\u30a9\u30eb\u30c0",
@@ -874,6 +985,35 @@ TEXT = {
         "playback_mode_continuous": "\u8fde\u7eed\u64ad\u653e",
         "playback_mode_repeat_one": "\u5355\u66f2\u5faa\u73af",
         "playlist": "\u64ad\u653e\u5217\u8868",
+        "playlist_editor": "\u7f16\u8f91\u64ad\u653e\u5217\u8868",
+        "playlist_names": "\u64ad\u653e\u5217\u8868",
+        "playlist_name": "\u64ad\u653e\u5217\u8868\u540d\u79f0",
+        "playlist_total_duration": "\u66f2\u76ee\u603b\u65f6\u957f: {duration}",
+        "status": "\u72b6\u6001",
+        "playlist_status_playing": "\u64ad\u653e\u4e2d",
+        "playlist_status_waiting": "\u7b49\u5f85\u4e2d",
+        "playlist_status_played": "\u5df2\u64ad\u653e",
+        "playlist_status_missing": "\u6587\u4ef6\u4e22\u5931",
+        "playlist_drop_hint": "\u4ece MIDI \u5217\u8868\u62d6\u653e\u66f2\u76ee",
+        "playlist_new_title": "\u65b0\u5efa\u64ad\u653e\u5217\u8868",
+        "playlist_rename_title": "\u91cd\u547d\u540d\u64ad\u653e\u5217\u8868",
+        "playlist_delete_title": "\u5220\u9664\u64ad\u653e\u5217\u8868",
+        "playlist_delete_confirm": "\u662f\u5426\u5220\u9664\u201c{name}\u201d\uff1f",
+        "playlist_create_first": "\u8bf7\u5148\u521b\u5efa\u6216\u9009\u62e9\u64ad\u653e\u5217\u8868\u3002",
+        "playlist_select_first": "\u8bf7\u5148\u9009\u62e9\u64ad\u653e\u5217\u8868\u3002",
+        "playlist_empty": "\u6240\u9009\u64ad\u653e\u5217\u8868\u4e2d\u6ca1\u6709\u66f2\u76ee\u3002",
+        "playlist_save_failed_title": "\u64ad\u653e\u5217\u8868\u4fdd\u5b58\u5931\u8d25",
+        "playlist_unsaved_title": "\u64ad\u653e\u5217\u8868\u672a\u4fdd\u5b58",
+        "playlist_unsaved_message": "\u662f\u5426\u4fdd\u5b58\u64ad\u653e\u5217\u8868\u66f4\u6539\uff1f",
+        "new": "\u65b0\u5efa",
+        "rename": "\u91cd\u547d\u540d",
+        "delete": "\u5220\u9664",
+        "remove": "\u79fb\u9664\u66f2\u76ee",
+        "move_up": "\u4e0a\u79fb",
+        "move_down": "\u4e0b\u79fb",
+        "save": "\u4fdd\u5b58",
+        "discard": "\u4e0d\u4fdd\u5b58",
+        "cancel": "\u53d6\u6d88",
         "midi_list": "MIDI \u5217\u8868",
         "name": "\u540d\u79f0",
         "folder": "\u6587\u4ef6\u5939",

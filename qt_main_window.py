@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QActionGroup, QCloseEvent, QColor, QDesktopServices, QIcon, QKeyEvent
+from PySide6.QtGui import QActionGroup, QBrush, QCloseEvent, QColor, QDesktopServices, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QRadioButton,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
     QTabBar,
@@ -76,6 +77,7 @@ from qt_components import (
     make_transport_icon,
     make_volume_icon,
 )
+from qt_playlist import MidiLibraryTable, PlaylistEditorDialog
 from qt_styles import THEMES, build_stylesheet, register_windows_fonts
 from update_service import (
     AvailableUpdate,
@@ -87,7 +89,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -130,6 +132,8 @@ class MidiMainWindow(QMainWindow):
         self._applied_always_on_top: bool | None = None
         self._applied_section_visibility: tuple[bool, ...] | None = None
         self._applied_panel_order: tuple[str, ...] = ()
+        self._playlist_name_width = max(80, self.state.playlist_name_width)
+        self._playlist_splitter_initialized = False
         self._section_heights: dict[str, int] = {}
         self._full_visibility_height: int | None = None
         self._render_signatures: dict[str, object] = {}
@@ -139,6 +143,7 @@ class MidiMainWindow(QMainWindow):
         self._rendered_time_text: str | None = None
         self._available_update: AvailableUpdate | None = None
         self._manual_update_check = False
+        self._playlist_dialog: PlaylistEditorDialog | None = None
         self._volume_before_mute = max(
             1,
             int(controller.state.midi_sound_volume or 80),
@@ -866,7 +871,7 @@ class MidiMainWindow(QMainWindow):
             self.controller.select_previous_midi
         )
         self.sound_play_pause_button = self._make_player_transport_button(
-            self.controller.toggle_sound_pause
+            self._toggle_player_play_pause
         )
         self.next_track_button = self._make_player_transport_button(
             self.controller.select_next_midi
@@ -874,7 +879,9 @@ class MidiMainWindow(QMainWindow):
         self.sound_playback_mode_button = self._make_player_transport_button(
             self.controller.cycle_sound_playback_mode
         )
-        self.playlist_button = self._make_player_transport_button(None)
+        self.playlist_button = self._make_player_transport_button(
+            self._open_playlist_editor
+        )
         self.transport_left = QWidget()
         transport_left_layout = QHBoxLayout(self.transport_left)
         transport_left_layout.setContentsMargins(0, 0, 0, 0)
@@ -1003,7 +1010,9 @@ class MidiMainWindow(QMainWindow):
         self.tab_bar.setObjectName("PlayerTabBar")
         self.tab_bar.setDrawBase(False)
         self.tab_bar.setExpanding(False)
+        self.tab_bar.setUsesScrollButtons(False)
         self.tab_bar.tabBarDoubleClicked.connect(self._player_tab_double_clicked)
+        self.tab_bar.currentChanged.connect(self._player_tab_changed)
         self.tab_bar_container = QWidget()
         tab_bar_container_layout = QVBoxLayout(self.tab_bar_container)
         tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
@@ -1043,7 +1052,7 @@ class MidiMainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignBottom,
         )
 
-        self.midi_table = QTableWidget(0, 3)
+        self.midi_table = MidiLibraryTable(0, 3)
         self.midi_header = ColumnSeparatorHeaderView(
             Qt.Orientation.Horizontal,
             self.midi_table,
@@ -1058,9 +1067,6 @@ class MidiMainWindow(QMainWindow):
         midi_header = self.midi_table.horizontalHeader()
         midi_header.setMinimumSectionSize(MIN_MIDI_COLUMN_WIDTH)
         midi_header.setStretchLastSection(False)
-        self.midi_header.set_left_resizable_section(
-            self.midi_table.columnCount() - 1
-        )
         for column, width in enumerate(self.state.midi_column_widths):
             midi_header.setSectionResizeMode(
                 column,
@@ -1087,7 +1093,95 @@ class MidiMainWindow(QMainWindow):
             )
         )
         self.midi_table.itemDoubleClicked.connect(lambda _item: self.controller.toggle_sound_playback())
-        content_layout.addWidget(self.midi_table, 1)
+
+        self.playlist_page = QWidget()
+        playlist_page_layout = QHBoxLayout(self.playlist_page)
+        playlist_page_layout.setContentsMargins(0, 0, 0, 0)
+        playlist_page_layout.setSpacing(0)
+        self.playlist_list = QTableWidget(0, 1)
+        self.playlist_list.setObjectName("PlaylistList")
+        self.playlist_name_header = ColumnSeparatorHeaderView(
+            Qt.Orientation.Horizontal,
+            self.playlist_list,
+        )
+        self.playlist_name_header.setFrameShape(QFrame.Shape.NoFrame)
+        self.playlist_list.setHorizontalHeader(self.playlist_name_header)
+        self.playlist_list.setAlternatingRowColors(True)
+        self.playlist_list.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.playlist_list.setSelectionMode(
+            QTableWidget.SelectionMode.SingleSelection
+        )
+        self.playlist_list.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.playlist_list.verticalHeader().hide()
+        self.playlist_list.horizontalHeader().hide()
+        self.playlist_list.horizontalHeader().setSectionResizeMode(
+            0,
+            QHeaderView.ResizeMode.Stretch,
+        )
+        self.playlist_list.currentCellChanged.connect(
+            lambda row, _column, _previous_row, _previous_column:
+                self._playlist_selected(row)
+        )
+        self.playlist_track_table = QTableWidget(0, 3)
+        self.playlist_track_table.setObjectName("PlaylistTrackTable")
+        self.playlist_track_header = ColumnSeparatorHeaderView(
+            Qt.Orientation.Horizontal,
+            self.playlist_track_table,
+        )
+        self.playlist_track_header.setFrameShape(QFrame.Shape.NoFrame)
+        self.playlist_track_table.setHorizontalHeader(
+            self.playlist_track_header
+        )
+        self.playlist_track_table.setAlternatingRowColors(True)
+        self.playlist_track_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.playlist_track_table.setSelectionMode(
+            QTableWidget.SelectionMode.SingleSelection
+        )
+        self.playlist_track_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.playlist_track_table.verticalHeader().hide()
+        playlist_header = self.playlist_track_table.horizontalHeader()
+        playlist_header.setStretchLastSection(False)
+        playlist_header.setSectionResizeMode(
+            0,
+            QHeaderView.ResizeMode.Stretch,
+        )
+        playlist_header.setSectionResizeMode(
+            1,
+            QHeaderView.ResizeMode.Fixed,
+        )
+        playlist_header.setSectionResizeMode(
+            2,
+            QHeaderView.ResizeMode.Fixed,
+        )
+        self.playlist_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.playlist_splitter.setObjectName("PlaylistSplitter")
+        self.playlist_splitter.setChildrenCollapsible(False)
+        self.playlist_splitter.setHandleWidth(5)
+        self.playlist_splitter.setStyleSheet(
+            "QSplitter#PlaylistSplitter::handle { background: transparent; }"
+        )
+        self.playlist_splitter.addWidget(self.playlist_list)
+        self.playlist_splitter.addWidget(self.playlist_track_table)
+        self.playlist_splitter.setStretchFactor(0, 0)
+        self.playlist_splitter.setStretchFactor(1, 1)
+        self.playlist_splitter.splitterMoved.connect(
+            self._playlist_splitter_moved
+        )
+        playlist_page_layout.addWidget(self.playlist_splitter)
+
+        self.player_content_stack = QStackedWidget()
+        self.player_content_stack.setFrameShape(QFrame.Shape.NoFrame)
+        self.player_content_stack.addWidget(self.midi_table)
+        self.player_content_stack.addWidget(self.playlist_page)
+        content_layout.addWidget(self.player_content_stack, 1)
         body.addWidget(content, 1)
         self.player_layout.addLayout(body, 1)
 
@@ -1397,6 +1491,9 @@ class MidiMainWindow(QMainWindow):
                 state.selected_midi_index,
                 len(state.midi_rows),
                 state.sound_playback_mode,
+                state.selected_playlist_index,
+                state.playlist_playback_active,
+                state.playlist_waiting_for_next,
             )
             if self._signature_changed("transport", transport_signature):
                 self._render_transport_controls(state)
@@ -1409,6 +1506,20 @@ class MidiMainWindow(QMainWindow):
                 self._render_signatures["midi_selection"] = state.selected_midi_index
             elif self._signature_changed("midi_selection", state.selected_midi_index):
                 self._render_midi_selection(state)
+            playlist_signature = (
+                id(state.playlists),
+                state.language,
+                state.color_theme,
+                state.selected_playlist_index,
+                state.active_playlist_id,
+                state.playlist_playback_active,
+                state.playlist_current_track_index,
+                state.playlist_waiting_for_next,
+                state.playlist_completed,
+                state.playlist_unavailable_track_indices,
+            )
+            if self._signature_changed("playlists", playlist_signature):
+                self._render_playlists(state)
             if state.track_channels is not self._rendered_track_channels:
                 self._rendered_track_channels = state.track_channels
                 self._render_track_channels(state)
@@ -1493,10 +1604,16 @@ class MidiMainWindow(QMainWindow):
             self.sound_source_combo.clear()
             for source, title in SOUND_SOURCE_NAMES[state.language].items():
                 self.sound_source_combo.addItem(title, source)
-        while self.tab_bar.count():
-            self.tab_bar.removeTab(0)
-        self.tab_bar.addTab(text["midi_list"])
+        current_tab = max(0, self.tab_bar.currentIndex())
+        with QSignalBlocker(self.tab_bar):
+            while self.tab_bar.count():
+                self.tab_bar.removeTab(0)
+            self.tab_bar.addTab(text["midi_list"])
+            self.tab_bar.addTab(text["playlist"])
+            self.tab_bar.setCurrentIndex(min(current_tab, 1))
+        self.player_content_stack.setCurrentIndex(min(current_tab, 1))
         self._update_midi_tab_icon(state.color_theme, state.ui_scale_percent)
+        self._fit_player_tab_bar_width()
         self.midi_table.setHorizontalHeaderLabels(
             [
                 text["name"],
@@ -1508,7 +1625,19 @@ class MidiMainWindow(QMainWindow):
             self.midi_table.horizontalHeaderItem(column).setTextAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
-
+        self.playlist_track_table.setHorizontalHeaderLabels(
+            [
+                text["name"],
+                text["duration"],
+                text["status"],
+            ]
+        )
+        for column in range(self.playlist_track_table.columnCount()):
+            self.playlist_track_table.horizontalHeaderItem(
+                column
+            ).setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
     def _apply_layout_scale(self, percent: int) -> None:
         scale = percent / 100.0
         px = lambda value: max(1, round(value * scale))
@@ -1690,6 +1819,7 @@ class MidiMainWindow(QMainWindow):
             control.setFixedHeight(transport_button_height)
         self.tab_bar.setFixedHeight(list_control_height)
         self.tab_bar_container.setFixedHeight(list_control_height)
+        self._fit_player_tab_bar_width()
         self.tab_bar_container_layout.setContentsMargins(0, 0, 0, 0)
         self.slider_pane.setFixedHeight(transport_button_height)
         self.transform_controls.setFixedHeight(transport_button_height)
@@ -1734,11 +1864,31 @@ class MidiMainWindow(QMainWindow):
         with QSignalBlocker(midi_header):
             midi_header.setMinimumSectionSize(px(MIN_MIDI_COLUMN_WIDTH))
             for column, width in enumerate(self.state.midi_column_widths):
-                if column != 1:
+                if column == 0:
                     self.midi_table.setColumnWidth(column, px(width))
+            self.midi_table.setColumnWidth(
+                self.midi_table.columnCount() - 1,
+                self._midi_duration_column_width(percent),
+            )
             midi_header.setFixedHeight(px(24))
         for row in range(self.midi_table.rowCount()):
             self.midi_table.setRowHeight(row, px(22))
+        self.playlist_list.setMinimumWidth(px(80))
+        self.playlist_track_table.setMinimumWidth(px(240))
+        if self._playlist_splitter_initialized:
+            QTimer.singleShot(
+                0,
+                lambda width=px(self._playlist_name_width):
+                    self._set_playlist_name_width(width),
+            )
+        for row in range(self.playlist_list.rowCount()):
+            self.playlist_list.setRowHeight(row, px(22))
+        playlist_header = self.playlist_track_table.horizontalHeader()
+        playlist_header.setFixedHeight(px(24))
+        self.playlist_track_table.setColumnWidth(1, px(80))
+        self.playlist_track_table.setColumnWidth(2, px(90))
+        for row in range(self.playlist_track_table.rowCount()):
+            self.playlist_track_table.setRowHeight(row, px(22))
         self._set_spacer_width(self.device_controls_layout, 1, px(6))
         self._set_spacer_width(self.device_group_layout, 1, px(8))
         self._set_spacer_width(self.conversion_control_layout, 1, px(10))
@@ -1816,6 +1966,8 @@ class MidiMainWindow(QMainWindow):
             palette.text,
         )
         self.midi_header.set_separator_color(palette.border)
+        self.playlist_name_header.set_separator_color(palette.border)
+        self.playlist_track_header.set_separator_color(palette.border)
         for control in (
             self.speed_control,
             self.transpose_control,
@@ -1865,8 +2017,19 @@ class MidiMainWindow(QMainWindow):
         icon_size = max(10, round(14 * percent / 100))
         self.tab_bar.setIconSize(QSize(icon_size, icon_size))
         self.tab_bar.setTabIcon(0, make_refresh_icon(palette.text, icon_size))
+        if self.tab_bar.count() > 1:
+            self.tab_bar.setTabIcon(
+                1,
+                make_transport_icon("playlist", palette.text, icon_size),
+            )
         if self.tab_bar.property("reloadFeedback") is True:
             self._apply_midi_reload_feedback_style()
+
+    def _fit_player_tab_bar_width(self) -> None:
+        self.tab_bar.updateGeometry()
+        width = max(1, self.tab_bar.sizeHint().width())
+        self.tab_bar.setFixedWidth(width)
+        self.tab_bar_container.setFixedWidth(width)
 
     @staticmethod
     def _set_spacer_width(layout, index: int, width: int) -> None:  # type: ignore[no-untyped-def]
@@ -2315,14 +2478,34 @@ class MidiMainWindow(QMainWindow):
         blocked = state.keyboard_playing or state.keyboard_paused
         selected = state.selected_midi_index
         row_count = len(state.midi_rows)
-        self.previous_track_button.setEnabled(not blocked and selected > 0)
+        playlist_tab_active = self.tab_bar.currentIndex() == 1
+        playlist_index = state.selected_playlist_index
+        playlist_ready = (
+            0 <= playlist_index < len(state.playlists)
+            and bool(state.playlists[playlist_index].tracks)
+        )
+        self.previous_track_button.setEnabled(
+            not playlist_tab_active and not blocked and selected > 0
+        )
         self.next_track_button.setEnabled(
-            not blocked and 0 <= selected < row_count - 1
+            not playlist_tab_active
+            and not blocked
+            and 0 <= selected < row_count - 1
         )
         self.sound_play_pause_button.setEnabled(
-            not blocked and 0 <= selected < row_count
+            not blocked
+            and (
+                (playlist_tab_active and state.sound_playing)
+                or
+                state.playlist_playback_active
+                or (
+                    playlist_ready
+                    if playlist_tab_active
+                    else 0 <= selected < row_count
+                )
+            )
         )
-        self.sound_playback_mode_button.setEnabled(True)
+        self.sound_playback_mode_button.setEnabled(not playlist_tab_active)
 
         playing = state.sound_playing
         play_action = "pause" if playing else "play"
@@ -2348,6 +2531,23 @@ class MidiMainWindow(QMainWindow):
             and 0 <= selected < row_count
         ):
             current_track_name = Path(state.midi_rows[selected].name).stem
+        elif state.active_playlist_id:
+            active_playlist = next(
+                (
+                    playlist
+                    for playlist in state.playlists
+                    if playlist.playlist_id == state.active_playlist_id
+                ),
+                None,
+            )
+            track_index = state.playlist_current_track_index
+            if (
+                active_playlist is not None
+                and 0 <= track_index < len(active_playlist.tracks)
+            ):
+                current_track_name = Path(
+                    active_playlist.tracks[track_index].name
+                ).stem
         self.current_track_marquee.setText(current_track_name)
 
         icon_size = max(26, round(34 * state.ui_scale_percent / 100))
@@ -2492,7 +2692,10 @@ class MidiMainWindow(QMainWindow):
 
     def _update_midi_table_row(self, row_index: int, row: MidiListRow) -> None:
         path_text = str(row.path)
-        for column, value in enumerate((row.name, row.folder, row.duration)):
+        display_name = Path(row.name).stem
+        for column, value in enumerate(
+            (display_name, row.folder, row.duration)
+        ):
             item = self.midi_table.item(row_index, column)
             if item is None:
                 item = QTableWidgetItem()
@@ -2513,7 +2716,7 @@ class MidiMainWindow(QMainWindow):
     ) -> None:
         if not 0 <= logical_index < self.midi_table.columnCount():
             return
-        if logical_index not in (0, self.midi_table.columnCount() - 1):
+        if logical_index != 0:
             return
         scale = max(1, self.state.ui_scale_percent) / 100.0
         widths = list(self.state.midi_column_widths)
@@ -2522,6 +2725,21 @@ class MidiMainWindow(QMainWindow):
             round(self.midi_table.columnWidth(logical_index) / scale),
         )
         self.controller.set_midi_column_widths(widths)
+
+    def _midi_duration_column_width(self, percent: int) -> int:
+        scale = max(0.01, percent / 100.0)
+        header_item = self.midi_table.horizontalHeaderItem(
+            self.midi_table.columnCount() - 1
+        )
+        header_text = header_item.text() if header_item is not None else ""
+        text_width = max(
+            self.midi_header.fontMetrics().horizontalAdvance(header_text),
+            self.midi_table.fontMetrics().horizontalAdvance("00:00"),
+        )
+        return max(
+            round(64 * scale),
+            text_width + max(4, round(14 * scale)),
+        )
 
     def _render_midi_selection(self, state: AppState) -> None:
         if 0 <= state.selected_midi_index < self.midi_table.rowCount():
@@ -2534,6 +2752,94 @@ class MidiMainWindow(QMainWindow):
                 self.midi_table.selectRow(state.selected_midi_index)
         else:
             self.midi_table.clearSelection()
+
+    def _render_playlists(self, state: AppState) -> None:
+        selected_index = state.selected_playlist_index
+        with QSignalBlocker(self.playlist_list):
+            self.playlist_list.setRowCount(len(state.playlists))
+            for row, playlist_item in enumerate(state.playlists):
+                item = self.playlist_list.item(row, 0)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.playlist_list.setItem(row, 0, item)
+                item.setText(playlist_item.name)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignLeft
+                    | Qt.AlignmentFlag.AlignVCenter
+                )
+                self.playlist_list.setRowHeight(
+                    row,
+                    max(1, round(22 * state.ui_scale_percent / 100)),
+                )
+            if 0 <= selected_index < len(state.playlists):
+                self.playlist_list.setCurrentCell(selected_index, 0)
+                self.playlist_list.selectRow(selected_index)
+            else:
+                self.playlist_list.clearSelection()
+
+        playlist = (
+            state.playlists[selected_index]
+            if 0 <= selected_index < len(state.playlists)
+            else None
+        )
+        tracks = playlist.tracks if playlist is not None else ()
+        self.playlist_track_table.setRowCount(len(tracks))
+        text = TEXT[state.language]
+        status_colors = (
+            {
+                "waiting": "#ffd54f",
+                "playing": "#64b5f6",
+                "played": "#66bb6a",
+            }
+            if state.color_theme == "dark"
+            else {
+                "waiting": "#d6a400",
+                "playing": "#0077cc",
+                "played": "#188a45",
+            }
+        )
+        is_active_playlist = (
+            playlist is not None
+            and playlist.playlist_id == state.active_playlist_id
+        )
+        for row, track in enumerate(tracks):
+            status = ""
+            status_role = ""
+            if (
+                is_active_playlist
+                and row in state.playlist_unavailable_track_indices
+            ):
+                status = text["playlist_status_missing"]
+            elif is_active_playlist and state.playlist_completed:
+                status = text["playlist_status_played"]
+                status_role = "played"
+            elif is_active_playlist and state.playlist_playback_active:
+                current = state.playlist_current_track_index
+                if row < current:
+                    status = text["playlist_status_played"]
+                    status_role = "played"
+                elif row == current and not state.playlist_waiting_for_next:
+                    status = text["playlist_status_playing"]
+                    status_role = "playing"
+                else:
+                    status = text["playlist_status_waiting"]
+                    status_role = "waiting"
+            color = status_colors.get(status_role)
+            foreground = QBrush(QColor(color)) if color else QBrush()
+            for column, value in enumerate(
+                (Path(track.name).stem, track.duration, status)
+            ):
+                item = self.playlist_track_table.item(row, column)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.playlist_track_table.setItem(row, column, item)
+                item.setText(value)
+                item.setToolTip(str(track.path) if column == 0 else "")
+                item.setForeground(foreground if column == 2 else QBrush())
+            self.playlist_track_table.setRowHeight(
+                row,
+                max(1, round(22 * state.ui_scale_percent / 100)),
+            )
 
     def _render_track_channels(self, state: AppState) -> None:
         self.track_channels.set_items(state.track_channels)
@@ -2663,6 +2969,82 @@ class MidiMainWindow(QMainWindow):
         if folder:
             self.controller.load_midi_folder(folder)
 
+    def _toggle_player_play_pause(self) -> None:
+        if self.tab_bar.currentIndex() == 1:
+            self.controller.toggle_playlist_playback()
+        else:
+            self.controller.toggle_sound_pause()
+
+    def _open_playlist_editor(self) -> None:
+        dialog = self._playlist_dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog = PlaylistEditorDialog(
+            self.controller,
+            self.state.language,
+            self,
+        )
+        dialog.destroyed.connect(
+            lambda _object=None: setattr(self, "_playlist_dialog", None)
+        )
+        self._playlist_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _player_tab_changed(self, index: int) -> None:
+        if hasattr(self, "player_content_stack"):
+            self.player_content_stack.setCurrentIndex(max(0, min(index, 1)))
+        if not self._rendering and hasattr(self, "sound_play_pause_button"):
+            self._render_transport_controls(self.state)
+
+    def _playlist_selected(self, row: int) -> None:
+        if self._rendering or row < 0:
+            return
+        self.controller.select_playlist(row)
+
+    def _set_playlist_name_width(self, width: int) -> None:
+        available = self.playlist_splitter.width()
+        if available <= self.playlist_splitter.handleWidth():
+            return
+        minimum_left = self.playlist_list.minimumWidth()
+        minimum_right = self.playlist_track_table.minimumWidth()
+        maximum_left = max(
+            minimum_left,
+            available
+            - self.playlist_splitter.handleWidth()
+            - minimum_right,
+        )
+        target = max(minimum_left, min(int(width), maximum_left))
+        with QSignalBlocker(self.playlist_splitter):
+            self.playlist_splitter.setSizes(
+                [
+                    target,
+                    max(
+                        minimum_right,
+                        available
+                        - self.playlist_splitter.handleWidth()
+                        - target,
+                    ),
+                ]
+            )
+
+    def _playlist_splitter_moved(
+        self,
+        _position: int,
+        _index: int,
+    ) -> None:
+        if not self._playlist_splitter_initialized:
+            return
+        scale = max(0.01, self.state.ui_scale_percent / 100.0)
+        self._playlist_name_width = max(
+            80,
+            round(self.playlist_list.width() / scale),
+        )
+        self.controller.set_playlist_name_width(self._playlist_name_width)
+
     def _player_tab_double_clicked(self, index: int) -> None:
         if index == 0:
             self.controller.reload_midi_folder()
@@ -2686,7 +3068,7 @@ class MidiMainWindow(QMainWindow):
         )
         self.tab_bar.setStyleSheet(
             f"""
-            QTabBar#PlayerTabBar::tab {{
+            QTabBar#PlayerTabBar::tab:first {{
                 background: {palette.accent};
                 border-color: {palette.accent_hover};
                 color: {palette.accent_text};
@@ -2997,6 +3379,15 @@ class MidiMainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().showEvent(event)
+        if not self._playlist_splitter_initialized:
+            self._set_playlist_name_width(
+                round(
+                    self._playlist_name_width
+                    * self.state.ui_scale_percent
+                    / 100
+                )
+            )
+            self._playlist_splitter_initialized = True
         self._update_transport_side_widths(
             self.state.ui_scale_percent / 100
         )

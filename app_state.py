@@ -20,6 +20,7 @@ from config import (
     DEFAULT_SECTION_VISIBILITY,
     DEFAULT_SOUND_PLAYBACK_MODE,
 )
+from playlist_store import Playlist
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,16 @@ class AppState:
     rhythm_hit_events: tuple[tuple[int, int, str, bool], ...] = ()
     midi_rows: list[MidiListRow] = field(default_factory=list)
     selected_midi_index: int = -1
+    playlists: list[Playlist] = field(default_factory=list)
+    selected_playlist_index: int = -1
+    active_playlist_id: str = ""
+    playlist_playback_active: bool = False
+    playlist_current_track_index: int = -1
+    playlist_waiting_for_next: bool = False
+    playlist_completed: bool = False
+    playlist_unavailable_track_indices: frozenset[int] = field(
+        default_factory=frozenset
+    )
     track_channels: list[TrackChannelItem] = field(default_factory=list)
     midi_input_devices: list[str] = field(default_factory=list)
     midi_input_device: str = ""
@@ -105,6 +116,7 @@ class AppState:
     window_width: int = 900
     window_height: int = 560
     midi_column_widths: tuple[int, int, int] = DEFAULT_MIDI_COLUMN_WIDTHS
+    playlist_name_width: int = 240
     section_visibility: dict[str, bool] = field(
         default_factory=lambda: dict(DEFAULT_SECTION_VISIBILITY)
     )
