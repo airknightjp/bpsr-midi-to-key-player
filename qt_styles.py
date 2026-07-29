@@ -94,6 +94,15 @@ def build_stylesheet(
     slider_handle_margin = round(5 * scale)
     slider_handle_radius = round(7 * scale)
     slider_handle_border = max(1, round(2 * scale))
+    volume_slider_groove_size = round(5 * scale)
+    volume_slider_handle_outer_size = (
+        volume_slider_groove_size + (slider_handle_margin * 2)
+    )
+    volume_slider_handle_size = max(
+        1,
+        volume_slider_handle_outer_size - (slider_handle_border * 2),
+    )
+    volume_slider_handle_radius = volume_slider_handle_outer_size // 2
     start_button_edge = max(2, round(2 * scale))
     start_button_height = max(1, round(55 * scale))
     start_button_content_height = max(
@@ -195,7 +204,7 @@ def build_stylesheet(
         }}
         """
         sky_blue_slider_rules = f"""
-        QSlider[animatedWhale="true"]::handle:horizontal {{
+        QSlider#PlaybackPositionSlider[animatedWhale="true"]::handle:horizontal {{
             width: {whale_handle_size}px;
             height: {whale_handle_size}px;
             margin: -{whale_handle_margin}px 0;
@@ -405,10 +414,16 @@ def build_stylesheet(
     QSlider::sub-page:horizontal {{ background: {palette.accent}; border-radius: 2px; }}
     QSlider::handle:horizontal {{ width: {slider_handle_size}px; margin: -{slider_handle_margin}px 0; background: {palette.surface}; border: {slider_handle_border}px solid {palette.accent}; border-radius: {slider_handle_radius}px; }}
     QSlider#VolumeSlider::groove:horizontal {{
-        height: {round(5 * scale)}px;
+        height: {volume_slider_groove_size}px;
         background: {palette.surface_hover};
         border: 1px solid {palette.border};
         border-radius: {round(3 * scale)}px;
+    }}
+    QSlider#VolumeSlider::handle:horizontal {{
+        width: {volume_slider_handle_size}px;
+        height: {volume_slider_handle_size}px;
+        margin: -{slider_handle_margin}px 0;
+        border-radius: {volume_slider_handle_radius}px;
     }}
     QSlider::groove:vertical {{ width: {round(5 * scale)}px; background: {palette.panel_alt}; border-radius: 2px; }}
     QSlider::sub-page:vertical {{ background: {palette.panel_alt}; }}

@@ -20,7 +20,7 @@ The `_internal` folder contains files required by the application. Do not move t
 
 - Recursively load `.mid` and `.midi` files from the selected folder and all subfolders.
 - Show name, folder hierarchy, and duration in the MIDI list. Folder hierarchy uses the `Parent > Child > Grandchild` format.
-- Reflect the selected MIDI's final output range on the keyboard and falling-note display, dimming notes below its lowest output and above its highest output.
+- Reflect the selected MIDI's final output range on the keyboard and falling-note display with subdued unused-range colors. Keyboard boundaries follow the black-key shapes.
 - Resize each MIDI-list column by dragging its header boundary and save the adjusted widths.
 - Double-click a MIDI file to play or stop MIDI sound playback.
 - Convert MIDI files into keyboard input.
@@ -54,7 +54,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.7.0 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.7.1 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -203,7 +203,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.7.0
+v1.7.1
 
 ## Copyright
 

@@ -1007,6 +1007,9 @@ class PianoKeyboardWidget(QWidget):
     NOTE_MIN = PIANO_NOTE_MIN
     NOTE_MAX = PIANO_NOTE_MAX
     BASE_HEIGHT = 57
+    UNUSED_SURFACE_DARKER_FACTOR = 120
+    UNUSED_TEXT_ALPHA = 100
+    USED_RANGE_BOUNDARY_WIDTH = 2.0
     WHITE_PITCH_CLASSES = frozenset((0, 2, 4, 5, 7, 9, 11))
     BLACK_BOUNDARIES = {1: 1, 3: 2, 6: 4, 8: 5, 10: 6}
     RETRIGGER_RELEASE_SECONDS = 0.05
@@ -1026,10 +1029,12 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor("#00a7d6")
         self._accent_border = QColor("#0093bd")
         self._accent_text = QColor("#ffffff")
-        self._unused_surface = self._surface.darker(118)
-        self._unused_black = self._black.lighter(145)
+        self._unused_surface = self._surface.darker(
+            self.UNUSED_SURFACE_DARKER_FACTOR
+        )
+        self._unused_black = QColor(self._unused_surface)
         self._unused_text = QColor(self._text)
-        self._unused_text.setAlpha(120)
+        self._unused_text.setAlpha(self.UNUSED_TEXT_ALPHA)
         self._white_notes = tuple(
             note
             for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
@@ -1038,6 +1043,7 @@ class PianoKeyboardWidget(QWidget):
         white_indexes = {
             note: index for index, note in enumerate(self._white_notes)
         }
+        self._white_note_indexes = white_indexes
         self._black_note_positions = tuple(
             (note, white_indexes[note - 1] + 1)
             for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
@@ -1045,6 +1051,9 @@ class PianoKeyboardWidget(QWidget):
                 note % 12 in self.BLACK_BOUNDARIES
                 and note - 1 in white_indexes
             )
+        )
+        self._black_note_position_by_note = dict(
+            self._black_note_positions
         )
         self._label_specs = tuple(
             (
@@ -1163,6 +1172,49 @@ class PianoKeyboardWidget(QWidget):
             or self._used_note_range[0] <= note <= self._used_note_range[1]
         )
 
+    def _semitone_boundary_points(
+        self,
+        lower_note: int,
+        white_width: float,
+        black_height: float,
+        height: float,
+    ) -> tuple[QPointF, ...] | None:
+        upper_note = lower_note + 1
+        black_note: int | None = None
+        black_on_lower_side = False
+        if lower_note in self._black_note_position_by_note:
+            black_note = lower_note
+            black_on_lower_side = True
+        elif upper_note in self._black_note_position_by_note:
+            black_note = upper_note
+
+        if black_note is not None:
+            black_position = self._black_note_position_by_note[black_note]
+            black_width = white_width * 0.62
+            black_center = black_position * white_width
+            black_edge = (
+                black_center + black_width / 2
+                if black_on_lower_side
+                else black_center - black_width / 2
+            )
+            white_boundary = black_center + 0.5
+            black_bottom = 0.5 + black_height
+            return (
+                QPointF(black_edge, 0.5),
+                QPointF(black_edge, black_bottom),
+                QPointF(white_boundary, black_bottom),
+                QPointF(white_boundary, height),
+            )
+
+        upper_white_index = self._white_note_indexes.get(upper_note)
+        if upper_white_index is None:
+            return None
+        white_boundary = upper_white_index * white_width + 0.5
+        return (
+            QPointF(white_boundary, 0.5),
+            QPointF(white_boundary, height),
+        )
+
     def _refresh_note_range_colors(self) -> None:
         self._white_key_fills = tuple(
             self._surface if self._note_is_used(note) else self._unused_surface
@@ -1234,10 +1286,12 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor(accent)
         self._accent_border = QColor(accent_border)
         self._accent_text = QColor(accent_text)
-        self._unused_surface = self._surface.darker(118)
-        self._unused_black = self._black.lighter(145)
+        self._unused_surface = self._surface.darker(
+            self.UNUSED_SURFACE_DARKER_FACTOR
+        )
+        self._unused_black = QColor(self._unused_surface)
         self._unused_text = QColor(self._text)
-        self._unused_text.setAlpha(120)
+        self._unused_text.setAlpha(self.UNUSED_TEXT_ALPHA)
         self._refresh_note_range_colors()
         self.update()
 
@@ -1352,6 +1406,35 @@ class PianoKeyboardWidget(QWidget):
                 )
             )
             painter.drawRect(key_rect)
+
+        if self._used_note_range is not None:
+            low, high = self._used_note_range
+            boundary_color = QColor(self._accent_border)
+            boundary_color.setAlpha(225)
+            painter.setPen(
+                QPen(
+                    boundary_color,
+                    self.USED_RANGE_BOUNDARY_WIDTH,
+                )
+            )
+            boundary_splits = []
+            if low > self.NOTE_MIN:
+                boundary_splits.append(low - 1)
+            if high < self.NOTE_MAX:
+                boundary_splits.append(high)
+            for lower_note in boundary_splits:
+                points = self._semitone_boundary_points(
+                    lower_note,
+                    white_width,
+                    black_height,
+                    height,
+                )
+                if not points:
+                    continue
+                boundary_path = QPainterPath(points[0])
+                for point in points[1:]:
+                    boundary_path.lineTo(point)
+                painter.drawPath(boundary_path)
         painter.end()
 
 
@@ -1401,6 +1484,7 @@ class FallingNotesWidget(QWidget):
     LIGHT_BAR_INTENSITY_STEPS = 12
     IMPACT_PROGRESS_STEPS = 24
     SUBPIXEL_STEPS = 4
+    UNUSED_RANGE_OVERLAY_ALPHA = 205
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1896,7 +1980,7 @@ class FallingNotesWidget(QWidget):
                 used_left = max(0.0, low_rect[0])
                 used_right = min(width, high_rect[0] + high_rect[1])
                 unused_overlay = QColor(self._surface)
-                unused_overlay.setAlpha(205)
+                unused_overlay.setAlpha(self.UNUSED_RANGE_OVERLAY_ALPHA)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(unused_overlay)
                 if used_left > 0:
@@ -2867,6 +2951,31 @@ class ContentPanel(QWidget):
 
 
 class PositionSlider(QSlider):
+    def __init__(
+        self,
+        orientation: Qt.Orientation,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(orientation, parent)
+        self._absolute_drag_active = False
+
+    def _style_rects(self) -> tuple[QStyleOptionSlider, QRectF, QRectF]:
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderGroove,
+            self,
+        )
+        handle = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            self,
+        )
+        return option, QRectF(groove), QRectF(handle)
+
     def _value_at_event(self, event: QMouseEvent) -> int:
         vertical = self.orientation() == Qt.Orientation.Vertical
         position = event.position().y() if vertical else event.position().x()
@@ -2879,19 +2988,61 @@ class PositionSlider(QSlider):
             vertical,
         )
 
+    def _centered_value_at_event(self, event: QMouseEvent) -> int:
+        option, groove, handle = self._style_rects()
+        vertical = self.orientation() == Qt.Orientation.Vertical
+        if vertical:
+            handle_center_offset = int((handle.height() - 1.0) / 2.0)
+            position = event.position().y() - handle_center_offset
+            slider_min = groove.top()
+            slider_max = groove.bottom() - handle.height() + 1.0
+        else:
+            handle_center_offset = int((handle.width() - 1.0) / 2.0)
+            position = event.position().x() - handle_center_offset
+            slider_min = groove.left()
+            slider_max = groove.right() - handle.width() + 1.0
+        return QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            round(position - slider_min),
+            max(1, round(slider_max - slider_min)),
+            option.upsideDown,
+        )
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
-            self.setValue(self._value_at_event(event))
+            _option, _groove, handle = self._style_rects()
+            if handle.contains(event.position()):
+                self._absolute_drag_active = False
+                super().mousePressEvent(event)
+                return
+            self._absolute_drag_active = True
+            self.setSliderDown(True)
+            self.setValue(self._centered_value_at_event(event))
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if (
+            self._absolute_drag_active
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            self.setValue(self._centered_value_at_event(event))
+            event.accept()
+            return
         super().mouseMoveEvent(event)
-        if event.buttons() & Qt.MouseButton.LeftButton:
-            self.setValue(self._value_at_event(event))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.setValue(self._value_at_event(event))
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._absolute_drag_active
+        ):
+            self.setValue(self._centered_value_at_event(event))
+            self.setSliderDown(False)
+            self._absolute_drag_active = False
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
 
@@ -3329,6 +3480,7 @@ class SeekSlider(PositionSlider):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setObjectName("PlaybackPositionSlider")
         self._user_drag_active = False
         self._whale_frames: tuple[QPixmap, ...] = ()
         self._whale_frame_position = 0
@@ -3540,21 +3692,21 @@ class SeekSlider(PositionSlider):
         if event.button() == Qt.MouseButton.LeftButton:
             self._user_drag_active = True
             self.setSliderDown(True)
-            self.setValue(self._value_at_event(event))
+            self.setValue(self._centered_value_at_event(event))
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._user_drag_active and event.buttons() & Qt.MouseButton.LeftButton:
-            self.setValue(self._value_at_event(event))
+            self.setValue(self._centered_value_at_event(event))
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._user_drag_active:
-            self.setValue(self._value_at_event(event))
+            self.setValue(self._centered_value_at_event(event))
             self.setSliderDown(False)
             self._user_drag_active = False
             self.seekRequested.emit(self.value())

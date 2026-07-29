@@ -89,7 +89,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -2075,7 +2075,7 @@ class MidiMainWindow(QMainWindow):
         )
         self.current_track_marquee.move(
             marquee_origin.x() + marquee_offset,
-            marquee_origin.y() - round(8 * scale),
+            marquee_origin.y() - round(11 * scale),
         )
         self.current_track_marquee.raise_()
         self._set_spacer_width(

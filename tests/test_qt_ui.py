@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QStyle,
+    QStyleOptionSlider,
 )
 
 import main as app_main
@@ -571,7 +572,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.7.0")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.7.1")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -1936,7 +1937,7 @@ class QtUiTests(unittest.TestCase):
                 ).y()
                 self.assertEqual(
                     marquee_top,
-                    player_header_top - round(8 * scale / 100),
+                    player_header_top - round(11 * scale / 100),
                 )
                 self.assertLessEqual(marquee_top, seek_top)
                 self.assertGreater(marquee_bottom, seek_top)
@@ -2476,7 +2477,19 @@ class QtUiTests(unittest.TestCase):
             self.assertEqual(self.controller.state.position, 12.0)
 
             dragged_value = slider.value()
-            self.assertAlmostEqual(dragged_value, 750, delta=2)
+            option = QStyleOptionSlider()
+            slider.initStyleOption(option)
+            handle = slider.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider,
+                option,
+                QStyle.SubControl.SC_SliderHandle,
+                slider,
+            )
+            self.assertAlmostEqual(
+                handle.center().x(),
+                drag_position.x(),
+                delta=1,
+            )
             self.controller.state.position = 24.0
             self.controller._notify()
             self.application.processEvents()
@@ -2684,6 +2697,51 @@ class QtUiTests(unittest.TestCase):
 
         self.assertGreater(self.controller.state.midi_sound_volume, 90)
         self.assertLess(self.controller.state.playback_speed_percent, 100)
+
+    def test_volume_bar_click_centers_handle_without_jumping_when_grabbed(self) -> None:
+        self.controller.set_option("midi_sound_volume", 80)
+        self.window.show()
+        self.application.processEvents()
+        volume_bar = self.window.volume_control.slider
+        option = QStyleOptionSlider()
+        volume_bar.initStyleOption(option)
+        handle = volume_bar.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            volume_bar,
+        )
+        grab_position = QPoint(handle.left() + 1, handle.center().y())
+
+        QTest.mousePress(
+            volume_bar,
+            Qt.MouseButton.LeftButton,
+            pos=grab_position,
+        )
+        QTest.mouseRelease(
+            volume_bar,
+            Qt.MouseButton.LeftButton,
+            pos=grab_position,
+        )
+
+        self.assertEqual(self.controller.state.midi_sound_volume, 80)
+
+        target_x = volume_bar.width() // 4
+        QTest.mouseClick(
+            volume_bar,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(target_x, volume_bar.height() // 2),
+        )
+        option = QStyleOptionSlider()
+        volume_bar.initStyleOption(option)
+        handle = volume_bar.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            volume_bar,
+        )
+
+        self.assertAlmostEqual(handle.center().x(), target_x, delta=1)
 
     def test_volume_bar_track_remains_visible_at_zero(self) -> None:
         self.controller.set_option("midi_sound_volume", 0)
@@ -4112,9 +4170,73 @@ class QtUiTests(unittest.TestCase):
             keyboard_plain.pixelColor(unused_x, 30),
             keyboard_ranged.pixelColor(unused_x, 30),
         )
+        self.assertLessEqual(
+            keyboard_ranged.pixelColor(unused_x, 30).lightness(),
+            keyboard_plain.pixelColor(unused_x, 30).lightness() - 30,
+        )
         self.assertEqual(
             keyboard_plain.pixelColor(used_x, 30),
             keyboard_ranged.pixelColor(used_x, 30),
+        )
+        self.assertEqual(
+            roll.UNUSED_RANGE_OVERLAY_ALPHA,
+            205,
+        )
+        self.assertEqual(
+            keyboard._unused_black,
+            keyboard._unused_surface,
+        )
+        self.assertEqual(
+            keyboard.USED_RANGE_BOUNDARY_WIDTH,
+            2.0,
+        )
+        black_positions = dict(keyboard._black_note_positions)
+        unused_black_x = round(black_positions[22] * white_width)
+        used_black_x = round(black_positions[49] * white_width)
+        self.assertGreaterEqual(
+            keyboard_ranged.pixelColor(unused_black_x, 10).lightness(),
+            keyboard_plain.pixelColor(unused_black_x, 10).lightness() + 12,
+        )
+        self.assertEqual(
+            keyboard_plain.pixelColor(used_black_x, 10),
+            keyboard_ranged.pixelColor(used_black_x, 10),
+        )
+        black_height = (keyboard.height() - 1) * 0.60
+        upper_black_boundary = keyboard._semitone_boundary_points(
+            60,
+            white_width,
+            black_height,
+            keyboard.height() - 1,
+        )
+        lower_black_boundary = keyboard._semitone_boundary_points(
+            61,
+            white_width,
+            black_height,
+            keyboard.height() - 1,
+        )
+        white_only_boundary = keyboard._semitone_boundary_points(
+            64,
+            white_width,
+            black_height,
+            keyboard.height() - 1,
+        )
+        self.assertIsNotNone(upper_black_boundary)
+        self.assertIsNotNone(lower_black_boundary)
+        self.assertIsNotNone(white_only_boundary)
+        self.assertEqual(len(upper_black_boundary), 4)
+        self.assertEqual(len(lower_black_boundary), 4)
+        self.assertEqual(len(white_only_boundary), 2)
+        self.assertNotEqual(
+            upper_black_boundary[0].x(),
+            upper_black_boundary[-1].x(),
+        )
+        self.assertNotEqual(
+            lower_black_boundary[0].x(),
+            lower_black_boundary[-1].x(),
+        )
+        self.assertEqual(
+            white_only_boundary[0].x(),
+            white_only_boundary[-1].x(),
         )
 
         unused_roll_rect = roll._note_rect(21, roll.width() - 1)
@@ -4307,21 +4429,43 @@ class QtUiTests(unittest.TestCase):
                 self.assertIn(f"background: {palette.disabled}", disabled_rule)
 
     def test_slider_handle_shape_scales_without_becoming_rectangular(self) -> None:
+        compact_stylesheet = build_stylesheet("light", 100)
+        compact_volume_rule = compact_stylesheet.split(
+            "QSlider#VolumeSlider::handle:horizontal",
+            1,
+        )[1].split("}", 1)[0]
         stylesheet = build_stylesheet("light", 200)
         vertical_rule = stylesheet.split("QSlider::handle:vertical", 1)[1].split("}", 1)[0]
         horizontal_rule = stylesheet.split("QSlider::handle:horizontal", 1)[1].split("}", 1)[0]
-
+        volume_rule = stylesheet.split(
+            "QSlider#VolumeSlider::handle:horizontal",
+            1,
+        )[1].split("}", 1)[0]
         self.assertIn("height: 28px", vertical_rule)
         self.assertIn("margin: 0 -10px", vertical_rule)
         self.assertIn("border-radius: 14px", vertical_rule)
         self.assertIn("width: 28px", horizontal_rule)
         self.assertIn("margin: -10px 0", horizontal_rule)
         self.assertIn("border-radius: 14px", horizontal_rule)
+        self.assertIn("width: 11px", compact_volume_rule)
+        self.assertIn("height: 11px", compact_volume_rule)
+        self.assertIn("border-radius: 7px", compact_volume_rule)
+        self.assertIn("width: 22px", volume_rule)
+        self.assertIn("height: 22px", volume_rule)
+        self.assertIn("margin: -10px 0", volume_rule)
+        self.assertIn("border-radius: 15px", volume_rule)
+        self.assertNotIn(
+            "QSlider#PlaybackPositionSlider::handle:horizontal",
+            stylesheet,
+        )
 
     def test_sky_blue_theme_reserves_a_larger_animated_whale_handle(self) -> None:
         sky_blue_stylesheet = build_stylesheet("sky_blue", 200)
         light_stylesheet = build_stylesheet("light", 200)
-        selector = 'QSlider[animatedWhale="true"]::handle:horizontal'
+        selector = (
+            'QSlider#PlaybackPositionSlider'
+            '[animatedWhale="true"]::handle:horizontal'
+        )
         horizontal_rule = sky_blue_stylesheet.rsplit(selector, 1)[1].split("}", 1)[0]
 
         self.assertIn("width: 48px", horizontal_rule)

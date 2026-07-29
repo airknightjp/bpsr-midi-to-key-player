@@ -68,7 +68,25 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.7.0
+    "en": """v1.7.1
+
+This maintenance release improves slider operation and final-output-range
+visibility.
+
+[Main changes]
+
+- Volume and playback-position sliders now center their handles at the clicked
+  position while preserving stable handle dragging.
+- Refined volume and playback slider handle shapes and scaling.
+- Unified unused white and black key colors and added keyboard range boundaries
+  that follow black-key shapes.
+- Softened the unused-range display in the falling-note view and removed its
+  extra boundary lines.
+- Fine-tuned the current-track title position above the seek bar.
+
+[v1.7.0]
+
+v1.7.0
 
 This release adds saved playlists and sequential MIDI playback.
 
@@ -256,7 +274,24 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.7.0
+    "ja": """v1.7.1
+
+本バージョンは、スライダー操作と最終出力音域の視認性を改善する
+メンテナンスリリースです。
+
+【主な変更】
+
+- 音量バーと再生位置バーをクリックした位置へ、つまみの中心が正確に
+  移動するようにし、つまみのドラッグ操作も安定させました。
+- 音量バーと再生位置バーのつまみ形状、および拡大時の表示を調整しました。
+- 未使用の白鍵と黒鍵の色を統一し、黒鍵の形状に沿う使用音域の境界を
+  鍵盤へ追加しました。
+- 音ゲー欄の未使用音域表示を控えめにし、余分な境界線を削除しました。
+- 再生バー上の曲名表示位置を微調整しました。
+
+【v1.7.0】
+
+v1.7.0
 
 本バージョンでは、保存可能なプレイリストとMIDIの順次再生を追加しました。
 
@@ -450,7 +485,22 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.7.0
+    "zh": """v1.7.1
+
+本版本是维护更新，改进了滑块操作和最终输出音域的可见性。
+
+【主要变更】
+
+- 点击音量和播放位置滑块时，滑块中心会准确移动到点击位置，同时保持
+  拖动操作稳定。
+- 调整音量和播放位置滑块的形状及缩放显示。
+- 统一未使用白键与黑键的颜色，并在键盘上添加沿黑键形状绘制的音域边界。
+- 减弱下落音符区域的未使用音域显示，并删除多余边界线。
+- 微调进度条上方的当前曲目名称位置。
+
+【v1.7.0】
+
+v1.7.0
 
 本版本新增了可保存的播放列表和MIDI顺序播放功能。
 
