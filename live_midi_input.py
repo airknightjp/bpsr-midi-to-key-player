@@ -28,6 +28,7 @@ from repeat_guard import RapidRepeatGuard
 
 MAXPNAMELEN = 32
 CALLBACK_FUNCTION = 0x00030000
+MIM_CLOSE = 0x3C2
 MIM_DATA = 0x3C3
 MMSYSERR_NOERROR = 0
 
@@ -139,6 +140,21 @@ class MidiInputKeyboardBridge:
     def is_running(self) -> bool:
         with self._lock:
             return self._running
+
+    def is_device_connected(self) -> bool:
+        with self._lock:
+            if not self._running or not self._handle:
+                return False
+            handle = self._handle
+        device_id = wintypes.UINT()
+        try:
+            result = ctypes.windll.winmm.midiInGetID(
+                handle,
+                ctypes.byref(device_id),
+            )
+        except Exception:
+            return False
+        return result == MMSYSERR_NOERROR
 
     def start(self) -> None:
         with self._lock:
@@ -306,6 +322,12 @@ class MidiInputKeyboardBridge:
         param1: int,
         _param2: int,
     ) -> None:
+        if message == MIM_CLOSE:
+            with self._lock:
+                disconnected = self._running
+            if disconnected:
+                self.on_state("midi input disconnected")
+            return
         if message != MIM_DATA:
             return
         status = param1 & 0xFF

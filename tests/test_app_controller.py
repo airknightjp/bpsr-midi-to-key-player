@@ -1859,6 +1859,145 @@ class AppControllerTests(unittest.TestCase):
                 realtime_sound.set_enabled.assert_called_once_with(enabled)
                 bridge.start.assert_called_once_with()
 
+    def test_hotplug_removal_stops_active_midi_input_and_releases_resources(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        controller.attach_view(RecordingView())
+        bridge = MagicMock()
+        realtime_sound = MagicMock()
+        controller.midi_input_devices = [(3, "USB MIDI"), (7, "Other MIDI")]
+        controller.state.midi_input_devices = ["USB MIDI", "Other MIDI"]
+        controller.state.midi_input_device = "USB MIDI"
+        controller.state.midi_input_running = True
+        controller.midi_input_bridge = bridge
+        controller.realtime_sound_output = realtime_sound
+
+        with patch(
+            "app_controller.list_midi_input_devices",
+            return_value=[(3, "Other MIDI")],
+        ):
+            controller.handle_midi_input_devices_changed()
+
+        bridge.stop.assert_called_once_with()
+        realtime_sound.close.assert_called_once_with()
+        self.assertFalse(controller.state.midi_input_running)
+        self.assertIsNone(controller.midi_input_bridge)
+        self.assertIsNone(controller.realtime_sound_output)
+        self.assertEqual(controller.state.midi_input_devices, ["Other MIDI"])
+        self.assertEqual(controller.state.midi_input_device, "Other MIDI")
+
+    def test_hotplug_of_another_device_keeps_active_midi_input_running(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        controller.attach_view(RecordingView())
+        bridge = MagicMock()
+        controller.midi_input_devices = [(3, "USB MIDI"), (7, "Other MIDI")]
+        controller.state.midi_input_devices = ["USB MIDI", "Other MIDI"]
+        controller.state.midi_input_device = "USB MIDI"
+        controller.state.midi_input_running = True
+        controller.midi_input_bridge = bridge
+        bridge.is_device_connected.return_value = True
+
+        with patch(
+            "app_controller.list_midi_input_devices",
+            return_value=[(3, "USB MIDI")],
+        ):
+            controller.handle_midi_input_devices_changed()
+
+        bridge.stop.assert_not_called()
+        self.assertTrue(controller.state.midi_input_running)
+        self.assertIs(controller.midi_input_bridge, bridge)
+        self.assertEqual(controller.state.midi_input_devices, ["USB MIDI"])
+        self.assertEqual(controller.state.midi_input_device, "USB MIDI")
+
+    def test_hotplug_stops_stale_input_handle_even_when_device_name_returns(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        controller.attach_view(RecordingView())
+        bridge = MagicMock()
+        bridge.is_device_connected.return_value = False
+        realtime_sound = MagicMock()
+        controller.midi_input_devices = [(3, "USB MIDI")]
+        controller.state.midi_input_devices = ["USB MIDI"]
+        controller.state.midi_input_device = "USB MIDI"
+        controller.state.midi_input_running = True
+        controller.midi_input_bridge = bridge
+        controller.realtime_sound_output = realtime_sound
+
+        with patch(
+            "app_controller.list_midi_input_devices",
+            return_value=[(3, "USB MIDI")],
+        ):
+            controller.handle_midi_input_devices_changed()
+
+        bridge.stop.assert_called_once_with()
+        realtime_sound.close.assert_called_once_with()
+        self.assertFalse(controller.state.midi_input_running)
+        self.assertEqual(controller.state.midi_input_device, "USB MIDI")
+
+    def test_hotplug_enumeration_failure_does_not_stop_active_input(self) -> None:
+        controller = self.make_controller()
+        controller.attach_view(RecordingView())
+        bridge = MagicMock()
+        controller.midi_input_devices = [(3, "USB MIDI")]
+        controller.state.midi_input_devices = ["USB MIDI"]
+        controller.state.midi_input_device = "USB MIDI"
+        controller.state.midi_input_running = True
+        controller.midi_input_bridge = bridge
+        bridge.is_device_connected.return_value = True
+
+        with patch(
+            "app_controller.list_midi_input_devices",
+            side_effect=OSError("enumeration failed"),
+        ):
+            controller.handle_midi_input_devices_changed()
+
+        bridge.stop.assert_not_called()
+        self.assertTrue(controller.state.midi_input_running)
+        self.assertEqual(controller.state.midi_input_devices, ["USB MIDI"])
+
+    def test_winmm_disconnect_notification_stops_active_input(self) -> None:
+        controller = self.make_controller()
+        controller.attach_view(RecordingView())
+        bridge = MagicMock()
+        realtime_sound = MagicMock()
+        controller.state.midi_input_running = True
+        controller.midi_input_bridge = bridge
+        controller.realtime_sound_output = realtime_sound
+
+        controller._queue_worker_message(
+            ("midi_input_state", "midi input disconnected")
+        )
+        controller.process_pending_events()
+
+        bridge.stop.assert_called_once_with()
+        realtime_sound.close.assert_called_once_with()
+        self.assertFalse(controller.state.midi_input_running)
+        self.assertIsNone(controller.midi_input_bridge)
+        self.assertIsNone(controller.realtime_sound_output)
+
+    def test_hotplug_arrival_updates_list_without_starting_input(self) -> None:
+        controller = self.make_controller()
+        controller.attach_view(RecordingView())
+        controller.midi_input_devices = []
+        controller.state.midi_input_devices = []
+        controller.state.midi_input_device = ""
+
+        with patch(
+            "app_controller.list_midi_input_devices",
+            return_value=[(0, "USB MIDI")],
+        ):
+            controller.handle_midi_input_devices_changed()
+
+        self.assertEqual(controller.midi_input_devices, [(0, "USB MIDI")])
+        self.assertEqual(controller.state.midi_input_devices, ["USB MIDI"])
+        self.assertEqual(controller.state.midi_input_device, "USB MIDI")
+        self.assertFalse(controller.state.midi_input_running)
+        self.assertIsNone(controller.midi_input_bridge)
+
     def test_realtime_input_does_not_block_midi_sound_playback(self) -> None:
         controller = self.make_controller(sound_source="synth")
         controller.state.midi_input_running = True

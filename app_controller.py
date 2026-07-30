@@ -1442,7 +1442,7 @@ class AppController:
         self.request_save()
         self._notify()
 
-    def stop_midi_input(self) -> None:
+    def stop_midi_input(self, *, notify: bool = True) -> None:
         self._next_midi_input_id()
         bridge = self.midi_input_bridge
         self.midi_input_bridge = None
@@ -1452,7 +1452,8 @@ class AppController:
         self.state.midi_input_running = False
         self._cancel_rhythm_judgments()
         self._clear_active_output_notes("midi")
-        self._notify()
+        if notify:
+            self._notify()
 
     def refresh_midi_input_devices(self, *, notify: bool = True) -> None:
         previous = self.state.midi_input_device
@@ -1467,6 +1468,50 @@ class AppController:
         self.request_save()
         if notify:
             self._notify()
+
+    def handle_midi_input_devices_changed(self) -> None:
+        previous_devices = tuple(self.midi_input_devices)
+        previous_names = tuple(self.state.midi_input_devices)
+        previous_selection = self.state.midi_input_device
+        try:
+            devices = list_midi_input_devices()
+        except Exception:
+            return
+
+        names = [name for _device_id, name in devices]
+        devices_changed = tuple(devices) != previous_devices
+        names_changed = tuple(names) != previous_names
+        active_bridge_disconnected = bool(
+            self.state.midi_input_running
+            and self.midi_input_bridge is not None
+            and not self.midi_input_bridge.is_device_connected()
+        )
+        selection_missing = bool(
+            self.state.midi_input_running
+            and previous_selection
+            and previous_selection not in names
+        )
+        if (
+            not devices_changed
+            and not names_changed
+            and not selection_missing
+            and not active_bridge_disconnected
+        ):
+            return
+
+        if selection_missing or active_bridge_disconnected:
+            self.stop_midi_input(notify=False)
+
+        self.midi_input_devices = devices
+        self.state.midi_input_devices = names
+        self.state.midi_input_device = (
+            previous_selection
+            if previous_selection in names
+            else (names[0] if names else "")
+        )
+        if self.state.midi_input_device != previous_selection:
+            self.request_save()
+        self._notify()
 
     def set_option(self, name: str, value: object) -> None:
         if name in {
@@ -1875,7 +1920,10 @@ class AppController:
                 elif kind == "midi_input_state":
                     status = str(message[1])
                     self.state.status = status
-                    if status == "midi input failed":
+                    if status in {
+                        "midi input failed",
+                        "midi input disconnected",
+                    }:
                         self.stop_midi_input()
                     changed = True
                 elif kind == "position":

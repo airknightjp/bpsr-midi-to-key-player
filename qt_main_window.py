@@ -55,6 +55,7 @@ from config import (
     SUPPORTED_BINDING_KEYS,
     normalize_panel_order,
 )
+from device_hotplug import is_native_device_change
 from i18n import COLOR_THEME_NAMES, LANGUAGE_NAMES, SOUND_SOURCE_NAMES, TEXT
 from note_visualization import build_output_note_range, build_piano_roll_notes
 from qt_components import (
@@ -156,6 +157,18 @@ class MidiMainWindow(QMainWindow):
         self._midi_reload_feedback_timer.timeout.connect(
             lambda: self._set_midi_reload_feedback(False)
         )
+        self._midi_device_change_timer = QTimer(self)
+        self._midi_device_change_timer.setSingleShot(True)
+        self._midi_device_change_timer.setInterval(250)
+        self._midi_device_change_timer.timeout.connect(
+            self.controller.handle_midi_input_devices_changed
+        )
+        self._midi_device_probe_timer = QTimer(self)
+        self._midi_device_probe_timer.setSingleShot(True)
+        self._midi_device_probe_timer.setInterval(0)
+        self._midi_device_probe_timer.timeout.connect(
+            self.controller.handle_midi_input_devices_changed
+        )
         self._create_tray_icon()
         self.update_service = UpdateService(self)
         self.update_service.checkCompleted.connect(
@@ -184,6 +197,19 @@ class MidiMainWindow(QMainWindow):
         self._hotkey_timer.start()
         self.controller.set_event_notifier(self.event_dispatch_requested.emit)
         self.controller.attach_view(self)
+
+    def nativeEvent(self, event_type, message):  # type: ignore[no-untyped-def]
+        if is_native_device_change(event_type, message):
+            self._schedule_midi_device_refresh()
+        return super().nativeEvent(event_type, message)
+
+    def _schedule_midi_device_refresh(self) -> None:
+        probe_timer = getattr(self, "_midi_device_probe_timer", None)
+        if probe_timer is not None and not probe_timer.isActive():
+            probe_timer.start()
+        timer = getattr(self, "_midi_device_change_timer", None)
+        if timer is not None:
+            timer.start()
 
     def _build_ui(self) -> None:
         self.setWindowTitle("BPSR MIDI to KEY Player")

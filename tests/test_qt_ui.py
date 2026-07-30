@@ -93,6 +93,23 @@ class QtUiTests(unittest.TestCase):
             TOOLTIP_WAKE_UP_DELAY_MS,
         )
 
+    def test_midi_hotplug_refresh_is_debounced_by_single_shot_timer(self) -> None:
+        timer = self.window._midi_device_change_timer
+        probe_timer = self.window._midi_device_probe_timer
+        timer.stop()
+        probe_timer.stop()
+
+        self.window._schedule_midi_device_refresh()
+        self.assertTrue(timer.isSingleShot())
+        self.assertEqual(timer.interval(), 250)
+        self.assertTrue(timer.isActive())
+        self.assertTrue(probe_timer.isSingleShot())
+        self.assertEqual(probe_timer.interval(), 0)
+        self.assertTrue(probe_timer.isActive())
+
+        timer.stop()
+        probe_timer.stop()
+
     def test_position_change_updates_only_the_player_position_widgets(self) -> None:
         self.controller.state.duration = 120.0
         self.controller._notify()

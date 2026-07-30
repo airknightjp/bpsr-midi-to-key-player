@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import ctypes
 import unittest
 from unittest.mock import patch
 
-from live_midi_input import MIM_DATA, MidiInputKeyboardBridge
+from live_midi_input import MIM_CLOSE, MIM_DATA, MidiInputKeyboardBridge
 
 
 class FakeOutput:
@@ -44,6 +45,47 @@ class LiveMidiInputTests(unittest.TestCase):
         bridge._note_off(channel=0, note=60)
 
         self.assertEqual(output.events, [("press", "a"), ("release", "a")])
+
+    def test_device_connection_check_uses_the_open_winmm_handle(self) -> None:
+        bridge = self._running_bridge(FakeOutput())
+        bridge._handle = ctypes.c_void_p(123)
+
+        with patch.object(
+            ctypes.windll.winmm,
+            "midiInGetID",
+            return_value=0,
+        ) as get_id:
+            self.assertTrue(bridge.is_device_connected())
+
+        get_id.assert_called_once()
+
+    def test_device_connection_check_rejects_invalid_winmm_handle(self) -> None:
+        bridge = self._running_bridge(FakeOutput())
+        bridge._handle = ctypes.c_void_p(123)
+
+        with patch.object(
+            ctypes.windll.winmm,
+            "midiInGetID",
+            return_value=5,
+        ):
+            self.assertFalse(bridge.is_device_connected())
+
+    def test_driver_close_reports_active_device_disconnection(self) -> None:
+        states: list[str] = []
+        bridge = self._running_bridge(FakeOutput(), on_state=states.append)
+
+        bridge._midi_callback(None, MIM_CLOSE, 0, 0, 0)
+
+        self.assertEqual(states, ["midi input disconnected"])
+
+    def test_normal_shutdown_ignores_driver_close_notification(self) -> None:
+        states: list[str] = []
+        bridge = self._running_bridge(FakeOutput(), on_state=states.append)
+        bridge._running = False
+
+        bridge._midi_callback(None, MIM_CLOSE, 0, 0, 0)
+
+        self.assertEqual(states, [])
 
     def test_dry_run_change_releases_active_realtime_input_immediately(self) -> None:
         output = FakeOutput()
