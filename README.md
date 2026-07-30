@@ -9,7 +9,6 @@
 BPSR MIDI to KEY Player は、MIDIファイルやUSB MIDIキーボード入力を、Windows上のキーボード入力へ変換するデスクトップツールです。
 
 BPSR系のキーボード演奏を想定しており、MIDIノートを通常のキーボードキーに割り当て、現在フォーカスされているアプリへ入力します。MIDI音源再生、トラック／チャンネル選択、リアルタイム入力変換、音域調整、キーバインド変更、グローバルショートカット、テーマ変更、タスクトレイ格納にも対応しています。
-<img width="1039" height="743" alt="image" src="https://github.com/user-attachments/assets/7c852c24-f366-4f68-bef6-82e3d90a7748" />
 
 ## 画面
 
