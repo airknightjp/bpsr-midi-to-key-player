@@ -1,4 +1,5 @@
 # BPSR MIDI to KEY Player
+<img width="1032" height="742" alt="image" src="https://github.com/user-attachments/assets/98273c5a-5829-4ef0-b8d8-0ab27be2383e" />
 
 [English](README.en.md) | [中文](README.zh-CN.md)
 
