@@ -19,10 +19,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QButtonGroup,
     QRadioButton,
@@ -56,6 +58,7 @@ from config import (
     normalize_panel_order,
 )
 from device_hotplug import is_native_device_change
+from feedback_service import FeedbackService
 from i18n import COLOR_THEME_NAMES, LANGUAGE_NAMES, SOUND_SOURCE_NAMES, TEXT
 from note_visualization import build_output_note_range, build_piano_roll_notes
 from qt_components import (
@@ -90,7 +93,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.8.0"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -113,6 +116,233 @@ class DownwardComboBox(QComboBox):
         popup = self.view().window()
         position = self.mapToGlobal(QPoint(0, self.height()))
         popup.move(position)
+
+
+class FeedbackDialog(QDialog):
+    def __init__(
+        self,
+        service: FeedbackService,
+        app_version: str,
+        language: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.app_version = app_version
+        self.language = language
+        self.text = TEXT[language]
+        self.setObjectName("FeedbackDialog")
+        self.setWindowTitle(self.text["feedback_title"])
+        self.setMinimumWidth(520)
+        self._progress_target = 0
+        self._pending_success_reference: str | None = None
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(20)
+        self._progress_timer.timeout.connect(self._advance_progress)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(self.text["feedback_intro"])
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QGridLayout()
+        form.setColumnStretch(1, 1)
+        form.addWidget(QLabel(self.text["feedback_kind"]), 0, 0)
+        self.kind = QComboBox()
+        self.kind.setObjectName("FeedbackKind")
+        self.kind.addItem(self.text["feedback_bug"], "bug")
+        self.kind.addItem(
+            self.text["feedback_improvement"],
+            "improvement",
+        )
+        form.addWidget(self.kind, 0, 1)
+
+        form.addWidget(QLabel(self.text["feedback_subject"]), 1, 0)
+        self.subject = QLineEdit()
+        self.subject.setObjectName("FeedbackSubject")
+        self.subject.setMaxLength(120)
+        self.subject.setPlaceholderText(
+            self.text["feedback_subject_placeholder"]
+        )
+        form.addWidget(self.subject, 1, 1)
+
+        message_label = QLabel(self.text["feedback_message"])
+        message_label.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
+        form.addWidget(message_label, 2, 0)
+        message_column = QVBoxLayout()
+        self.message = QPlainTextEdit()
+        self.message.setObjectName("FeedbackMessage")
+        self.message.setPlaceholderText(
+            self.text["feedback_message_placeholder"]
+        )
+        self.message.setMinimumHeight(150)
+        message_column.addWidget(self.message)
+        self.message_count = QLabel("0 / 4000")
+        self.message_count.setProperty("caption", True)
+        self.message_count.setAlignment(Qt.AlignmentFlag.AlignRight)
+        message_column.addWidget(self.message_count)
+        form.addLayout(message_column, 2, 1)
+
+        form.addWidget(QLabel(self.text["feedback_contact"]), 3, 0)
+        self.contact = QLineEdit()
+        self.contact.setObjectName("FeedbackContact")
+        self.contact.setMaxLength(200)
+        self.contact.setPlaceholderText(
+            self.text["feedback_contact_placeholder"]
+        )
+        form.addWidget(self.contact, 3, 1)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        cancel = QPushButton(self.text["cancel"])
+        cancel.clicked.connect(self.reject)
+        progress_label = QLabel(self.text["feedback_progress"])
+        progress_label.setObjectName("FeedbackSendProgressLabel")
+        form.addWidget(progress_label, 4, 0)
+        self.send_progress = QProgressBar()
+        self.send_progress.setObjectName("FeedbackSendProgress")
+        self.send_progress.setRange(0, 100)
+        self.send_progress.setValue(0)
+        self.send_progress.setTextVisible(True)
+        self.send_progress.setMinimumWidth(140)
+        self.send_progress.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.send_button = QPushButton(self.text["feedback_send"])
+        self.send_button.setObjectName("FeedbackSendButton")
+        self.send_button.setDefault(True)
+        self.send_button.setEnabled(False)
+        self.send_button.clicked.connect(self._submit)
+        buttons.addWidget(self.send_progress)
+        buttons.addWidget(cancel)
+        buttons.addWidget(self.send_button)
+        form.addLayout(buttons, 4, 1)
+        layout.addLayout(form)
+
+        self.subject.textChanged.connect(self._update_validity)
+        self.message.textChanged.connect(self._message_changed)
+        self.service.submission_succeeded.connect(self._submission_succeeded)
+        self.service.submission_failed.connect(self._submission_failed)
+        self.service.submission_progress.connect(self._set_progress_target)
+
+    def _message_changed(self) -> None:
+        message = self.message.toPlainText()
+        if len(message) > 4000:
+            cursor = self.message.textCursor()
+            position = min(cursor.position(), 4000)
+            self.message.setPlainText(message[:4000])
+            cursor = self.message.textCursor()
+            cursor.setPosition(position)
+            self.message.setTextCursor(cursor)
+            message = self.message.toPlainText()
+        self.message_count.setText(f"{len(message)} / 4000")
+        self._update_validity()
+
+    def _update_validity(self) -> None:
+        valid = (
+            len(self.subject.text().strip()) >= 3
+            and len(self.message.toPlainText().strip()) >= 10
+        )
+        self.send_button.setEnabled(valid and not self.service.is_sending)
+
+    def _submit(self) -> None:
+        if (
+            len(self.subject.text().strip()) < 3
+            or len(self.message.toPlainText().strip()) < 10
+        ):
+            QMessageBox.warning(
+                self,
+                self.text["feedback_error_title"],
+                self.text["feedback_validation"],
+            )
+            return
+        self.send_button.setEnabled(False)
+        self.send_button.setText(self.text["feedback_sending"])
+        self._pending_success_reference = None
+        self._set_progress_target(0)
+        started = self.service.submit(
+            kind=str(self.kind.currentData()),
+            subject=self.subject.text(),
+            message=self.message.toPlainText(),
+            contact=self.contact.text(),
+            app_version=self.app_version,
+            language=self.language,
+        )
+        if not started and not self.service.is_sending:
+            self.send_button.setText(self.text["feedback_send"])
+            self._update_validity()
+
+    def _submission_succeeded(self, reference_id: str) -> None:
+        self._pending_success_reference = reference_id
+        self._set_progress_target(100)
+        if self.send_progress.value() >= 100:
+            self._finish_submission_success()
+
+    def _set_progress_target(self, value: int) -> None:
+        value = max(0, min(100, int(value)))
+        if value == 0:
+            self._progress_timer.stop()
+            self._progress_target = 0
+            self.send_progress.setValue(0)
+            return
+        self._progress_target = max(self._progress_target, value)
+        if (
+            self.send_progress.value() < self._progress_target
+            and not self._progress_timer.isActive()
+        ):
+            self._progress_timer.start()
+
+    def _advance_progress(self) -> None:
+        current = self.send_progress.value()
+        if current < self._progress_target:
+            self.send_progress.setValue(current + 1)
+            current += 1
+        if current < self._progress_target:
+            return
+        self._progress_timer.stop()
+        if current >= 100 and self._pending_success_reference is not None:
+            self._finish_submission_success()
+
+    def _finish_submission_success(self) -> None:
+        reference_id = self._pending_success_reference
+        if reference_id is None:
+            return
+        self._pending_success_reference = None
+        self.send_button.setText(self.text["feedback_success_title"])
+        self.send_button.setEnabled(False)
+        reference = (
+            reference_id[:8].upper() if reference_id else "-"
+        )
+        QMessageBox.information(
+            self,
+            self.text["feedback_success_title"],
+            self.text["feedback_success"].format(reference=reference),
+        )
+        self.accept()
+
+    def _submission_failed(self, code: str, retry_after: int) -> None:
+        self._pending_success_reference = None
+        self._set_progress_target(0)
+        self.send_button.setText(self.text["feedback_send"])
+        self._update_validity()
+        if code == "rate_limited":
+            minutes = max(1, (retry_after + 59) // 60)
+            message = self.text["feedback_error_rate_limited"].format(
+                minutes=minutes
+            )
+        else:
+            message = self.text.get(
+                f"feedback_error_{code}",
+                self.text["feedback_error_server"],
+            )
+        QMessageBox.warning(
+            self,
+            self.text["feedback_error_title"],
+            message,
+        )
 
 
 class MidiMainWindow(QMainWindow):
@@ -170,6 +400,7 @@ class MidiMainWindow(QMainWindow):
             self.controller.handle_midi_input_devices_changed
         )
         self._create_tray_icon()
+        self.feedback_service = FeedbackService(self)
         self.update_service = UpdateService(self)
         self.update_service.checkCompleted.connect(
             self._update_check_completed
@@ -2959,6 +3190,8 @@ class MidiMainWindow(QMainWindow):
         other_menu.addSeparator()
         other_menu.addAction(text["release_notes"], self._open_release_notes)
         other_menu.addSeparator()
+        other_menu.addAction(text["send_feedback"], self._open_feedback)
+        other_menu.addSeparator()
         other_menu.addAction(text["about_app"], self._open_about)
 
     def _set_option(self, name: str, value: object) -> None:
@@ -3365,6 +3598,14 @@ class MidiMainWindow(QMainWindow):
         buttons.addWidget(close)
         layout.addLayout(buttons)
         dialog.exec()
+
+    def _open_feedback(self) -> None:
+        FeedbackDialog(
+            self.feedback_service,
+            APP_VERSION,
+            self.state.language,
+            self,
+        ).exec()
 
     def _open_key_bindings(self) -> None:
         KeyBindingsDialog(self.controller, self.state.language, self).exec()

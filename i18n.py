@@ -68,7 +68,30 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.7.2
+    "en": """v1.8.0
+
+This release improves USB MIDI device hot-plug handling and adds in-app
+feedback submission.
+
+[Main changes]
+
+- Detect USB MIDI device connection and disconnection through Windows device
+  notifications.
+- Safely stop realtime input conversion when the active MIDI device is
+  disconnected.
+- Refresh the device list after reconnection without automatically restarting
+  input reception.
+- Added `Other > Send Bug Report / Suggestion`.
+- Submit a bug report or suggestion with a subject, details, and optional
+  reply-to address from the app.
+- Added Japanese, English, and Simplified Chinese feedback forms.
+- Show submission progress and a reference number after successful receipt.
+- Show separate guidance for connection errors, timeouts, duplicate reports,
+  and send limits.
+
+[v1.7.2]
+
+v1.7.2
 
 This maintenance release improves the visual distinction of unused keyboard
 ranges.
@@ -289,7 +312,28 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.7.2
+    "ja": """v1.8.0
+
+本バージョンでは、USB MIDI機器の抜き差し対応を改善し、
+アプリ内から不具合や要望を送信できる機能を追加しました。
+
+【主な変更】
+
+- USB MIDI機器の接続・切断をWindowsの通知から検知します。
+- 使用中のMIDI機器が切断された場合、リアルタイム入力変換を
+  安全に停止します。
+- MIDI機器を再接続した際にデバイス一覧を更新します。
+  入力受付は自動再開しません。
+- `その他 > 不具合・要望を送る`を追加しました。
+- 不具合／要望、件名、詳細、任意の返信先をアプリ内から送信できます。
+- 日本語、英語、簡体中文の送信画面に対応しました。
+- 送信状況を表示し、受付完了後に受付番号を表示します。
+- 通信エラー、タイムアウト、重複送信、送信回数制限を
+  個別に案内します。
+
+【v1.7.2】
+
+v1.7.2
 
 本バージョンは、選択中MIDIの未使用鍵盤を見分けやすくする
 UIメンテナンスリリースです。
@@ -514,7 +558,24 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.7.2
+    "zh": """v1.8.0
+
+本版本改进了USB MIDI设备的热插拔处理，并新增应用内问题报告与建议提交功能。
+
+【主要变更】
+
+- 通过Windows设备通知检测USB MIDI设备的连接与断开。
+- 当前使用的MIDI设备断开时，会安全停止实时输入转换。
+- MIDI设备重新连接后会刷新设备列表，但不会自动重新开始接收输入。
+- 新增`其他 > 发送问题报告或建议`。
+- 可在应用内提交问题／建议、主题、详细内容及可选回复方式。
+- 提交界面支持日语、英语和简体中文。
+- 显示提交进度，并在成功接收后显示受理编号。
+- 分别提示连接错误、超时、重复提交和发送次数限制。
+
+【v1.7.2】
+
+v1.7.2
 
 本版本是界面维护更新，改进了所选MIDI未使用键盘区域的辨识度。
 
@@ -708,6 +769,54 @@ TEXT = {
         "dont_show_again": "Don't show again",
         "about_app": "About BPSR MIDI to KEY Player",
         "about_title": "About BPSR MIDI to KEY Player",
+        "send_feedback": "Send Bug Report / Suggestion",
+        "feedback_title": "Send Bug Report / Suggestion",
+        "feedback_intro": (
+            "Tell us what happened or what would make the app better."
+        ),
+        "feedback_kind": "Type",
+        "feedback_bug": "Bug",
+        "feedback_improvement": "Suggestion",
+        "feedback_subject": "Subject",
+        "feedback_subject_placeholder": "Brief summary",
+        "feedback_message": "Details",
+        "feedback_message_placeholder": (
+            "For bugs, include the steps and what you expected to happen."
+        ),
+        "feedback_contact": "Reply-to (optional)",
+        "feedback_contact_placeholder": "Email address or other contact",
+        "feedback_send": "Send",
+        "feedback_sending": "Sending...",
+        "feedback_progress": "Send progress",
+        "feedback_success_title": "Sent",
+        "feedback_success": (
+            "Thank you. Your message has been received.\n"
+            "Reference: {reference}"
+        ),
+        "feedback_error_title": "Could not send",
+        "feedback_validation": (
+            "Enter a subject of at least 3 characters and details of at "
+            "least 10 characters."
+        ),
+        "feedback_error_duplicate": (
+            "The same message has already been received."
+        ),
+        "feedback_error_rate_limited": (
+            "The send limit has been reached. Try again in about "
+            "{minutes} minutes."
+        ),
+        "feedback_error_network": (
+            "Could not connect to the server. Check your internet connection."
+        ),
+        "feedback_error_timeout": (
+            "The server did not respond in time. Please try again later."
+        ),
+        "feedback_error_server": (
+            "The server could not receive the message. Please try again later."
+        ),
+        "feedback_error_unavailable": (
+            "The feedback service is not configured in this build."
+        ),
         "version": "Version",
         "close": "Close",
         "exit": "Exit",
@@ -850,6 +959,54 @@ TEXT = {
         "dont_show_again": "\u4eca\u5f8c\u8868\u793a\u3057\u306a\u3044",
         "about_app": "BPSR MIDI to KEY Player \u306b\u3064\u3044\u3066",
         "about_title": "BPSR MIDI to KEY Player \u306b\u3064\u3044\u3066",
+        "send_feedback": "\u4e0d\u5177\u5408\u30fb\u8981\u671b\u3092\u9001\u308b",
+        "feedback_title": "\u4e0d\u5177\u5408\u30fb\u8981\u671b\u3092\u9001\u308b",
+        "feedback_intro": (
+            "\u767a\u751f\u3057\u305f\u554f\u984c\u3084\u3001\u30a2\u30d7\u30ea\u3092\u3088\u308a\u826f\u304f\u3059\u308b\u305f\u3081\u306e"
+            "\u3054\u610f\u898b\u3092\u304a\u805e\u304b\u305b\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_kind": "\u7a2e\u5225",
+        "feedback_bug": "\u4e0d\u5177\u5408",
+        "feedback_improvement": "\u8981\u671b",
+        "feedback_subject": "\u4ef6\u540d",
+        "feedback_subject_placeholder": "\u5185\u5bb9\u3092\u7c21\u6f54\u306b\u5165\u529b",
+        "feedback_message": "\u8a73\u7d30",
+        "feedback_message_placeholder": (
+            "\u4e0d\u5177\u5408\u306e\u5834\u5408\u306f\u3001\u64cd\u4f5c\u624b\u9806\u3068\u671f\u5f85\u3057\u305f\u7d50\u679c\u3082\u3054\u8a18\u5165\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_contact": "\u8fd4\u4fe1\u5148\uff08\u4efb\u610f\uff09",
+        "feedback_contact_placeholder": "\u30e1\u30fc\u30eb\u30a2\u30c9\u30ec\u30b9\u306a\u3069",
+        "feedback_send": "\u9001\u4fe1",
+        "feedback_sending": "\u9001\u4fe1\u4e2d...",
+        "feedback_progress": "\u9001\u4fe1\u72b6\u6cc1",
+        "feedback_success_title": "\u9001\u4fe1\u5b8c\u4e86",
+        "feedback_success": (
+            "\u3054\u9023\u7d61\u3092\u53d7\u3051\u4ed8\u3051\u307e\u3057\u305f\u3002\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3059\u3002\n"
+            "\u53d7\u4ed8\u756a\u53f7: {reference}"
+        ),
+        "feedback_error_title": "\u9001\u4fe1\u3067\u304d\u307e\u305b\u3093",
+        "feedback_validation": (
+            "\u4ef6\u540d\u306f3\u6587\u5b57\u4ee5\u4e0a\u3001\u8a73\u7d30\u306f10\u6587\u5b57\u4ee5\u4e0a\u3067\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_error_duplicate": (
+            "\u540c\u3058\u5185\u5bb9\u306f\u3059\u3067\u306b\u53d7\u3051\u4ed8\u3051\u3066\u3044\u307e\u3059\u3002"
+        ),
+        "feedback_error_rate_limited": (
+            "\u9001\u4fe1\u56de\u6570\u304c\u4e0a\u9650\u306b\u9054\u3057\u307e\u3057\u305f\u3002"
+            "\u7d04{minutes}\u5206\u5f8c\u306b\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_error_network": (
+            "\u30b5\u30fc\u30d0\u306b\u63a5\u7d9a\u3067\u304d\u307e\u305b\u3093\u3002\u30a4\u30f3\u30bf\u30fc\u30cd\u30c3\u30c8\u63a5\u7d9a\u3092\u3054\u78ba\u8a8d\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_error_timeout": (
+            "\u30b5\u30fc\u30d0\u304b\u3089\u5fdc\u7b54\u304c\u3042\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002\u6642\u9593\u3092\u304a\u3044\u3066\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_error_server": (
+            "\u30b5\u30fc\u30d0\u304c\u53d7\u4ed8\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002\u6642\u9593\u3092\u304a\u3044\u3066\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "feedback_error_unavailable": (
+            "\u3053\u306e\u30d3\u30eb\u30c9\u306b\u306f\u9001\u4fe1\u5148\u304c\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002"
+        ),
         "version": "\u30d0\u30fc\u30b8\u30e7\u30f3",
         "close": "\u9589\u3058\u308b",
         "exit": "\u7d42\u4e86",
@@ -992,6 +1149,50 @@ TEXT = {
         "dont_show_again": "\u4ee5\u540e\u4e0d\u518d\u663e\u793a",
         "about_app": "\u5173\u4e8e BPSR MIDI to KEY Player",
         "about_title": "\u5173\u4e8e BPSR MIDI to KEY Player",
+        "send_feedback": "\u53d1\u9001\u95ee\u9898\u62a5\u544a\u6216\u5efa\u8bae",
+        "feedback_title": "\u53d1\u9001\u95ee\u9898\u62a5\u544a\u6216\u5efa\u8bae",
+        "feedback_intro": (
+            "\u8bf7\u544a\u8bc9\u6211\u4eec\u9047\u5230\u7684\u95ee\u9898\uff0c\u6216\u53ef\u4ee5\u6539\u8fdb\u5e94\u7528\u7684\u5efa\u8bae\u3002"
+        ),
+        "feedback_kind": "\u7c7b\u578b",
+        "feedback_bug": "\u95ee\u9898",
+        "feedback_improvement": "\u5efa\u8bae",
+        "feedback_subject": "\u4e3b\u9898",
+        "feedback_subject_placeholder": "\u7b80\u8981\u8bf4\u660e\u5185\u5bb9",
+        "feedback_message": "\u8be6\u7ec6\u5185\u5bb9",
+        "feedback_message_placeholder": (
+            "\u5982\u679c\u662f\u95ee\u9898\uff0c\u8bf7\u5199\u660e\u64cd\u4f5c\u6b65\u9aa4\u548c\u9884\u671f\u7ed3\u679c\u3002"
+        ),
+        "feedback_contact": "\u56de\u590d\u65b9\u5f0f\uff08\u53ef\u9009\uff09",
+        "feedback_contact_placeholder": "\u7535\u5b50\u90ae\u4ef6\u6216\u5176\u4ed6\u8054\u7cfb\u65b9\u5f0f",
+        "feedback_send": "\u53d1\u9001",
+        "feedback_sending": "\u53d1\u9001\u4e2d...",
+        "feedback_progress": "\u53d1\u9001\u8fdb\u5ea6",
+        "feedback_success_title": "\u53d1\u9001\u5b8c\u6210",
+        "feedback_success": (
+            "\u611f\u8c22\u60a8\u7684\u53cd\u9988\uff0c\u6211\u4eec\u5df2\u6536\u5230\u3002\n"
+            "\u7f16\u53f7: {reference}"
+        ),
+        "feedback_error_title": "\u65e0\u6cd5\u53d1\u9001",
+        "feedback_validation": (
+            "\u4e3b\u9898\u81f3\u5c11\u8f93\u51653\u4e2a\u5b57\u7b26\uff0c\u8be6\u7ec6\u5185\u5bb9\u81f3\u5c11\u8f93\u516510\u4e2a\u5b57\u7b26\u3002"
+        ),
+        "feedback_error_duplicate": "\u76f8\u540c\u5185\u5bb9\u5df2\u7ecf\u63a5\u6536\u3002",
+        "feedback_error_rate_limited": (
+            "\u5df2\u8fbe\u5230\u53d1\u9001\u6b21\u6570\u4e0a\u9650\u3002\u8bf7\u5927\u7ea6{minutes}\u5206\u949f\u540e\u518d\u8bd5\u3002"
+        ),
+        "feedback_error_network": (
+            "\u65e0\u6cd5\u8fde\u63a5\u670d\u52a1\u5668\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u8fde\u63a5\u3002"
+        ),
+        "feedback_error_timeout": (
+            "\u670d\u52a1\u5668\u672a\u53ca\u65f6\u54cd\u5e94\u3002\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002"
+        ),
+        "feedback_error_server": (
+            "\u670d\u52a1\u5668\u65e0\u6cd5\u63a5\u6536\u6b64\u5185\u5bb9\u3002\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002"
+        ),
+        "feedback_error_unavailable": (
+            "\u6b64\u7248\u672c\u5c1a\u672a\u8bbe\u7f6e\u53cd\u9988\u670d\u52a1\u3002"
+        ),
         "version": "\u7248\u672c",
         "close": "\u5173\u95ed",
         "exit": "\u9000\u51fa",

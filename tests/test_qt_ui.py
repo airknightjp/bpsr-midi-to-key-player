@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QStyle,
     QStyleOptionSlider,
 )
@@ -39,7 +40,7 @@ from i18n import TEXT
 from midi_parser import MidiEvent, MidiSummary, MidiTrackSummary
 from note_visualization import PianoRollNote
 from playlist_store import Playlist, PlaylistTrack
-from qt_main_window import KeyBindingsDialog, MidiMainWindow
+from qt_main_window import FeedbackDialog, KeyBindingsDialog, MidiMainWindow
 from qt_components import (
     ColumnSeparatorHeaderView,
     ContentPanel,
@@ -2932,6 +2933,96 @@ class QtUiTests(unittest.TestCase):
 
         check.assert_called_once_with(qt_main_window.APP_VERSION)
         self.assertTrue(self.window._manual_update_check)
+
+    def test_other_menu_includes_feedback_command(self) -> None:
+        other_action = next(
+            action
+            for action in self.window.menuBar().actions()
+            if action.text() == "Other"
+        )
+        commands = [
+            action.text()
+            for action in other_action.menu().actions()
+            if not action.isSeparator()
+        ]
+        self.assertIn(TEXT["en"]["send_feedback"], commands)
+
+    def test_feedback_dialog_requires_meaningful_subject_and_details(
+        self,
+    ) -> None:
+        dialog = FeedbackDialog(
+            self.window.feedback_service,
+            qt_main_window.APP_VERSION,
+            "ja",
+            self.window,
+        )
+        self.assertFalse(dialog.send_button.isEnabled())
+        dialog.subject.setText("再生停止")
+        dialog.message.setPlainText("再生ボタンを押しても開始されません。")
+        self.assertTrue(dialog.send_button.isEnabled())
+        self.assertEqual(dialog.send_progress.value(), 0)
+        dialog.service.submission_progress.emit(42)
+        self.assertEqual(dialog.send_progress.value(), 0)
+        dialog._advance_progress()
+        self.assertEqual(dialog.send_progress.value(), 1)
+        for _ in range(41):
+            dialog._advance_progress()
+        self.assertEqual(dialog.send_progress.value(), 42)
+        progress_labels = [
+            label
+            for label in dialog.findChildren(QLabel)
+            if label.objectName() == "FeedbackSendProgressLabel"
+        ]
+        self.assertEqual(
+            [label.text() for label in progress_labels],
+            [TEXT["ja"]["feedback_progress"]],
+        )
+        self.assertEqual(
+            dialog.send_progress.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Policy.Expanding,
+        )
+        dialog.show()
+        self.application.processEvents()
+        self.assertEqual(
+            dialog.contact.mapTo(dialog, QPoint(0, 0)).x(),
+            dialog.send_progress.mapTo(dialog, QPoint(0, 0)).x(),
+        )
+        self.assertGreater(dialog.send_progress.width(), 200)
+        self.assertNotIn(
+            qt_main_window.APP_VERSION,
+            " ".join(
+                label.text()
+                for label in dialog.findChildren(QLabel)
+            ),
+        )
+        dialog.close()
+
+    def test_feedback_dialog_marks_send_button_complete_on_success(
+        self,
+    ) -> None:
+        dialog = FeedbackDialog(
+            self.window.feedback_service,
+            qt_main_window.APP_VERSION,
+            "ja",
+            self.window,
+        )
+
+        with patch("qt_main_window.QMessageBox.information"):
+            dialog._submission_succeeded("12345678-abcd")
+            self.assertEqual(
+                dialog.send_button.text(),
+                TEXT["ja"]["feedback_send"],
+            )
+            for _ in range(100):
+                dialog._advance_progress()
+
+        self.assertEqual(
+            dialog.send_button.text(),
+            TEXT["ja"]["feedback_success_title"],
+        )
+        self.assertFalse(dialog.send_button.isEnabled())
+        self.assertEqual(dialog.send_progress.value(), 100)
+        dialog.close()
 
     def test_startup_update_check_is_skipped_within_one_hour(self) -> None:
         checked_at = 1_789_123_456

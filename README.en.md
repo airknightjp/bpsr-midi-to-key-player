@@ -10,6 +10,10 @@ BPSR MIDI to KEY Player is a Windows desktop tool that converts MIDI files and U
 
 It is designed for BPSR-style keyboard performance. MIDI notes are mapped to ordinary keyboard keys and sent to the currently focused application. The app also supports MIDI sound playback, track/channel selection, realtime input conversion, note range adjustment, custom key bindings, global shortcuts, themes, and task tray storage.
 
+## Screenshot
+
+![BPSR MIDI to KEY Player English interface](docs/screenshots/app-en.png)
+
 ## Distribution
 
 This application is distributed as an installation-free extracted folder. Extract the entire release ZIP to any location, then launch `BPSR_MIDI_to_KEY_Player.exe` inside the `BPSR_MIDI_to_KEY_Player` folder.
@@ -25,6 +29,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Double-click a MIDI file to play or stop MIDI sound playback.
 - Convert MIDI files into keyboard input.
 - Convert realtime USB MIDI keyboard input into keyboard input.
+- Detect USB MIDI device connection and disconnection, safely stop realtime conversion when the active device is removed, and refresh the device list after reconnection without automatically restarting input reception.
 - Enable `Play sound` to hear the conversion output while sending key input.
 - Adjust the volume slider, mute state, playback position, and playback speed (10-200%). Double-click the speed knob to reset it to 100%.
 - Adjust UI scale (100-200%) and window opacity from the View menu.
@@ -54,7 +59,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.7.2 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.8.0 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -69,6 +74,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - `Settings`: Change theme, language, key bindings, and tray behavior.
 - `Other > Check for Updates`: Check GitHub Releases for the latest version.
 - `Other > Release Notes`: Show the changes in the current version.
+- `Other > Send Bug Report / Suggestion`: Send a bug report or suggestion from the app.
 - `Other > About BPSR MIDI to KEY Player`: Show version information and the GitHub link.
 
 ## Software Updates
@@ -203,7 +209,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.7.2
+v1.8.0
 
 ## Copyright
 

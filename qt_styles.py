@@ -308,6 +308,18 @@ def build_stylesheet(
         background: {palette.accent}; color: {palette.accent_text}; border-color: {palette.accent};
     }}
     QPushButton:disabled, QToolButton:disabled {{ color: {palette.disabled}; background: {palette.panel_alt}; }}
+    QProgressBar {{
+        min-height: {control_height}px;
+        background: {palette.surface};
+        border: 1px solid {palette.border};
+        border-radius: {radius}px;
+        text-align: center;
+        color: {palette.text};
+    }}
+    QProgressBar::chunk {{
+        background: {palette.accent};
+        border-radius: {radius}px;
+    }}
     QPushButton#UpdateStatusCloseButton {{
         background: {palette.accent};
         color: {palette.accent_text};
