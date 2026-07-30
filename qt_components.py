@@ -1007,9 +1007,10 @@ class PianoKeyboardWidget(QWidget):
     NOTE_MIN = PIANO_NOTE_MIN
     NOTE_MAX = PIANO_NOTE_MAX
     BASE_HEIGHT = 57
-    UNUSED_SURFACE_DARKER_FACTOR = 120
+    UNUSED_KEY_COLOR = "#000000"
     UNUSED_TEXT_ALPHA = 100
-    USED_RANGE_BOUNDARY_WIDTH = 2.0
+    USED_RANGE_BOUNDARY_COLOR = "#FFFFFF"
+    USED_RANGE_BOUNDARY_WIDTH = 3.0
     WHITE_PITCH_CLASSES = frozenset((0, 2, 4, 5, 7, 9, 11))
     BLACK_BOUNDARIES = {1: 1, 3: 2, 6: 4, 8: 5, 10: 6}
     RETRIGGER_RELEASE_SECONDS = 0.05
@@ -1029,9 +1030,7 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor("#00a7d6")
         self._accent_border = QColor("#0093bd")
         self._accent_text = QColor("#ffffff")
-        self._unused_surface = self._surface.darker(
-            self.UNUSED_SURFACE_DARKER_FACTOR
-        )
+        self._unused_surface = QColor(self.UNUSED_KEY_COLOR)
         self._unused_black = QColor(self._unused_surface)
         self._unused_text = QColor(self._text)
         self._unused_text.setAlpha(self.UNUSED_TEXT_ALPHA)
@@ -1286,9 +1285,7 @@ class PianoKeyboardWidget(QWidget):
         self._accent = QColor(accent)
         self._accent_border = QColor(accent_border)
         self._accent_text = QColor(accent_text)
-        self._unused_surface = self._surface.darker(
-            self.UNUSED_SURFACE_DARKER_FACTOR
-        )
+        self._unused_surface = QColor(self.UNUSED_KEY_COLOR)
         self._unused_black = QColor(self._unused_surface)
         self._unused_text = QColor(self._text)
         self._unused_text.setAlpha(self.UNUSED_TEXT_ALPHA)
@@ -1409,8 +1406,8 @@ class PianoKeyboardWidget(QWidget):
 
         if self._used_note_range is not None:
             low, high = self._used_note_range
-            boundary_color = QColor(self._accent_border)
-            boundary_color.setAlpha(225)
+            boundary_color = QColor(self.USED_RANGE_BOUNDARY_COLOR)
+            boundary_color.setAlpha(255)
             painter.setPen(
                 QPen(
                     boundary_color,

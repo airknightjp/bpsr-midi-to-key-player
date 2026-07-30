@@ -4187,15 +4187,23 @@ class QtUiTests(unittest.TestCase):
             keyboard._unused_surface,
         )
         self.assertEqual(
+            keyboard._unused_surface,
+            QColor("#000000"),
+        )
+        self.assertEqual(
             keyboard.USED_RANGE_BOUNDARY_WIDTH,
-            2.0,
+            3.0,
+        )
+        self.assertEqual(
+            QColor(keyboard.USED_RANGE_BOUNDARY_COLOR),
+            QColor("#FFFFFF"),
         )
         black_positions = dict(keyboard._black_note_positions)
         unused_black_x = round(black_positions[22] * white_width)
         used_black_x = round(black_positions[49] * white_width)
-        self.assertGreaterEqual(
-            keyboard_ranged.pixelColor(unused_black_x, 10).lightness(),
-            keyboard_plain.pixelColor(unused_black_x, 10).lightness() + 12,
+        self.assertEqual(
+            keyboard_ranged.pixelColor(unused_black_x, 10),
+            keyboard._unused_black,
         )
         self.assertEqual(
             keyboard_plain.pixelColor(used_black_x, 10),
