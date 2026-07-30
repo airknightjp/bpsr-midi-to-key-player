@@ -63,7 +63,7 @@ class I18nTests(unittest.TestCase):
                 self.assertEqual(translations["release_notes"], labels[0])
                 self.assertEqual(translations["dont_show_again"], labels[1])
                 content = translations["release_notes_content"]
-                self.assertTrue(content.startswith("v1.7.1"))
+                self.assertTrue(content.startswith("v1.7.2"))
                 self.assertIn(labels[2], content)
                 self.assertIn("Qt", content)
                 self.assertIn("Buffer", content)

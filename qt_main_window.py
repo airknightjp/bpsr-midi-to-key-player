@@ -89,7 +89,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33

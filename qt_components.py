@@ -1008,9 +1008,10 @@ class PianoKeyboardWidget(QWidget):
     NOTE_MAX = PIANO_NOTE_MAX
     BASE_HEIGHT = 57
     UNUSED_KEY_COLOR = "#000000"
+    UNUSED_HATCH_COLOR = "#FFFFFF"
+    UNUSED_HATCH_ALPHA = 72
+    UNUSED_HATCH_TILE_SIZE = 8
     UNUSED_TEXT_ALPHA = 100
-    USED_RANGE_BOUNDARY_COLOR = "#FFFFFF"
-    USED_RANGE_BOUNDARY_WIDTH = 3.0
     WHITE_PITCH_CLASSES = frozenset((0, 2, 4, 5, 7, 9, 11))
     BLACK_BOUNDARIES = {1: 1, 3: 2, 6: 4, 8: 5, 10: 6}
     RETRIGGER_RELEASE_SECONDS = 0.05
@@ -1031,7 +1032,7 @@ class PianoKeyboardWidget(QWidget):
         self._accent_border = QColor("#0093bd")
         self._accent_text = QColor("#ffffff")
         self._unused_surface = QColor(self.UNUSED_KEY_COLOR)
-        self._unused_black = QColor(self._unused_surface)
+        self._unused_key_brush = self._create_unused_key_brush()
         self._unused_text = QColor(self._text)
         self._unused_text.setAlpha(self.UNUSED_TEXT_ALPHA)
         self._white_notes = tuple(
@@ -1042,7 +1043,6 @@ class PianoKeyboardWidget(QWidget):
         white_indexes = {
             note: index for index, note in enumerate(self._white_notes)
         }
-        self._white_note_indexes = white_indexes
         self._black_note_positions = tuple(
             (note, white_indexes[note - 1] + 1)
             for note in range(self.NOTE_MIN, self.NOTE_MAX + 1)
@@ -1050,9 +1050,6 @@ class PianoKeyboardWidget(QWidget):
                 note % 12 in self.BLACK_BOUNDARIES
                 and note - 1 in white_indexes
             )
-        )
-        self._black_note_position_by_note = dict(
-            self._black_note_positions
         )
         self._label_specs = tuple(
             (
@@ -1171,62 +1168,35 @@ class PianoKeyboardWidget(QWidget):
             or self._used_note_range[0] <= note <= self._used_note_range[1]
         )
 
-    def _semitone_boundary_points(
-        self,
-        lower_note: int,
-        white_width: float,
-        black_height: float,
-        height: float,
-    ) -> tuple[QPointF, ...] | None:
-        upper_note = lower_note + 1
-        black_note: int | None = None
-        black_on_lower_side = False
-        if lower_note in self._black_note_position_by_note:
-            black_note = lower_note
-            black_on_lower_side = True
-        elif upper_note in self._black_note_position_by_note:
-            black_note = upper_note
-
-        if black_note is not None:
-            black_position = self._black_note_position_by_note[black_note]
-            black_width = white_width * 0.62
-            black_center = black_position * white_width
-            black_edge = (
-                black_center + black_width / 2
-                if black_on_lower_side
-                else black_center - black_width / 2
-            )
-            white_boundary = black_center + 0.5
-            black_bottom = 0.5 + black_height
-            return (
-                QPointF(black_edge, 0.5),
-                QPointF(black_edge, black_bottom),
-                QPointF(white_boundary, black_bottom),
-                QPointF(white_boundary, height),
-            )
-
-        upper_white_index = self._white_note_indexes.get(upper_note)
-        if upper_white_index is None:
-            return None
-        white_boundary = upper_white_index * white_width + 0.5
-        return (
-            QPointF(white_boundary, 0.5),
-            QPointF(white_boundary, height),
-        )
-
     def _refresh_note_range_colors(self) -> None:
         self._white_key_fills = tuple(
-            self._surface if self._note_is_used(note) else self._unused_surface
+            self._surface if self._note_is_used(note) else self._unused_key_brush
             for note in self._white_notes
         )
         self._black_key_fills = tuple(
-            self._black if self._note_is_used(note) else self._unused_black
+            self._black if self._note_is_used(note) else self._unused_key_brush
             for note, _position in self._black_note_positions
         )
         self._label_colors = tuple(
             self._text if self._note_is_used(note) else self._unused_text
             for _index, note, _text in self._label_specs
         )
+
+    def _create_unused_key_brush(self) -> QBrush:
+        tile_size = self.UNUSED_HATCH_TILE_SIZE
+        tile = QPixmap(tile_size, tile_size)
+        tile.fill(self._unused_surface)
+        painter = QPainter(tile)
+        hatch_color = QColor(self.UNUSED_HATCH_COLOR)
+        hatch_color.setAlpha(self.UNUSED_HATCH_ALPHA)
+        painter.setPen(QPen(hatch_color, 1.0))
+        for offset in (-tile_size, 0, tile_size):
+            painter.drawLine(
+                QPointF(offset, tile_size),
+                QPointF(offset + tile_size, 0),
+            )
+        painter.end()
+        return QBrush(tile)
 
     def set_retrigger_events(self, events: object) -> None:
         if not self._rendering_enabled:
@@ -1286,7 +1256,6 @@ class PianoKeyboardWidget(QWidget):
         self._accent_border = QColor(accent_border)
         self._accent_text = QColor(accent_text)
         self._unused_surface = QColor(self.UNUSED_KEY_COLOR)
-        self._unused_black = QColor(self._unused_surface)
         self._unused_text = QColor(self._text)
         self._unused_text.setAlpha(self.UNUSED_TEXT_ALPHA)
         self._refresh_note_range_colors()
@@ -1404,34 +1373,6 @@ class PianoKeyboardWidget(QWidget):
             )
             painter.drawRect(key_rect)
 
-        if self._used_note_range is not None:
-            low, high = self._used_note_range
-            boundary_color = QColor(self.USED_RANGE_BOUNDARY_COLOR)
-            boundary_color.setAlpha(255)
-            painter.setPen(
-                QPen(
-                    boundary_color,
-                    self.USED_RANGE_BOUNDARY_WIDTH,
-                )
-            )
-            boundary_splits = []
-            if low > self.NOTE_MIN:
-                boundary_splits.append(low - 1)
-            if high < self.NOTE_MAX:
-                boundary_splits.append(high)
-            for lower_note in boundary_splits:
-                points = self._semitone_boundary_points(
-                    lower_note,
-                    white_width,
-                    black_height,
-                    height,
-                )
-                if not points:
-                    continue
-                boundary_path = QPainterPath(points[0])
-                for point in points[1:]:
-                    boundary_path.lineTo(point)
-                painter.drawPath(boundary_path)
         painter.end()
 
 

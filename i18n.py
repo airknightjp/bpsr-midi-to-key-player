@@ -68,7 +68,22 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.7.1
+    "en": """v1.7.2
+
+This maintenance release improves the visual distinction of unused keyboard
+ranges.
+
+[Main changes]
+
+- Unused keys outside the selected MIDI's final output range now use a solid
+  black diagonal hatch.
+- Removed the extra white range-boundary line from the keyboard.
+- The hatch uses a cached pattern so it does not generate diagonal lines on
+  every repaint.
+
+[v1.7.1]
+
+v1.7.1
 
 This maintenance release improves slider operation and final-output-range
 visibility.
@@ -274,7 +289,21 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.7.1
+    "ja": """v1.7.2
+
+本バージョンは、選択中MIDIの未使用鍵盤を見分けやすくする
+UIメンテナンスリリースです。
+
+【主な変更】
+
+- 最終出力音域外の未使用鍵盤を、不透明な黒地の斜線表示へ変更しました。
+- 鍵盤へ追加していた白い音域境界線を削除しました。
+- 斜線はキャッシュしたパターンを再利用し、再描画ごとの線生成を
+  行わない構成にしました。
+
+【v1.7.1】
+
+v1.7.1
 
 本バージョンは、スライダー操作と最終出力音域の視認性を改善する
 メンテナンスリリースです。
@@ -485,7 +514,19 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.7.1
+    "zh": """v1.7.2
+
+本版本是界面维护更新，改进了所选MIDI未使用键盘区域的辨识度。
+
+【主要变更】
+
+- 最终输出音域之外的未使用琴键改为不透明黑底斜线显示。
+- 删除此前添加在键盘上的白色音域边界线。
+- 斜线使用缓存图案，避免每次重绘时重新生成线条。
+
+【v1.7.1】
+
+v1.7.1
 
 本版本是维护更新，改进了滑块操作和最终输出音域的可见性。
 

@@ -572,7 +572,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.7.1")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.7.2")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -4183,70 +4183,28 @@ class QtUiTests(unittest.TestCase):
             205,
         )
         self.assertEqual(
-            keyboard._unused_black,
-            keyboard._unused_surface,
-        )
-        self.assertEqual(
             keyboard._unused_surface,
             QColor("#000000"),
-        )
-        self.assertEqual(
-            keyboard.USED_RANGE_BOUNDARY_WIDTH,
-            3.0,
-        )
-        self.assertEqual(
-            QColor(keyboard.USED_RANGE_BOUNDARY_COLOR),
-            QColor("#FFFFFF"),
         )
         black_positions = dict(keyboard._black_note_positions)
         unused_black_x = round(black_positions[22] * white_width)
         used_black_x = round(black_positions[49] * white_width)
-        self.assertEqual(
+        hatch_texture = keyboard._unused_key_brush.texture().toImage()
+        hatch_colors = {
+            hatch_texture.pixelColor(x, y).rgba()
+            for x in range(hatch_texture.width())
+            for y in range(hatch_texture.height())
+        }
+        self.assertIn(QColor("#000000").rgba(), hatch_colors)
+        self.assertGreater(len(hatch_colors), 1)
+        self.assertNotEqual(
             keyboard_ranged.pixelColor(unused_black_x, 10),
-            keyboard._unused_black,
+            keyboard_plain.pixelColor(unused_black_x, 10),
         )
         self.assertEqual(
             keyboard_plain.pixelColor(used_black_x, 10),
             keyboard_ranged.pixelColor(used_black_x, 10),
         )
-        black_height = (keyboard.height() - 1) * 0.60
-        upper_black_boundary = keyboard._semitone_boundary_points(
-            60,
-            white_width,
-            black_height,
-            keyboard.height() - 1,
-        )
-        lower_black_boundary = keyboard._semitone_boundary_points(
-            61,
-            white_width,
-            black_height,
-            keyboard.height() - 1,
-        )
-        white_only_boundary = keyboard._semitone_boundary_points(
-            64,
-            white_width,
-            black_height,
-            keyboard.height() - 1,
-        )
-        self.assertIsNotNone(upper_black_boundary)
-        self.assertIsNotNone(lower_black_boundary)
-        self.assertIsNotNone(white_only_boundary)
-        self.assertEqual(len(upper_black_boundary), 4)
-        self.assertEqual(len(lower_black_boundary), 4)
-        self.assertEqual(len(white_only_boundary), 2)
-        self.assertNotEqual(
-            upper_black_boundary[0].x(),
-            upper_black_boundary[-1].x(),
-        )
-        self.assertNotEqual(
-            lower_black_boundary[0].x(),
-            lower_black_boundary[-1].x(),
-        )
-        self.assertEqual(
-            white_only_boundary[0].x(),
-            white_only_boundary[-1].x(),
-        )
-
         unused_roll_rect = roll._note_rect(21, roll.width() - 1)
         used_roll_rect = roll._note_rect(60, roll.width() - 1)
         self.assertIsNotNone(unused_roll_rect)
