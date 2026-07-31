@@ -30,6 +30,21 @@ class FakeOutput:
 
 
 class KeyPlaybackTests(unittest.TestCase):
+    def test_keyboard_player_reports_natural_completion(self) -> None:
+        states: list[str] = []
+        completions: list[bool] = []
+        player = MidiKeyboardPlayer(
+            output=FakeOutput(),
+            on_state=states.append,
+            on_complete=lambda: completions.append(True),
+        )
+
+        player.play([MidiEvent(time=0.0, kind="end")])
+        player.wait_until_stopped(timeout=1.0)
+
+        self.assertIn("stopped", states)
+        self.assertEqual(completions, [True])
+
     def test_keyboard_optimization_reports_progress_and_completion(self) -> None:
         progress: list[int | None] = []
         player = MidiKeyboardPlayer(

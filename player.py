@@ -30,6 +30,7 @@ from repeat_guard import RapidRepeatGuard
 
 
 StateCallback = Callable[[str], None]
+CompletionCallback = Callable[[], None]
 ErrorCallback = Callable[[str], None]
 PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
@@ -46,6 +47,7 @@ class MidiKeyboardPlayer:
         self,
         output: KeyboardOutput,
         on_state: StateCallback | None = None,
+        on_complete: CompletionCallback | None = None,
         on_error: ErrorCallback | None = None,
         on_position: PositionCallback | None = None,
         on_optimization_progress: OptimizationProgressCallback | None = None,
@@ -69,6 +71,7 @@ class MidiKeyboardPlayer:
     ):
         self.output = output
         self.on_state = on_state or (lambda _state: None)
+        self.on_complete = on_complete or (lambda: None)
         self.on_error = on_error or (lambda _message: None)
         self.on_position = on_position or (lambda _position: None)
         self.on_optimization_progress = (
@@ -297,6 +300,7 @@ class MidiKeyboardPlayer:
         start_time: float,
         on_countdown_tick: CountdownCallback | None,
     ) -> None:
+        completed_normally = False
         try:
             self._reset_external_octave_to_base_if_needed()
             for remaining in range(countdown_seconds, 0, -1):
@@ -359,6 +363,7 @@ class MidiKeyboardPlayer:
                 self._consume_release_request()
                 self.on_position(clock.position())
                 self._handle_event(event)
+            completed_normally = not self._stop_event.is_set()
         except Exception as exc:
             try:
                 self.on_error(str(exc) or exc.__class__.__name__)
@@ -385,6 +390,8 @@ class MidiKeyboardPlayer:
                 self._current_events = None
                 self._optimization_generation += 1
             self.on_state("stopped")
+            if completed_normally:
+                self.on_complete()
 
     def _consume_release_request(self) -> None:
         if not self._release_requested.is_set():

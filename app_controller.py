@@ -683,8 +683,29 @@ class AppController:
         if (
             self.state.input_conversion_mode != INPUT_CONVERSION_MIDI_FILE
             or self.state.midi_input_running
-            or self.state.keyboard_playing
         ):
+            return
+        if self.state.playlist_tab_active:
+            if (
+                self.state.playlist_playback_active
+                and self.state.playlist_input_conversion
+            ):
+                if self.state.keyboard_paused:
+                    self.stop_playback()
+                    self.play_selected_playlist(input_conversion=True)
+                return
+            if self.state.keyboard_playing:
+                return
+            if (
+                self.state.keyboard_paused
+                or self.state.playlist_playback_active
+                or self.state.sound_playing
+                or self.state.sound_paused
+            ):
+                self.stop_playback()
+            self.play_selected_playlist(input_conversion=True)
+            return
+        if self.state.keyboard_playing:
             return
         if (
             self.state.keyboard_paused
@@ -697,7 +718,12 @@ class AppController:
             self.play_keyboard()
 
     def stop_keyboard_conversion_from_shortcut(self) -> None:
-        if self.state.keyboard_playing or self.state.keyboard_paused:
+        if (
+            self.state.playlist_playback_active
+            and self.state.playlist_input_conversion
+        ):
+            self.stop_playback()
+        elif self.state.keyboard_playing or self.state.keyboard_paused:
             self.stop_playback()
 
     def toggle_input_conversion(self) -> None:
@@ -820,6 +846,9 @@ class AppController:
         self.state.selected_playlist_index = index
         self._notify()
 
+    def set_playlist_tab_active(self, active: bool) -> None:
+        self.state.playlist_tab_active = bool(active)
+
     def replace_playlists(self, playlists: object) -> bool:
         normalized = normalize_playlists(playlists)
         selected_id = self._selected_playlist_id()
@@ -847,7 +876,11 @@ class AppController:
         self._notify()
         return True
 
-    def play_selected_playlist(self) -> None:
+    def play_selected_playlist(
+        self,
+        *,
+        input_conversion: bool = False,
+    ) -> None:
         index = self.state.selected_playlist_index
         if not 0 <= index < len(self.state.playlists):
             self._message(
@@ -866,18 +899,37 @@ class AppController:
             return
         if self.state.keyboard_playing or self.state.keyboard_paused:
             return
-        if self.state.sound_playing:
+        if self.state.sound_playing and not input_conversion:
             return
-        if self.state.sound_paused:
+        if self.state.sound_playing or self.state.sound_paused:
             self.stop_playback()
         self._cancel_playlist_playback(notify=False)
         self.state.active_playlist_id = playlist.playlist_id
         self.state.playlist_playback_active = True
+        self.state.playlist_input_conversion = bool(input_conversion)
         self.state.playlist_current_track_index = 0
         self.state.playlist_waiting_for_next = False
         self.state.playlist_completed = False
         self.state.playlist_unavailable_track_indices = frozenset()
         self._play_playlist_track(0)
+
+    def toggle_playlist_input_conversion(self) -> None:
+        if (
+            self.state.playlist_playback_active
+            and self.state.playlist_input_conversion
+        ):
+            self.stop_playback()
+            return
+        if (
+            self.state.keyboard_playing
+            or self.state.keyboard_paused
+            or self.state.midi_input_running
+        ):
+            self.toggle_input_conversion()
+            return
+        if self.state.playlist_playback_active or self._sound_playback_is_active():
+            self.stop_playback()
+        self.play_selected_playlist(input_conversion=True)
 
     def toggle_playlist_playback(self) -> None:
         if self.state.playlist_playback_active:
@@ -929,8 +981,13 @@ class AppController:
             self._schedule_next_playlist_track(track_index + 1)
             self._notify()
             return False
-        self.play_sound(start_time=0.0)
-        if self.state.sound_playing:
+        if self.state.playlist_input_conversion:
+            self.play_keyboard(start_time=0.0, countdown=False)
+            playing = self.state.keyboard_playing
+        else:
+            self.play_sound(start_time=0.0)
+            playing = self.state.sound_playing
+        if playing:
             return True
         self._schedule_next_playlist_track(track_index + 1)
         return False
@@ -940,6 +997,16 @@ class AppController:
         if previous_player:
             previous_player.wait_until_stopped(timeout=0.5)
         self.sound_player = None
+        return self._advance_playlist_after_end()
+
+    def _continue_playlist_after_keyboard_end(self) -> bool:
+        previous_player = self.player
+        if previous_player:
+            previous_player.wait_until_stopped(timeout=0.5)
+        self.player = None
+        return self._advance_playlist_after_end()
+
+    def _advance_playlist_after_end(self) -> bool:
         playlist = self._active_playlist()
         if playlist is None:
             self._reset_playlist_status()
@@ -998,6 +1065,7 @@ class AppController:
         playlist = self._active_playlist()
         self._playlist_countdown_cancel.set()
         self.state.playlist_playback_active = False
+        self.state.playlist_input_conversion = False
         self.state.playlist_waiting_for_next = False
         self.state.playlist_completed = True
         self.state.playlist_current_track_index = (
@@ -1017,6 +1085,7 @@ class AppController:
     def _reset_playlist_status(self) -> None:
         self.state.active_playlist_id = ""
         self.state.playlist_playback_active = False
+        self.state.playlist_input_conversion = False
         self.state.playlist_current_track_index = -1
         self.state.playlist_waiting_for_next = False
         self.state.playlist_completed = False
@@ -1071,6 +1140,9 @@ class AppController:
                     source_events,
                     source_position,
                 )
+            ),
+            on_complete=lambda pid=playback_id: self._queue_worker_message(
+                ("key_complete", pid)
             ),
             on_error=lambda message, pid=playback_id: self._queue_worker_message(
                 ("playback_error", pid, message)
@@ -1869,6 +1941,7 @@ class AppController:
                     "sound_output_remap",
                     "key_output_source",
                     "sound_output_source",
+                    "key_complete",
                 }:
                     if int(message[1]) != self.playback_id:
                         continue
@@ -1892,6 +1965,15 @@ class AppController:
                         self._cancel_rhythm_judgments()
                         self._clear_active_output_notes()
                     changed = True
+                elif kind == "key_complete":
+                    if (
+                        self.state.playlist_playback_active
+                        and self.state.playlist_input_conversion
+                    ):
+                        changed = (
+                            self._continue_playlist_after_keyboard_end()
+                            or changed
+                        )
                 elif kind == "keyboard_sound_error":
                     self._message(
                         "warning",

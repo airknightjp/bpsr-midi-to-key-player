@@ -908,6 +908,114 @@ class AppControllerTests(unittest.TestCase):
         play_track.assert_called_once_with(0)
         self.assertTrue(controller.state.playlist_playback_active)
 
+    def test_playlist_track_uses_midi_input_conversion_when_selected(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "one.mid"
+            path.write_bytes(b"midi")
+            controller.midi_files = [path]
+            controller.state.playlists = [
+                Playlist(
+                    "set",
+                    "Set",
+                    (PlaylistTrack(path, "one.mid", "01:00"),),
+                )
+            ]
+            controller.state.active_playlist_id = "set"
+            controller.state.playlist_playback_active = True
+            controller.state.playlist_input_conversion = True
+
+            def select_midi(
+                index: int,
+                *,
+                preserve_playlist: bool = False,
+            ) -> None:
+                self.assertEqual(index, 0)
+                self.assertTrue(preserve_playlist)
+                controller.state.selected_midi_index = index
+
+            def start_conversion(**_kwargs: object) -> None:
+                controller.state.current_mode = "keys"
+
+            with (
+                patch.object(
+                    controller,
+                    "select_midi",
+                    side_effect=select_midi,
+                ),
+                patch.object(
+                    controller,
+                    "play_keyboard",
+                    side_effect=start_conversion,
+                ) as play_keyboard,
+                patch.object(controller, "play_sound") as play_sound,
+            ):
+                started = controller._play_playlist_track(0)
+
+        self.assertTrue(started)
+        play_keyboard.assert_called_once_with(
+            start_time=0.0,
+            countdown=False,
+        )
+        play_sound.assert_not_called()
+
+    def test_playlist_input_conversion_toggle_starts_selected_playlist(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (PlaylistTrack(Path("one.mid"), "one.mid", "01:00"),),
+            )
+        ]
+        controller.state.selected_playlist_index = 0
+
+        with patch.object(
+            controller,
+            "_play_playlist_track",
+        ) as play_track:
+            controller.toggle_playlist_input_conversion()
+
+        play_track.assert_called_once_with(0)
+        self.assertTrue(controller.state.playlist_playback_active)
+        self.assertTrue(controller.state.playlist_input_conversion)
+
+    def test_keyboard_playlist_natural_end_schedules_next_track(self) -> None:
+        controller = self.make_controller()
+        controller.state.playlists = [
+            Playlist(
+                "set",
+                "Set",
+                (
+                    PlaylistTrack(Path("first.mid"), "first.mid", "01:00"),
+                    PlaylistTrack(Path("second.mid"), "second.mid", "02:00"),
+                ),
+            )
+        ]
+        controller.state.active_playlist_id = "set"
+        controller.state.playlist_playback_active = True
+        controller.state.playlist_input_conversion = True
+        controller.state.playlist_current_track_index = 0
+        controller.player = FakePlayer()
+        controller.state.current_mode = "keys"
+        controller.playback_id = 17
+        controller.worker_queue.put(("key_state", 17, "stopped"))
+        controller.worker_queue.put(("key_complete", 17))
+
+        with patch.object(
+            controller,
+            "_schedule_next_playlist_track",
+        ) as schedule_next:
+            controller.process_pending_events()
+
+        schedule_next.assert_called_once_with(1)
+        self.assertIsNone(controller.state.current_mode)
+        self.assertIsNone(controller.player)
+
     def test_playlist_final_track_completes_and_stops(self) -> None:
         controller = self.make_controller(
             sound_playback_mode=SOUND_PLAYBACK_MODE_CONTINUOUS
@@ -1078,6 +1186,43 @@ class AppControllerTests(unittest.TestCase):
 
         play_keyboard.assert_called_once_with()
 
+    def test_start_hotkey_starts_playlist_conversion_on_playlist_tab(
+        self,
+    ) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.playlist_tab_active = True
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with patch.object(
+            controller,
+            "play_selected_playlist",
+        ) as play_playlist:
+            controller.process_pending_events()
+
+        play_playlist.assert_called_once_with(input_conversion=True)
+
+    def test_start_hotkey_restarts_paused_playlist_from_first_track(
+        self,
+    ) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.playlist_tab_active = True
+        controller.state.playlist_playback_active = True
+        controller.state.playlist_input_conversion = True
+        controller.state.current_mode = "keys_paused"
+        controller.worker_queue.put(("hotkey", "play"))
+
+        with (
+            patch.object(controller, "stop_playback") as stop_playback,
+            patch.object(
+                controller,
+                "play_selected_playlist",
+            ) as play_playlist,
+        ):
+            controller.process_pending_events()
+
+        stop_playback.assert_called_once_with()
+        play_playlist.assert_called_once_with(input_conversion=True)
+
     def test_start_hotkey_does_not_stop_running_midi_conversion(self) -> None:
         controller = self.make_controller(input_conversion_mode="midi_file")
         controller.state.current_mode = "keys"
@@ -1245,6 +1390,52 @@ class AppControllerTests(unittest.TestCase):
                     controller.process_pending_events()
 
                 stop_playback.assert_called_once_with()
+
+    def test_pause_and_end_hotkeys_control_playlist_input_conversion(
+        self,
+    ) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.playlist_playback_active = True
+        controller.state.playlist_input_conversion = True
+        controller.state.current_mode = "keys"
+        controller.state.duration = 60.0
+        controller.player = FakePlayer()
+        controller.worker_queue.put(("hotkey", "pause_resume"))
+
+        controller.process_pending_events()
+
+        self.assertTrue(controller.state.keyboard_paused)
+        self.assertTrue(controller.state.playlist_playback_active)
+
+        controller.worker_queue.put(("hotkey", "pause_resume"))
+        with patch.object(controller, "play_keyboard") as play_keyboard:
+            controller.process_pending_events()
+
+        play_keyboard.assert_called_once_with(
+            start_time=12.5,
+            countdown=False,
+        )
+
+        controller.state.current_mode = None
+        controller.state.playlist_waiting_for_next = True
+        controller.worker_queue.put(("hotkey", "stop"))
+        with patch.object(controller, "stop_playback") as stop_playback:
+            controller.process_pending_events()
+
+        stop_playback.assert_called_once_with()
+
+    def test_end_hotkey_does_not_stop_sound_playlist(self) -> None:
+        controller = self.make_controller(input_conversion_mode="midi_file")
+        controller.state.playlist_playback_active = True
+        controller.state.playlist_input_conversion = False
+        controller.state.current_mode = "sound"
+        controller.worker_queue.put(("hotkey", "stop"))
+
+        with patch.object(controller, "stop_playback") as stop_playback:
+            controller.process_pending_events()
+
+        stop_playback.assert_not_called()
+        self.assertTrue(controller.state.sound_playing)
 
     def test_common_input_conversion_toggle_stops_the_running_mode(self) -> None:
         controller = self.make_controller()

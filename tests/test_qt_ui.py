@@ -590,7 +590,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.7.2")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.8.1")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -1207,6 +1207,39 @@ class QtUiTests(unittest.TestCase):
             self.window.midi_file_mode_radio.click()
             self.window.conversion_start_button.click()
         start_midi_file.assert_called_once_with()
+
+    def test_common_start_button_uses_playlist_conversion_on_playlist_tab(
+        self,
+    ) -> None:
+        self.controller.set_option(
+            "input_conversion_mode",
+            "midi_file",
+        )
+        self.window.tab_bar.setCurrentIndex(1)
+
+        with (
+            patch.object(
+                self.controller,
+                "toggle_playlist_input_conversion",
+            ) as toggle_playlist,
+            patch.object(
+                self.controller,
+                "toggle_input_conversion",
+            ) as toggle_single,
+        ):
+            self.window.conversion_start_button.click()
+
+        toggle_playlist.assert_called_once_with()
+        toggle_single.assert_not_called()
+
+    def test_player_tab_selection_is_shared_with_shortcut_controller(
+        self,
+    ) -> None:
+        self.window.tab_bar.setCurrentIndex(1)
+        self.assertTrue(self.controller.state.playlist_tab_active)
+
+        self.window.tab_bar.setCurrentIndex(0)
+        self.assertFalse(self.controller.state.playlist_tab_active)
 
     def test_conversion_selector_shows_only_the_selected_input_settings(self) -> None:
         self.window.show()
@@ -2994,6 +3027,35 @@ class QtUiTests(unittest.TestCase):
                 label.text()
                 for label in dialog.findChildren(QLabel)
             ),
+        )
+        dialog.close()
+
+    def test_feedback_progress_width_stays_fixed_while_sending(self) -> None:
+        dialog = FeedbackDialog(
+            self.window.feedback_service,
+            qt_main_window.APP_VERSION,
+            "ja",
+            self.window,
+        )
+        dialog.subject.setText("再生停止")
+        dialog.message.setPlainText("再生ボタンを押しても開始されません。")
+        dialog.show()
+        self.application.processEvents()
+        initial_progress_width = dialog.send_progress.width()
+        initial_button_width = dialog.send_button.width()
+
+        with patch.object(dialog.service, "submit", return_value=True):
+            dialog._submit()
+            self.application.processEvents()
+
+        self.assertEqual(
+            dialog.send_button.text(),
+            TEXT["ja"]["feedback_sending"],
+        )
+        self.assertEqual(dialog.send_button.width(), initial_button_width)
+        self.assertEqual(
+            dialog.send_progress.width(),
+            initial_progress_width,
         )
         dialog.close()
 

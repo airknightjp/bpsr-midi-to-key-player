@@ -93,7 +93,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -211,9 +211,21 @@ class FeedbackDialog(QDialog):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
-        self.send_button = QPushButton(self.text["feedback_send"])
+        self.send_button = QPushButton(self.text["feedback_send"], self)
         self.send_button.setObjectName("FeedbackSendButton")
         self.send_button.setDefault(True)
+        send_button_width = self.send_button.sizeHint().width()
+        for label in (
+            self.text["feedback_sending"],
+            self.text["feedback_success_title"],
+        ):
+            self.send_button.setText(label)
+            send_button_width = max(
+                send_button_width,
+                self.send_button.sizeHint().width(),
+            )
+        self.send_button.setText(self.text["feedback_send"])
+        self.send_button.setFixedWidth(send_button_width)
         self.send_button.setEnabled(False)
         self.send_button.clicked.connect(self._submit)
         buttons.addWidget(self.send_progress)
@@ -470,7 +482,7 @@ class MidiMainWindow(QMainWindow):
         )
         self.conversion_start_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.conversion_start_button.clicked.connect(
-            self.controller.toggle_input_conversion
+            self._toggle_input_conversion
         )
         conversion_controls.addWidget(
             self.conversion_start_button,
@@ -2540,7 +2552,14 @@ class MidiMainWindow(QMainWindow):
 
     def _render_conversion_controls(self, state: AppState) -> None:
         text = TEXT[state.language]
-        keyboard_active = state.keyboard_playing or state.keyboard_paused
+        keyboard_active = (
+            state.keyboard_playing
+            or state.keyboard_paused
+            or (
+                state.playlist_playback_active
+                and state.playlist_input_conversion
+            )
+        )
         conversion_active = state.midi_input_running or keyboard_active
         with QSignalBlocker(self.realtime_mode_radio):
             self.realtime_mode_radio.setChecked(
@@ -3234,6 +3253,16 @@ class MidiMainWindow(QMainWindow):
         else:
             self.controller.toggle_sound_pause()
 
+    def _toggle_input_conversion(self) -> None:
+        if (
+            self.tab_bar.currentIndex() == 1
+            and self.state.input_conversion_mode
+            == INPUT_CONVERSION_MIDI_FILE
+        ):
+            self.controller.toggle_playlist_input_conversion()
+        else:
+            self.controller.toggle_input_conversion()
+
     def _open_playlist_editor(self) -> None:
         dialog = self._playlist_dialog
         if dialog is not None and dialog.isVisible():
@@ -3254,6 +3283,7 @@ class MidiMainWindow(QMainWindow):
         dialog.activateWindow()
 
     def _player_tab_changed(self, index: int) -> None:
+        self.controller.set_playlist_tab_active(index == 1)
         if hasattr(self, "player_content_stack"):
             self.player_content_stack.setCurrentIndex(max(0, min(index, 1)))
         if not self._rendering and hasattr(self, "sound_play_pause_button"):

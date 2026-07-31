@@ -67,6 +67,8 @@ class AppState:
     selected_playlist_index: int = -1
     active_playlist_id: str = ""
     playlist_playback_active: bool = False
+    playlist_input_conversion: bool = False
+    playlist_tab_active: bool = False
     playlist_current_track_index: int = -1
     playlist_waiting_for_next: bool = False
     playlist_completed: bool = False

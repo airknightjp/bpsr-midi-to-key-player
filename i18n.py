@@ -68,7 +68,24 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.8.0
+    "en": """v1.8.1
+
+This maintenance release adds playlist support to MIDI input conversion and
+improves related shortcut and feedback-dialog behavior.
+
+[Main changes]
+
+- MIDI input conversion can now process the selected playlist from top to
+  bottom, using the configured countdown between tracks.
+- While the Playlist tab is active, the Start, Pause, and End shortcuts control
+  playlist MIDI input conversion.
+- Starting a paused playlist conversion restarts it from the first track.
+- Regular MIDI sound playlist playback remains unaffected by these shortcuts.
+- Kept the feedback progress area stable when the Send button text changes.
+
+[v1.8.0]
+
+v1.8.0
 
 This release improves USB MIDI device hot-plug handling and adds in-app
 feedback submission.
@@ -312,7 +329,25 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.8.0
+    "ja": """v1.8.1
+
+本バージョンでは、プレイリストのMIDI入力変換対応と、
+関連するショートカット・送信画面の動作を改善しました。
+
+【主な変更】
+
+- 選択したプレイリストを上から順にMIDI入力変換できるようにしました。
+  曲間には設定中のカウントダウンを適用します。
+- プレイリストタブの選択中は、開始・中断・終了ショートカットで
+  プレイリストのMIDI入力変換を操作できます。
+- 中断中に開始ショートカットを押すと、先頭曲から再開します。
+- 通常のMIDI音源プレイリスト再生は、これらのショートカットの
+  影響を受けません。
+- 送信ボタンの表示変更時も、送信進捗欄の幅が変化しないようにしました。
+
+【v1.8.0】
+
+v1.8.0
 
 本バージョンでは、USB MIDI機器の抜き差し対応を改善し、
 アプリ内から不具合や要望を送信できる機能を追加しました。
@@ -558,7 +593,23 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.8.0
+    "zh": """v1.8.1
+
+本维护版本新增播放列表的MIDI输入转换支持，并改进相关快捷键和提交界面。
+
+【主要变更】
+
+- 可按从上到下的顺序对所选播放列表执行MIDI输入转换，并在曲目之间
+  应用当前倒计时设置。
+- 选中播放列表标签页时，开始、暂停和结束快捷键可控制播放列表的
+  MIDI输入转换。
+- 暂停后按开始快捷键，会从第一首曲目重新开始。
+- 普通MIDI声音播放列表不会受这些快捷键影响。
+- 发送按钮文字变化时，提交进度区域的宽度保持不变。
+
+【v1.8.0】
+
+v1.8.0
 
 本版本改进了USB MIDI设备的热插拔处理，并新增应用内问题报告与建议提交功能。
 
