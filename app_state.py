@@ -112,6 +112,7 @@ class AppState:
     shortcut_locked: bool = True
     always_on_top: bool = False
     tray_resident: bool = False
+    run_as_administrator: bool = False
     hide_release_notes_on_startup: bool = False
     window_opacity: int = 100
     ui_scale_percent: int = 100

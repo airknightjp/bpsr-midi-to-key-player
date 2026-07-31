@@ -147,6 +147,7 @@ class AppController:
             shortcut_locked=self.settings.shortcut_locked,
             always_on_top=self.settings.always_on_top,
             tray_resident=self.settings.tray_resident,
+            run_as_administrator=self.settings.run_as_administrator,
             hide_release_notes_on_startup=(
                 self.settings.hide_release_notes_on_startup
             ),
@@ -1599,6 +1600,7 @@ class AppController:
             "shortcut_locked",
             "always_on_top",
             "tray_resident",
+            "run_as_administrator",
             "hide_release_notes_on_startup",
         }:
             setattr(self.state, name, bool(value))
@@ -2227,6 +2229,7 @@ class AppController:
             color_theme=self.state.color_theme,
             always_on_top=self.state.always_on_top,
             tray_resident=self.state.tray_resident,
+            run_as_administrator=self.state.run_as_administrator,
             hide_release_notes_on_startup=(
                 self.state.hide_release_notes_on_startup
             ),

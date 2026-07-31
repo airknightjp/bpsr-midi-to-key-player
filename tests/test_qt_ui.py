@@ -446,6 +446,33 @@ class QtUiTests(unittest.TestCase):
         self.assertGreaterEqual(combo.view().window().y(), expected_top)
         combo.hidePopup()
 
+    def test_audio_and_sound_source_popups_open_below_their_combos(
+        self,
+    ) -> None:
+        self.window.show()
+        self.application.processEvents()
+
+        for combo in (
+            self.window.audio_qt_combo,
+            self.window.audio_buffer_combo,
+            self.window.sound_source_combo,
+        ):
+            with self.subTest(combo=combo.objectName()):
+                self.assertIsInstance(
+                    combo,
+                    qt_main_window.DownwardComboBox,
+                )
+                combo.showPopup()
+                self.application.processEvents()
+                expected_top = combo.mapToGlobal(
+                    QPoint(0, combo.height())
+                ).y()
+                self.assertGreaterEqual(
+                    combo.view().window().y(),
+                    expected_top,
+                )
+                combo.hidePopup()
+
     def test_use_arrangement_checkbox_updates_controller_state(self) -> None:
         self.window.use_arrangement_check.setChecked(False)
 
@@ -590,7 +617,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.8.1")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.8.2")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -4689,6 +4716,52 @@ class QtUiTests(unittest.TestCase):
 
     def test_sound_source_is_not_duplicated_in_the_settings_menu(self) -> None:
         self.assertFalse(hasattr(self.window, "sound_source_actions"))
+
+    def test_administrator_menu_setting_is_saved_immediately(self) -> None:
+        settings_action = next(
+            action
+            for action in self.window.menuBar().actions()
+            if action.text() == "Settings"
+        )
+        administrator_action = next(
+            action
+            for action in settings_action.menu().actions()
+            if action.text() == "Launch as administrator"
+        )
+        self.assertTrue(administrator_action.isCheckable())
+        self.assertFalse(administrator_action.isChecked())
+        self.save_settings_mock.reset_mock()
+
+        with patch(
+            "qt_main_window.QMessageBox.information"
+        ) as information:
+            administrator_action.trigger()
+
+        self.assertTrue(self.controller.state.run_as_administrator)
+        self.assertTrue(
+            self.controller.current_settings().run_as_administrator
+        )
+        self.save_settings_mock.assert_called_once()
+        information.assert_called_once_with(
+            self.window,
+            TEXT["en"]["administrator_launch_notice_title"],
+            (
+                "<html><body>The app will run with administrator "
+                "privileges.<br>Use this if key input does not reach "
+                "the client.<br><br><span "
+                'style="color: #d32f2f; font-weight: bold;">'
+                "Close this app once, then launch it again.</span>"
+                "</body></html>"
+            ),
+        )
+
+        with patch(
+            "qt_main_window.QMessageBox.information"
+        ) as information:
+            administrator_action.trigger()
+
+        self.assertFalse(self.controller.state.run_as_administrator)
+        information.assert_not_called()
 
     def test_sound_source_selector_is_on_the_right_end_of_the_midi_tab_row(self) -> None:
         self.window.show()

@@ -4,6 +4,13 @@
 
 > **Multilingual UI:** Supports Japanese, English, and Chinese.
 
+> [!IMPORTANT]
+> **When using the StarLauncher edition**
+>
+> The StarLauncher edition runs with administrator privileges, so this app must also be launched as administrator. If this app runs without administrator privileges, Windows will prevent it from sending key input to the game client.
+>
+> Enable `Settings > Launch as administrator`, close the app, and launch it again. The setting takes effect on the next launch. Administrator privileges are not required for the Steam edition.
+
 > **Multiprocess load distribution:** The GUI, software synthesizer, and MIDI parser run in three separate processes so heavy MIDI analysis and waveform generation are less likely to block UI interaction directly.
 
 BPSR MIDI to KEY Player is a Windows desktop tool that converts MIDI files and USB MIDI keyboard input into keyboard events.
@@ -60,7 +67,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.8.1 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.8.2 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -210,7 +217,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.8.1
+v1.8.2
 
 ## Copyright
 

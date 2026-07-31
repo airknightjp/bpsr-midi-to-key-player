@@ -75,6 +75,7 @@ class AppSettings:
     color_theme: str = "sky_blue"
     always_on_top: bool = False
     tray_resident: bool = False
+    run_as_administrator: bool = False
     hide_release_notes_on_startup: bool = False
     window_opacity: int = 100
     ui_scale_percent: int = 100
@@ -219,6 +220,10 @@ def load_settings() -> AppSettings:
         color_theme=normalize_color_theme(data.get("color_theme")),
         always_on_top=_parse_bool(data.get("always_on_top"), default=False),
         tray_resident=_parse_bool(data.get("tray_resident"), default=False),
+        run_as_administrator=_parse_bool(
+            data.get("run_as_administrator"),
+            default=False,
+        ),
         hide_release_notes_on_startup=_parse_bool(
             data.get("hide_release_notes_on_startup"),
             default=False,
@@ -307,6 +312,7 @@ def save_settings(settings: AppSettings) -> None:
             "color_theme": settings.color_theme,
             "always_on_top": settings.always_on_top,
             "tray_resident": settings.tray_resident,
+            "run_as_administrator": settings.run_as_administrator,
             "hide_release_notes_on_startup": (
                 settings.hide_release_notes_on_startup
             ),

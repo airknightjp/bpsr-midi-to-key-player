@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import os
 import sys
 import time
@@ -93,7 +94,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -1052,7 +1053,7 @@ class MidiMainWindow(QMainWindow):
         self.audio_runtime_layout.setSpacing(4)
         self.audio_qt_label = QLabel("Qt")
         self.audio_qt_label.setProperty("caption", True)
-        self.audio_qt_combo = QComboBox()
+        self.audio_qt_combo = DownwardComboBox()
         self.audio_qt_combo.setObjectName("AudioQtCombo")
         for frames in QT_AUDIO_FRAME_OPTIONS:
             self.audio_qt_combo.addItem(str(frames), frames)
@@ -1066,7 +1067,7 @@ class MidiMainWindow(QMainWindow):
         self.audio_runtime_separator.setProperty("caption", True)
         self.audio_buffer_label = QLabel("Buffer")
         self.audio_buffer_label.setProperty("caption", True)
-        self.audio_buffer_combo = QComboBox()
+        self.audio_buffer_combo = DownwardComboBox()
         self.audio_buffer_combo.setObjectName("AudioBufferCombo")
         for frames in AUDIO_BUFFER_FRAME_OPTIONS:
             self.audio_buffer_combo.addItem(str(frames), frames)
@@ -1303,7 +1304,7 @@ class MidiMainWindow(QMainWindow):
         self.sound_source_label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
-        self.sound_source_combo = QComboBox()
+        self.sound_source_combo = DownwardComboBox()
         self.sound_source_combo.currentIndexChanged.connect(self._sound_source_changed)
         sound_source_layout.addWidget(self.sound_source_label)
         sound_source_layout.addWidget(self.sound_source_combo)
@@ -3200,6 +3201,14 @@ class MidiMainWindow(QMainWindow):
         tray_action.setCheckable(True)
         tray_action.setChecked(state.tray_resident)
         tray_action.toggled.connect(lambda value: self._set_option("tray_resident", value))
+        administrator_action = settings_menu.addAction(
+            text["run_as_administrator"]
+        )
+        administrator_action.setCheckable(True)
+        administrator_action.setChecked(state.run_as_administrator)
+        administrator_action.toggled.connect(
+            self._set_run_as_administrator
+        )
 
         other_menu = self.menuBar().addMenu(text["menu_other"])
         other_menu.addAction(
@@ -3216,6 +3225,30 @@ class MidiMainWindow(QMainWindow):
     def _set_option(self, name: str, value: object) -> None:
         if not self._rendering:
             self.controller.set_option(name, value)
+
+    def _set_run_as_administrator(self, enabled: bool) -> None:
+        if self._rendering:
+            return
+        self.controller.set_option("run_as_administrator", enabled)
+        self.controller.save_settings_now()
+        if enabled:
+            text = TEXT[self.state.language]
+            notice = "<br>".join(
+                html.escape(line)
+                for line in text["administrator_launch_notice"].splitlines()
+            )
+            restart_notice = html.escape(
+                text["administrator_launch_restart_notice"]
+            )
+            QMessageBox.information(
+                self,
+                text["administrator_launch_notice_title"],
+                (
+                    f"<html><body>{notice}<br><br>"
+                    f'<span style="color: #d32f2f; font-weight: bold;">'
+                    f"{restart_notice}</span></body></html>"
+                ),
+            )
 
     def _volume_value_changed(self, value: int) -> None:
         if value > 0:

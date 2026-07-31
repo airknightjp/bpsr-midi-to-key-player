@@ -658,6 +658,7 @@ class AppControllerTests(unittest.TestCase):
             playback_speed_percent=137,
             transpose_semitones=4,
             octave_shift=-1,
+            run_as_administrator=True,
             hide_release_notes_on_startup=True,
         )
 
@@ -669,7 +670,19 @@ class AppControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.playback_speed_percent, 137)
         self.assertEqual(controller.state.transpose_semitones, 4)
         self.assertEqual(controller.state.octave_shift, -1)
+        self.assertTrue(controller.state.run_as_administrator)
         self.assertTrue(controller.state.hide_release_notes_on_startup)
+
+    def test_administrator_preference_is_persisted_by_current_settings(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+
+        controller.set_option("run_as_administrator", True)
+
+        self.assertTrue(controller.state.run_as_administrator)
+        self.assertTrue(controller.current_settings().run_as_administrator)
+        self.assertTrue(controller._settings_dirty)
 
     def test_pause_and_resume_keyboard_playback_from_current_position(self) -> None:
         controller = self.make_controller()

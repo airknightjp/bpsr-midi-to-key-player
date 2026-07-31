@@ -6,6 +6,31 @@ from i18n import COLOR_THEME_NAMES, TEXT, normalize_color_theme
 
 
 class I18nTests(unittest.TestCase):
+    def test_administrator_launch_setting_labels(self) -> None:
+        self.assertEqual(
+            TEXT["en"]["run_as_administrator"],
+            "Launch as administrator",
+        )
+        self.assertEqual(
+            TEXT["ja"]["run_as_administrator"],
+            "\u7ba1\u7406\u8005\u6a29\u9650\u3067\u8d77\u52d5",
+        )
+        self.assertEqual(
+            TEXT["zh"]["run_as_administrator"],
+            "\u4ee5\u7ba1\u7406\u5458\u8eab\u4efd\u542f\u52a8",
+        )
+        self.assertEqual(
+            TEXT["ja"]["administrator_launch_notice"],
+            (
+                "\u7ba1\u7406\u8005\u6a29\u9650\u3067\u30a2\u30d7\u30ea\u3092\u8d77\u52d5\u3057\u307e\u3059\u3002\n"
+                "\u30ad\u30fc\u5165\u529b\u304c\u5c4a\u304b\u306a\u3044\u5834\u5408\u306b\u4f7f\u7528\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+            ),
+        )
+        self.assertEqual(
+            TEXT["ja"]["administrator_launch_restart_notice"],
+            "\u672c\u30a2\u30d7\u30ea\u3092\u4e00\u5ea6\u7d42\u4e86\u3057\u3001\u518d\u8d77\u52d5\u3057\u3066\u4e0b\u3055\u3044\u3002",
+        )
+
     def test_conversion_sound_labels_exist_in_every_language(self) -> None:
         self.assertEqual(TEXT["en"]["conversion_sound"], "Play sound")
         self.assertEqual(
@@ -63,7 +88,7 @@ class I18nTests(unittest.TestCase):
                 self.assertEqual(translations["release_notes"], labels[0])
                 self.assertEqual(translations["dont_show_again"], labels[1])
                 content = translations["release_notes_content"]
-                self.assertTrue(content.startswith("v1.8.1"))
+                self.assertTrue(content.startswith("v1.8.2"))
                 self.assertIn(labels[2], content)
                 self.assertIn("Qt", content)
                 self.assertIn("Buffer", content)

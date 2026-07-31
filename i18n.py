@@ -68,7 +68,25 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.8.1
+    "en": """v1.8.2
+
+This version adds an optional administrator launch setting and improves
+selection-list placement.
+
+[Main changes]
+
+- Added `Settings > Launch as administrator`. The setting is saved and applied
+  the next time the app is launched.
+- Show guidance when administrator launch is enabled, including a highlighted
+  reminder to close and restart the app.
+- Added prominent documentation for StarLauncher and Steam editions.
+  StarLauncher requires matching administrator privileges; Steam does not.
+- Qt, Buffer, and Sound Source selection lists now always open below their
+  controls.
+
+[v1.8.1]
+
+v1.8.1
 
 This maintenance release adds playlist support to MIDI input conversion and
 improves related shortcut and feedback-dialog behavior.
@@ -329,7 +347,24 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.8.1
+    "ja": """v1.8.2
+
+本バージョンでは、管理者権限で起動する設定を追加し、
+選択欄の表示位置を改善しました。
+
+【主な変更】
+
+- `設定 > 管理者権限で起動`を追加しました。
+  設定内容は保存され、次回起動時から反映されます。
+- 管理者権限で起動を有効にした際、アプリの終了と再起動が必要なことを
+  強調表示する案内を追加しました。
+- StarLauncher版では本アプリも管理者権限が必要であり、
+  Steam版では不要であることをREADME上部へ記載しました。
+- Qt、Buffer、音源の選択肢が、常に入力欄の下へ表示されるようにしました。
+
+【v1.8.1】
+
+v1.8.1
 
 本バージョンでは、プレイリストのMIDI入力変換対応と、
 関連するショートカット・送信画面の動作を改善しました。
@@ -593,7 +628,21 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.8.1
+    "zh": """v1.8.2
+
+本版本新增以管理员身份启动的设置，并改进选择列表的显示位置。
+
+【主要变更】
+
+- 新增`设置 > 以管理员身份启动`。设置会被保存，并在下次启动时生效。
+- 启用管理员启动时，会显示关闭并重新启动应用的醒目提示。
+- 在README顶部明确说明：StarLauncher版需要本应用以相同的管理员权限
+  运行，Steam版则不需要管理员权限。
+- Qt、Buffer和音源的选项列表现在始终显示在输入框下方。
+
+【v1.8.1】
+
+v1.8.1
 
 本维护版本新增播放列表的MIDI输入转换支持，并改进相关快捷键和提交界面。
 
@@ -901,6 +950,15 @@ TEXT = {
         "update_error_title": "Update Failed",
         "always_on_top": "Always on top",
         "tray_resident": "Close to tray",
+        "run_as_administrator": "Launch as administrator",
+        "administrator_launch_notice_title": "Administrator Launch",
+        "administrator_launch_notice": (
+            "The app will run with administrator privileges.\n"
+            "Use this if key input does not reach the client."
+        ),
+        "administrator_launch_restart_notice": (
+            "Close this app once, then launch it again."
+        ),
         "window_opacity": "Opacity",
         "ui_scale": "Scale",
         "basic_screen_panel": "Basic Screen",
@@ -1091,6 +1149,15 @@ TEXT = {
         "update_error_title": "\u30a2\u30c3\u30d7\u30c7\u30fc\u30c8\u5931\u6557",
         "always_on_top": "\u6700\u524d\u9762\u306b\u8868\u793a",
         "tray_resident": "[\u9589\u3058\u308b]\u3067\u30bf\u30b9\u30af\u30c8\u30ec\u30a4\u306b\u683c\u7d0d",
+        "run_as_administrator": "\u7ba1\u7406\u8005\u6a29\u9650\u3067\u8d77\u52d5",
+        "administrator_launch_notice_title": "\u7ba1\u7406\u8005\u6a29\u9650\u3067\u8d77\u52d5",
+        "administrator_launch_notice": (
+            "\u7ba1\u7406\u8005\u6a29\u9650\u3067\u30a2\u30d7\u30ea\u3092\u8d77\u52d5\u3057\u307e\u3059\u3002\n"
+            "\u30ad\u30fc\u5165\u529b\u304c\u5c4a\u304b\u306a\u3044\u5834\u5408\u306b\u4f7f\u7528\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+        ),
+        "administrator_launch_restart_notice": (
+            "\u672c\u30a2\u30d7\u30ea\u3092\u4e00\u5ea6\u7d42\u4e86\u3057\u3001\u518d\u8d77\u52d5\u3057\u3066\u4e0b\u3055\u3044\u3002"
+        ),
         "window_opacity": "\u900f\u904e\u5ea6",
         "ui_scale": "\u62e1\u5927\u7387",
         "basic_screen_panel": "\u57fa\u672c\u753b\u9762",
@@ -1275,6 +1342,15 @@ TEXT = {
         "update_error_title": "\u66f4\u65b0\u5931\u8d25",
         "always_on_top": "\u7f6e\u4e8e\u9876\u5c42",
         "tray_resident": "\u5173\u95ed\u65f6\u6700\u5c0f\u5316\u5230\u6258\u76d8",
+        "run_as_administrator": "\u4ee5\u7ba1\u7406\u5458\u8eab\u4efd\u542f\u52a8",
+        "administrator_launch_notice_title": "\u4ee5\u7ba1\u7406\u5458\u8eab\u4efd\u542f\u52a8",
+        "administrator_launch_notice": (
+            "\u5e94\u7528\u5c06\u4ee5\u7ba1\u7406\u5458\u6743\u9650\u542f\u52a8\u3002\n"
+            "\u5f53\u5ba2\u6237\u7aef\u65e0\u6cd5\u63a5\u6536\u6309\u952e\u8f93\u5165\u65f6\uff0c\u8bf7\u4f7f\u7528\u6b64\u8bbe\u7f6e\u3002"
+        ),
+        "administrator_launch_restart_notice": (
+            "\u8bf7\u5148\u5173\u95ed\u672c\u5e94\u7528\uff0c\u7136\u540e\u518d\u6b21\u542f\u52a8\u3002"
+        ),
         "window_opacity": "\u900f\u660e\u5ea6",
         "ui_scale": "\u7f29\u653e\u6bd4\u4f8b",
         "basic_screen_panel": "\u57fa\u672c\u754c\u9762",

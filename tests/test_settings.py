@@ -48,6 +48,7 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(settings.use_piano_arrangement)
         self.assertTrue(settings.play_sound)
         self.assertFalse(settings.hide_release_notes_on_startup)
+        self.assertFalse(settings.run_as_administrator)
         self.assertEqual(settings.last_update_check_at, 0)
         self.assertEqual(
             settings.panel_order,
@@ -99,6 +100,7 @@ class SettingsTests(unittest.TestCase):
                     color_theme="orange",
                     always_on_top=True,
                     tray_resident=True,
+                    run_as_administrator=True,
                     hide_release_notes_on_startup=True,
                     window_opacity=75,
                     ui_scale_percent=150,
@@ -159,6 +161,7 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(loaded.use_piano_arrangement)
         self.assertTrue(loaded.always_on_top)
         self.assertTrue(loaded.tray_resident)
+        self.assertTrue(loaded.run_as_administrator)
         self.assertTrue(loaded.hide_release_notes_on_startup)
         self.assertEqual(loaded.window_opacity, 75)
         self.assertEqual(loaded.ui_scale_percent, 150)
