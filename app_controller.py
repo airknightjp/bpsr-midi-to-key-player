@@ -7,7 +7,7 @@ import time
 import winsound
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from audio_buffer import (
     normalize_audio_buffer_frames,
@@ -66,8 +66,21 @@ from player import MidiKeyboardPlayer
 from rhythm_judgment import RhythmJudge, RhythmJudgment
 from settings import AppSettings, load_settings, save_settings
 from sound_sources import normalize_sound_source
-from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
 from source_colors import track_channel_color
+
+if TYPE_CHECKING:
+    from sound_player import MidiSoundPlayer, RealtimeMidiSoundOutput
+else:
+    def MidiSoundPlayer(*args, **kwargs):  # type: ignore[no-untyped-def]
+        from sound_player import MidiSoundPlayer as SoundPlayer
+
+        return SoundPlayer(*args, **kwargs)
+
+
+    def RealtimeMidiSoundOutput(*args, **kwargs):  # type: ignore[no-untyped-def]
+        from sound_player import RealtimeMidiSoundOutput as RealtimeSoundOutput
+
+        return RealtimeSoundOutput(*args, **kwargs)
 
 
 GAME_COUNTDOWN_KEY_HOLD_SECONDS = 0.12
@@ -215,6 +228,11 @@ class AppController:
         self.sound_player: MidiSoundPlayer | None = None
         self.midi_input_bridge: MidiInputKeyboardBridge | None = None
         self.realtime_sound_output: RealtimeMidiSoundOutput | None = None
+        self.bound_key_sound_output: RealtimeMidiSoundOutput | None = None
+        self._active_bound_keys: dict[str, tuple[int, ...]] = {}
+        self._active_bound_note_counts: dict[int, int] = {}
+        self._stopping_keyboard_sound_players: set[MidiSoundPlayer] = set()
+        self._keyboard_sound_cleanup_lock = threading.Lock()
         self.worker_queue: queue.Queue[tuple[object, ...]] = queue.Queue()
         self.metadata_queue: queue.Queue[tuple[int, Path, str]] = queue.Queue()
         self._event_notifier: Callable[[], None] | None = None
@@ -1390,8 +1408,57 @@ class AppController:
             sound_player = self.sound_player
             self.sound_player = None
             if sound_player:
-                sound_player.stop()
-                sound_player.wait_until_stopped(timeout=2.0)
+                self._stop_keyboard_sound_async(sound_player)
+            return
+        if self._keyboard_sound_cleanup_pending():
+            return
+        position = self.player.current_position()
+        if position is not None:
+            self._start_keyboard_sound(
+                self.playback_id,
+                self.events,
+                position,
+            )
+
+    def _stop_keyboard_sound_async(self, sound_player: MidiSoundPlayer) -> None:
+        sound_player.stop()
+        with self._keyboard_sound_cleanup_lock:
+            if sound_player in self._stopping_keyboard_sound_players:
+                return
+            self._stopping_keyboard_sound_players.add(sound_player)
+
+        def wait_for_stop() -> None:
+            while sound_player.is_playing:
+                sound_player.wait_until_stopped(timeout=0.25)
+            self._queue_worker_message(
+                ("keyboard_sound_cleanup", sound_player)
+            )
+
+        threading.Thread(
+            target=wait_for_stop,
+            name="KeyboardSoundCleanup",
+            daemon=True,
+        ).start()
+
+    def _keyboard_sound_cleanup_pending(self) -> bool:
+        with self._keyboard_sound_cleanup_lock:
+            return bool(self._stopping_keyboard_sound_players)
+
+    def _complete_keyboard_sound_cleanup(
+        self,
+        sound_player: MidiSoundPlayer,
+    ) -> None:
+        with self._keyboard_sound_cleanup_lock:
+            self._stopping_keyboard_sound_players.discard(sound_player)
+            cleanup_pending = bool(self._stopping_keyboard_sound_players)
+        if (
+            cleanup_pending
+            or self.exiting
+            or not self.state.keyboard_playing
+            or not self.state.play_sound
+            or self.player is None
+            or self.sound_player is not None
+        ):
             return
         position = self.player.current_position()
         if position is not None:
@@ -1837,6 +1904,9 @@ class AppController:
                 except queue.Empty:
                     break
                 kind = str(message[0])
+                if kind == "keyboard_sound_cleanup":
+                    self._complete_keyboard_sound_cleanup(message[1])
+                    continue
                 if kind == "playlist_next":
                     generation = int(message[1])
                     track_index = int(message[2])
@@ -2271,12 +2341,21 @@ class AppController:
             return
         self.exiting = True
         self.set_event_notifier(None)
+        self.release_bound_keyboard_keys()
+        self._close_bound_key_sound_output()
         self.metadata_cancel.set()
         self._unbind_global_hotkeys()
         self.stop_midi_input()
         self.stop_playback()
         self.piano_arrangement_process.shutdown()
         self.midi_parser_process.shutdown()
+        with self._keyboard_sound_cleanup_lock:
+            stopping_sound_players = tuple(
+                self._stopping_keyboard_sound_players
+            )
+        for sound_player in stopping_sound_players:
+            sound_player.stop()
+            sound_player.wait_until_stopped(timeout=2.0)
         self._save_settings_on_shutdown()
 
     def _apply_live_option(self, name: str) -> None:
@@ -2284,17 +2363,29 @@ class AppController:
             self._set_keyboard_sound_enabled(self.state.play_sound)
             if self.realtime_sound_output:
                 self.realtime_sound_output.set_enabled(self.state.play_sound)
+            if self.bound_key_sound_output:
+                self.bound_key_sound_output.set_enabled(self.state.play_sound)
         elif name == "midi_sound_volume":
             if self.sound_player:
                 self.sound_player.set_volume(self.state.midi_sound_volume)
             if self.realtime_sound_output:
                 self.realtime_sound_output.set_volume(self.state.midi_sound_volume)
+            if self.bound_key_sound_output:
+                self.bound_key_sound_output.set_volume(self.state.midi_sound_volume)
         elif name == "sound_source":
-            for target in (self.sound_player, self.realtime_sound_output):
+            for target in (
+                self.sound_player,
+                self.realtime_sound_output,
+                self.bound_key_sound_output,
+            ):
                 if target:
                     target.set_sound_source(self.state.sound_source)
         elif name in {"audio_qt_frames", "audio_buffer_frames"}:
-            for target in (self.sound_player, self.realtime_sound_output):
+            for target in (
+                self.sound_player,
+                self.realtime_sound_output,
+                self.bound_key_sound_output,
+            ):
                 if target:
                     target.set_audio_settings(
                         self.state.audio_qt_frames,
@@ -2365,6 +2456,104 @@ class AppController:
             self.midi_input_bridge.set_key_bindings(self.key_bindings)
         self.request_save()
         self._notify()
+
+    def set_bound_keyboard_key(self, key: str, pressed: bool) -> None:
+        normalized_key = str(key).strip().lower()
+        if not normalized_key:
+            return
+        if pressed:
+            if normalized_key in self._active_bound_keys:
+                return
+            notes = tuple(
+                sorted(
+                    note
+                    for note, binding in self.current_key_bindings().items()
+                    if binding == normalized_key
+                )
+            )
+            if not notes:
+                return
+            self._active_bound_keys[normalized_key] = notes
+        else:
+            notes = self._active_bound_keys.pop(normalized_key, ())
+            if not notes:
+                return
+
+        changed = False
+        for note in notes:
+            count = self._active_bound_note_counts.get(note, 0)
+            if pressed:
+                self._active_bound_note_counts[note] = count + 1
+                if count > 0:
+                    continue
+                self._send_bound_key_sound(note, True)
+                changed = self._set_output_note_state(
+                    ("bound", 0),
+                    note,
+                    True,
+                ) or changed
+            else:
+                next_count = max(0, count - 1)
+                if next_count:
+                    self._active_bound_note_counts[note] = next_count
+                    continue
+                self._active_bound_note_counts.pop(note, None)
+                self._send_bound_key_sound(note, False)
+                changed = self._set_output_note_state(
+                    ("bound", 0),
+                    note,
+                    False,
+                ) or changed
+        if changed:
+            self._notify()
+
+    def release_bound_keyboard_keys(self) -> None:
+        for key in tuple(self._active_bound_keys):
+            self.set_bound_keyboard_key(key, False)
+
+    def _send_bound_key_sound(self, note: int, pressed: bool) -> None:
+        output = self.bound_key_sound_output
+        if pressed and self.state.play_sound:
+            if output is None:
+                output = RealtimeMidiSoundOutput(
+                    volume=self.state.midi_sound_volume,
+                    sound_source=self.state.sound_source,
+                    on_audio_runtime_changed=lambda qt_frames, buffer_frames, response_frames, chunk_frames, fallback_interval_ms, _reason: self._queue_worker_message(
+                        (
+                            "audio_runtime",
+                            qt_frames,
+                            buffer_frames,
+                            response_frames,
+                            chunk_frames,
+                            fallback_interval_ms,
+                        )
+                    ),
+                    audio_qt_frames=self.state.audio_qt_frames,
+                    audio_buffer_frames=self.state.audio_buffer_frames,
+                    audio_response_frames=self.state.audio_response_frames,
+                    audio_chunk_frames=self.state.audio_chunk_frames,
+                    audio_fallback_interval_ms=(
+                        self.state.audio_fallback_interval_ms
+                    ),
+                )
+                self.bound_key_sound_output = output
+            if not output.is_enabled and not output.set_enabled(True):
+                return
+        if output is None or not output.is_enabled:
+            return
+        output.process_message(
+            0x90 if pressed else 0x80,
+            0,
+            int(note),
+            96 if pressed else 0,
+            time.perf_counter(),
+        )
+
+    def _close_bound_key_sound_output(self) -> None:
+        output = self.bound_key_sound_output
+        self.bound_key_sound_output = None
+        if output:
+            output.close()
 
     def _set_track_channels(self, summary: MidiSummary) -> None:
         sources = [

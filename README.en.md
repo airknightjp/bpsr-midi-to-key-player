@@ -61,13 +61,14 @@ The `_internal` folder contains files required by the application. Do not move t
 - Configure global start, pause, and stop shortcuts by pressing keys. The defaults are F9, F10, and F11, and standalone function keys are supported. These shortcuts control MIDI input conversion only and do not affect realtime input conversion or MIDI sound playback.
 - Lock shortcut settings to avoid accidental changes.
 - Edit the C3-B5 bindings and the Sustain, Octave down, and Octave up keys from `Settings > Key Bindings`.
+- While this app is focused, pressing a configured note key updates the keyboard visualization and plays the note when `Play sound` is enabled.
 - Highlight duplicate key bindings in red.
 - Restore all key bindings to their defaults.
 - Switch UI language between Japanese, English, and Chinese.
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.8.2 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.8.3 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -217,7 +218,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.8.2
+v1.8.3
 
 ## Copyright
 

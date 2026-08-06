@@ -14,6 +14,7 @@ from config import (
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
     MIN_TRANSPOSE_SEMITONES,
+    KeyMapping,
     OCTAVE_DOWN_KEY,
     OCTAVE_SWITCH_SETTLE_SECONDS,
     OCTAVE_UP_KEY,
@@ -108,6 +109,7 @@ class MidiKeyboardPlayer:
         self._clock: PlaybackClock | None = None
         self._stop_event = threading.Event()
         self._release_requested = threading.Event()
+        self._remap_active_notes_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._active_notes: dict[NoteOwner, list[str]] = defaultdict(list)
         self._active_key_owner: dict[str, NoteOwner] = {}
@@ -156,6 +158,7 @@ class MidiKeyboardPlayer:
             raise RuntimeError("Already playing")
         self._stop_event.clear()
         self._release_requested.clear()
+        self._remap_active_notes_requested.clear()
         self._repeat_guard.reset()
         with self._config_lock:
             self._current_events = events
@@ -171,10 +174,12 @@ class MidiKeyboardPlayer:
         self._stop_event.set()
 
     def request_release_all(self) -> None:
+        self._remap_active_notes_requested.clear()
         self._release_requested.set()
 
     def set_dry_run(self, enabled: bool) -> None:
         self.output.set_dry_run(enabled)
+        self._remap_active_notes_requested.clear()
         self._release_requested.set()
 
     def set_auto_fit_note_range(self, enabled: bool) -> None:
@@ -184,6 +189,7 @@ class MidiKeyboardPlayer:
                 return
             self.auto_fit_note_range = enabled
             self._mark_chord_optimization_dirty_locked()
+            self._remap_active_notes_requested.set()
             self._release_requested.set()
         self._schedule_chord_optimization()
 
@@ -202,6 +208,7 @@ class MidiKeyboardPlayer:
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
             self._mark_chord_optimization_dirty_locked()
+            self._remap_active_notes_requested.set()
             self._release_requested.set()
         self._schedule_chord_optimization()
 
@@ -220,7 +227,6 @@ class MidiKeyboardPlayer:
                 return
             self.chord_optimization = enabled
             self._mark_chord_optimization_dirty_locked()
-            self._release_requested.set()
         if enabled:
             self._schedule_chord_optimization()
         else:
@@ -268,6 +274,7 @@ class MidiKeyboardPlayer:
     def set_key_bindings(self, key_bindings: dict[int, str]) -> None:
         with self._config_lock:
             self.key_bindings = normalized_key_bindings(key_bindings)
+            self._remap_active_notes_requested.clear()
             self._release_requested.set()
 
     def set_special_key_bindings(
@@ -280,6 +287,7 @@ class MidiKeyboardPlayer:
             self.sustain_key = str(sustain_key)
             self.octave_down_key = str(octave_down_key)
             self.octave_up_key = str(octave_up_key)
+            self._remap_active_notes_requested.clear()
             self._release_requested.set()
 
     def wait_until_stopped(self, timeout: float = 1.0) -> None:
@@ -397,10 +405,56 @@ class MidiKeyboardPlayer:
         if not self._release_requested.is_set():
             return
         self._release_requested.clear()
+        if self._remap_active_notes_requested.is_set():
+            self._remap_active_notes_requested.clear()
+            self._remap_active_note_keys()
+            return
         self._release_active_note_keys()
         self.output.release_all()
         self._sustain_channels.clear()
         self._auto_sustain_channels.clear()
+
+    def _remap_active_note_keys(self) -> None:
+        active_owners = list(self._active_key_owner.values())
+        if not active_owners:
+            return
+
+        with self._config_lock:
+            key_bindings = self.key_bindings
+        remapped: list[tuple[NoteOwner, KeyMapping]] = []
+        for owner in active_owners:
+            playable_note = self._playable_note(owner[2])
+            if playable_note is None:
+                continue
+            mapping = midi_note_to_key(playable_note, key_bindings)
+            if mapping is not None:
+                remapped.append((owner, mapping))
+
+        self._release_active_note_keys()
+        if not remapped:
+            return
+
+        shift_counts: dict[int, int] = defaultdict(int)
+        for _owner, mapping in remapped:
+            shift_counts[mapping.octave_shift] += 1
+        target_shift = max(
+            shift_counts,
+            key=lambda shift: (
+                shift_counts[shift],
+                shift == self._octave_shift,
+                -abs(shift - self._octave_shift),
+            ),
+        )
+        self._move_to_octave_shift(target_shift)
+        for owner, mapping in remapped:
+            if mapping.octave_shift != target_shift:
+                continue
+            self._press_note_key(
+                mapping.key,
+                owner=owner,
+                output_note=mapping.note,
+            )
+            self._active_notes[owner].append(mapping.key)
 
     def _handle_event(
         self,

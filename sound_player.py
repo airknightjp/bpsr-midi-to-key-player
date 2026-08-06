@@ -243,6 +243,7 @@ class MidiSoundPlayer:
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
             self._mark_chord_optimization_dirty_locked()
+            self._remap_active_notes_requested.set()
             self._release_requested.set()
         self._schedule_chord_optimization()
 
@@ -261,7 +262,6 @@ class MidiSoundPlayer:
                 return
             self.chord_optimization = enabled
             self._mark_chord_optimization_dirty_locked()
-            self._release_requested.set()
         if enabled:
             self._schedule_chord_optimization()
         else:
@@ -552,7 +552,9 @@ class MidiSoundPlayer:
                     source_track=event.track,
                 )
             elif event.kind == "note_off" and event.note is not None:
-                playable_note = self._playable_event_note(event)
+                playable_note = self._active_output_note_for_event(event)
+                if playable_note is None:
+                    playable_note = self._playable_event_note(event)
                 if playable_note is not None:
                     self._send_note_off(
                         event.channel,
@@ -597,6 +599,25 @@ class MidiSoundPlayer:
         else:
             self._suppressed_note_offs[owner] = count - 1
         return True
+
+    def _active_output_note_for_event(self, event: MidiEvent) -> int | None:
+        if event.channel is None or event.note is None:
+            return None
+        fallback: int | None = None
+        source_track = event.track if event.track is not None else -1
+        for channel, output_note in sorted(self._active_notes):
+            if channel != event.channel:
+                continue
+            active_note = (channel, output_note)
+            if self._active_note_owner.get(active_note) != event.note:
+                continue
+            if (
+                self._active_note_source.get(active_note, (-1, channel))[0]
+                == source_track
+            ):
+                return output_note
+            fallback = output_note
+        return fallback
 
     def _playable_note(self, note: int) -> int | None:
         shifted_note = shift_midi_note(

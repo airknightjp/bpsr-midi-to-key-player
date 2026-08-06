@@ -253,6 +253,63 @@ class MidiSwitchTests(unittest.TestCase):
         self.assertEqual(player._sustain_channels, {0})
         self.assertEqual(player._active_notes, {(0, 48)})
 
+    def test_live_note_shift_remaps_held_sound_playback_note(self) -> None:
+        player = RecordingShortMessageSoundPlayer(auto_fit_note_range=True)
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64)
+        )
+
+        player.set_note_shift(transpose_semitones=2, octave_shift=0)
+        player._consume_release_request()
+
+        self.assertEqual(
+            [
+                (status, note)
+                for status, note, _value in player.messages
+                if status & 0xF0 in {0x80, 0x90}
+            ],
+            [(0x90, 60), (0x80, 60), (0x90, 62)],
+        )
+        self.assertEqual(player._active_notes, {(0, 62)})
+
+    def test_chord_optimization_toggle_keeps_held_sound_note_active(self) -> None:
+        player = RecordingShortMessageSoundPlayer(auto_fit_note_range=True)
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64)
+        )
+
+        player.set_chord_optimization(True)
+        player._consume_release_request()
+
+        self.assertEqual(player.messages, [(0x90, 60, 64)])
+        self.assertEqual(player._active_notes, {(0, 60)})
+
+    def test_note_off_releases_note_mapped_before_live_setting_change(self) -> None:
+        player = RecordingShortMessageSoundPlayer(auto_fit_note_range=True)
+        note_on = MidiEvent(
+            time=0.0,
+            kind="note_on",
+            channel=0,
+            note=60,
+            velocity=64,
+            track=2,
+        )
+        player._handle_event(note_on)
+        player.transpose_semitones = 2
+        player._handle_event(
+            MidiEvent(
+                time=1.0,
+                kind="note_off",
+                channel=0,
+                note=60,
+                velocity=0,
+                track=2,
+            )
+        )
+
+        self.assertEqual(player.messages, [(0x90, 60, 64), (0x80, 60, 0)])
+        self.assertEqual(player._active_notes, set())
+
     def test_sound_seek_suppresses_position_updates_from_the_old_timeline(self) -> None:
         positions: list[float] = []
         player = MidiSoundPlayer(on_position=positions.append)

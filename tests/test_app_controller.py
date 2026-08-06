@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -2004,9 +2005,15 @@ class AppControllerTests(unittest.TestCase):
         sound_player = MagicMock()
         sound_player.is_playing = False
 
-        with patch(
-            "app_controller.MidiSoundPlayer",
-            return_value=sound_player,
+        with (
+            patch(
+                "app_controller.MidiSoundPlayer",
+                return_value=sound_player,
+            ),
+            patch.object(
+                controller,
+                "_stop_keyboard_sound_async",
+            ) as stop_sound_async,
         ):
             controller.set_option("play_sound", True)
             controller.set_option("play_sound", False)
@@ -2015,9 +2022,70 @@ class AppControllerTests(unittest.TestCase):
             controller.events,
             start_time=3.25,
         )
-        sound_player.stop.assert_called_once_with()
-        sound_player.wait_until_stopped.assert_called_once_with(timeout=2.0)
+        stop_sound_async.assert_called_once_with(sound_player)
         self.assertIsNone(controller.sound_player)
+
+    def test_keyboard_sound_cleanup_waits_off_the_caller_thread(self) -> None:
+        controller = self.make_controller(play_sound=False)
+        caller_thread = threading.get_ident()
+        cleanup_threads: list[int] = []
+        stopped = threading.Event()
+        sound_player = MagicMock()
+        sound_player.is_playing = True
+
+        def wait_until_stopped(timeout: float) -> None:
+            self.assertEqual(timeout, 0.25)
+            cleanup_threads.append(threading.get_ident())
+            sound_player.is_playing = False
+            stopped.set()
+
+        sound_player.wait_until_stopped.side_effect = wait_until_stopped
+
+        controller._stop_keyboard_sound_async(sound_player)
+
+        self.assertTrue(stopped.wait(1.0))
+        self.assertNotEqual(cleanup_threads, [caller_thread])
+        controller.process_pending_events()
+        self.assertFalse(controller._keyboard_sound_cleanup_pending())
+
+    def test_bound_pc_key_updates_midi_note_visual_state(self) -> None:
+        controller = self.make_controller(play_sound=False)
+
+        controller.set_bound_keyboard_key("a", True)
+        self.assertIn(60, controller.state.active_output_notes)
+
+        controller.set_bound_keyboard_key("a", False)
+        controller.process_output_note_releases()
+        self.assertNotIn(60, controller._active_output_notes_by_source.get(("bound", 0), set()))
+
+    def test_bound_pc_key_uses_sound_output_only_when_enabled(self) -> None:
+        controller = self.make_controller(play_sound=True)
+        sound_output = MagicMock()
+        sound_output.is_enabled = False
+
+        def set_enabled(enabled: bool) -> bool:
+            sound_output.is_enabled = bool(enabled)
+            return True
+
+        sound_output.set_enabled.side_effect = set_enabled
+
+        with patch(
+            "app_controller.RealtimeMidiSoundOutput",
+            return_value=sound_output,
+        ):
+            controller.set_bound_keyboard_key("a", True)
+            sound_output.is_enabled = True
+            controller.set_bound_keyboard_key("a", False)
+
+        sound_output.set_enabled.assert_called_once_with(True)
+        self.assertEqual(
+            sound_output.process_message.call_args_list[0].args[:4],
+            (0x90, 0, 60, 96),
+        )
+        self.assertEqual(
+            sound_output.process_message.call_args_list[1].args[:4],
+            (0x80, 0, 60, 0),
+        )
 
     def test_keyboard_conversion_end_stops_its_sound_player(self) -> None:
         controller = self.make_controller(play_sound=True)

@@ -6,10 +6,11 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QBrush, QCloseEvent, QColor, QDesktopServices, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -94,7 +95,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -394,6 +395,13 @@ class MidiMainWindow(QMainWindow):
         )
         self._build_ui()
         self._configure_focus_sinks()
+        self._bound_key_focus_widget: QWidget | None = None
+        application = QApplication.instance()
+        if application is not None:
+            application.focusChanged.connect(
+                self._bound_key_focus_changed
+            )
+            self._bound_key_focus_changed(None, application.focusWidget())
         self._midi_reload_feedback_timer = QTimer(self)
         self._midi_reload_feedback_timer.setSingleShot(True)
         self._midi_reload_feedback_timer.setInterval(250)
@@ -3693,9 +3701,79 @@ class MidiMainWindow(QMainWindow):
             event.ignore()
             return
         self._closing_for_exit = True
+        self._detach_bound_key_focus_widget()
+        self.controller.release_bound_keyboard_keys()
         self.controller.set_event_notifier(None)
         self._output_note_release_timer.stop()
         event.accept()
+
+    def _bound_key_focus_changed(
+        self,
+        _old: QWidget | None,
+        current: QWidget | None,
+    ) -> None:
+        self._detach_bound_key_focus_widget()
+        if not self._bound_key_preview_allowed(current):
+            self.controller.release_bound_keyboard_keys()
+            return
+        if current is not self:
+            current.installEventFilter(self)
+            self._bound_key_focus_widget = current
+
+    def _detach_bound_key_focus_widget(self) -> None:
+        widget = self._bound_key_focus_widget
+        self._bound_key_focus_widget = None
+        if widget is not None:
+            try:
+                widget.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+    def _bound_key_preview_allowed(self, widget: QWidget | None) -> bool:
+        if widget is None or widget.window() is not self:
+            return False
+        return not isinstance(
+            widget,
+            (QLineEdit, QPlainTextEdit, QComboBox, QAbstractSpinBox),
+        )
+
+    def eventFilter(self, watched, event):  # type: ignore[no-untyped-def]
+        if watched is self._bound_key_focus_widget and event.type() in {
+            QEvent.Type.KeyPress,
+            QEvent.Type.KeyRelease,
+        }:
+            if self._handle_bound_key_event(event):
+                return True
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if not self._handle_bound_key_event(event):
+            super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        if not self._handle_bound_key_event(event):
+            super().keyReleaseEvent(event)
+
+    def _handle_bound_key_event(self, event: QKeyEvent) -> bool:
+        if event.isAutoRepeat() or QApplication.activeWindow() is not self:
+            return False
+        if event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            return False
+        key = event.text().lower()
+        if event.key() == Qt.Key.Key_Space:
+            key = "space"
+        if not key or key not in set(self.controller.current_key_bindings().values()):
+            return False
+        self.controller.set_bound_keyboard_key(
+            key,
+            event.type() == QEvent.Type.KeyPress,
+        )
+        event.accept()
+        return True
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)

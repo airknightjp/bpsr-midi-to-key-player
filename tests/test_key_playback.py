@@ -295,6 +295,34 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertEqual(output.pressed, ["s"])
         self.assertEqual(output.released, ["s"])
 
+    def test_live_note_shift_remaps_held_key_without_stopping_playback(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(output=output, auto_fit_note_range=True)
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64)
+        )
+
+        player.set_note_shift(transpose_semitones=2, octave_shift=0)
+        player._consume_release_request()
+
+        self.assertEqual(output.pressed, ["a", "s"])
+        self.assertEqual(output.released, ["a"])
+        self.assertEqual(player._active_notes[(-1, 0, 60)], ["s"])
+
+    def test_chord_optimization_toggle_keeps_held_key_active(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(output=output, auto_fit_note_range=True)
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=60, velocity=64)
+        )
+
+        player.set_chord_optimization(True)
+        player._consume_release_request()
+
+        self.assertEqual(output.pressed, ["a"])
+        self.assertEqual(output.released, [])
+        self.assertEqual(player._active_notes[(-1, 0, 60)], ["a"])
+
     def test_keyboard_optimization_uses_one_external_range_for_a_high_chord(self) -> None:
         output = FakeOutput()
         player = MidiKeyboardPlayer(output=output, chord_optimization=True)

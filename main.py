@@ -17,7 +17,6 @@ from qt_main_window import MidiMainWindow
 from qt_styles import FastTooltipStyle
 from settings import load_settings
 from single_instance import SingleInstance
-from software_synth import shutdown_software_synth
 
 
 APP_WINDOW_TITLE = "BPSR MIDI to KEY Player"
@@ -26,6 +25,13 @@ UPDATE_RESTART_ENV = "BPSR_UPDATE_RESTART"
 
 def consume_update_restart_request() -> bool:
     return os.environ.pop(UPDATE_RESTART_ENV, "") == "1"
+
+
+def shutdown_software_synth_if_loaded() -> None:
+    module = sys.modules.get("software_synth")
+    shutdown = getattr(module, "shutdown_software_synth", None)
+    if shutdown is not None:
+        shutdown()
 
 
 def main() -> int:
@@ -62,7 +68,7 @@ def main() -> int:
     finally:
         single_instance.close()
         controller.shutdown()
-        shutdown_software_synth()
+        shutdown_software_synth_if_loaded()
 
 if __name__ == "__main__":
     raise SystemExit(main())

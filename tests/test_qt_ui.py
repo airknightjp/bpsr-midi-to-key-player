@@ -5,12 +5,12 @@ import os
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtGui import QColor, QImage, QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -92,6 +92,42 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(
             style.styleHint(QStyle.StyleHint.SH_ToolTip_WakeUpDelay),
             TOOLTIP_WAKE_UP_DELAY_MS,
+        )
+
+    def test_bound_pc_key_is_forwarded_as_midi_note_press_and_release(self) -> None:
+        press = QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_A,
+            Qt.KeyboardModifier.NoModifier,
+            "a",
+        )
+        release = QKeyEvent(
+            QEvent.Type.KeyRelease,
+            Qt.Key.Key_A,
+            Qt.KeyboardModifier.NoModifier,
+            "a",
+        )
+
+        with (
+            patch.object(
+                QApplication,
+                "activeWindow",
+                return_value=self.window,
+            ),
+            patch.object(
+                self.controller,
+                "set_bound_keyboard_key",
+            ) as set_bound_key,
+        ):
+            self.assertTrue(self.window._handle_bound_key_event(press))
+            self.assertTrue(self.window._handle_bound_key_event(release))
+
+        self.assertEqual(
+            set_bound_key.call_args_list,
+            [
+                call("a", True),
+                call("a", False),
+            ],
         )
 
     def test_midi_hotplug_refresh_is_debounced_by_single_shot_timer(self) -> None:
@@ -2587,7 +2623,7 @@ class QtUiTests(unittest.TestCase):
         self.window.show()
         self.application.processEvents()
 
-        self.assertEqual(self.window.time_label.width(), 80)
+        self.assertEqual(self.window.time_label.width(), 72)
         self.assertEqual(self.window.position_row_layout.spacing(), 1)
         self.assertEqual(
             self.window.position_slider.width(),

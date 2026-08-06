@@ -68,7 +68,26 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.8.2
+    "en": """v1.8.3
+
+This release improves live playback settings, keyboard-binding preview, and
+startup responsiveness.
+
+[Main changes]
+
+- Playback settings such as range fitting, transpose, octave shift, and chord
+  revoicing now continue from the current position when changed during MIDI
+  input conversion or MIDI sound playback.
+- Pressing a configured note key while the app is focused now updates the
+  keyboard visualization and plays the note when `Play sound` is enabled.
+- Audio cleanup after disabling `Play sound` now runs asynchronously so the UI
+  remains responsive while shutdown completes safely.
+- The software synthesizer and audio engine are loaded only when needed,
+  improving startup responsiveness when sound output is not yet used.
+
+[v1.8.2]
+
+v1.8.2
 
 This version adds an optional administrator launch setting and improves
 selection-list placement.
@@ -347,7 +366,20 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - settings.json is now stored in the extracted application folder. Settings
   from the previous location are not migrated automatically.""",
-    "ja": """v1.8.2
+    "ja": """v1.8.3
+
+実行中設定の反映、キーバインド試聴、起動時の応答性を改善しました。
+
+【主な変更】
+
+- MIDI入力変換やMIDI音源再生中に、音域縮小、トランスポーズ、オクターブシフト、和音の再配置を変更しても、現在位置から処理を継続するよう改善しました。
+- 本アプリがフォーカス中に設定済みの音符キーを押すと、鍵盤表示へ反映し、`音を鳴らす`が有効な場合は対応音も再生するようにしました。
+- `音を鳴らす`を無効にした際の音声終了処理を非同期化し、安全な終了完了を維持しながらUIの停止を防止しました。
+- ソフトウェア音源と音声エンジンを必要になるまで読み込まない構成にし、音声出力をまだ使用しない起動時の応答性を改善しました。
+
+【v1.8.2】
+
+v1.8.2
 
 本バージョンでは、管理者権限で起動する設定を追加し、
 選択欄の表示位置を改善しました。
@@ -628,7 +660,20 @@ v1.4.0
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
   変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.8.2
+    "zh": """v1.8.3
+
+本版本改进了运行中设置的应用、按键绑定试听和启动响应速度。
+
+【主要变更】
+
+- 在MIDI输入转换或MIDI声音播放过程中修改音域缩减、移调、八度移位或和弦重排时，会从当前位置继续处理。
+- 当本应用获得焦点时，按下已配置的音符按键会更新键盘显示；启用`播放声音`时还会播放对应音符。
+- 关闭`播放声音`后的音频清理改为异步执行，在确保安全完成清理的同时避免界面停顿。
+- 软件合成器和音频引擎改为按需加载，尚未使用声音输出时可提升启动响应速度。
+
+【v1.8.2】
+
+v1.8.2
 
 本版本新增以管理员身份启动的设置，并改进选择列表的显示位置。
 
