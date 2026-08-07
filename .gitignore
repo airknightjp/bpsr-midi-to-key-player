@@ -16,3 +16,6 @@ release_v*/
 settings.json
 playlists.json
 playlists.json.tmp
+bpsr_midi_to_key_player.db
+bpsr_midi_to_key_player.db-shm
+bpsr_midi_to_key_player.db-wal

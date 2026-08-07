@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 
 import main as app_main
 import qt_main_window
+from app_database import ApplicationDatabase, DATABASE_FILE_NAME
 from app_controller import AppController
 from app_state import MidiListRow, TrackChannelItem
 from config import (
@@ -39,7 +41,7 @@ from config import (
 from i18n import TEXT
 from midi_parser import MidiEvent, MidiSummary, MidiTrackSummary
 from note_visualization import PianoRollNote
-from playlist_store import Playlist, PlaylistTrack
+from playlist_store import Playlist, PlaylistStore, PlaylistTrack
 from qt_main_window import FeedbackDialog, KeyBindingsDialog, MidiMainWindow
 from qt_components import (
     ColumnSeparatorHeaderView,
@@ -71,7 +73,15 @@ class QtUiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.save_settings_patch = patch("app_controller.save_settings")
         self.save_settings_mock = self.save_settings_patch.start()
-        self.controller = AppController(AppSettings())
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        database = ApplicationDatabase(
+            Path(self.temporary_directory.name) / DATABASE_FILE_NAME
+        )
+        self.controller = AppController(
+            AppSettings(),
+            database=database,
+            playlist_store=PlaylistStore(database.path),
+        )
         self.window = MidiMainWindow(self.controller)
 
     def tearDown(self) -> None:
@@ -79,6 +89,7 @@ class QtUiTests(unittest.TestCase):
         self.window.close()
         self.controller.shutdown()
         self.save_settings_patch.stop()
+        self.temporary_directory.cleanup()
 
     def test_view_calls_controller_instead_of_playback_backends(self) -> None:
         source = inspect.getsource(qt_main_window)
@@ -653,7 +664,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.8.2")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.9.0")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -3264,6 +3275,7 @@ class QtUiTests(unittest.TestCase):
     def test_main_schedules_startup_tasks(self) -> None:
         source = inspect.getsource(app_main.main)
 
+        self.assertIn("QTimer.singleShot(0, controller.start)", source)
         self.assertIn("window.run_startup_tasks", source)
 
     def test_main_activates_window_after_update_restart(self) -> None:

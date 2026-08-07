@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
+from app_database import DATABASE_FILE_NAME
 from playlist_store import (
     Playlist,
     PlaylistStore,
@@ -16,7 +16,7 @@ from playlist_store import (
 class PlaylistStoreTests(unittest.TestCase):
     def test_save_and_load_preserve_playlist_order_and_tracks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            path = Path(temporary_directory) / "playlists.json"
+            path = Path(temporary_directory) / DATABASE_FILE_NAME
             store = PlaylistStore(path)
             playlists = [
                 Playlist(
@@ -40,16 +40,7 @@ class PlaylistStoreTests(unittest.TestCase):
             store.save(playlists)
 
             self.assertEqual(store.load(), playlists)
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["version"], 1)
-            self.assertFalse(path.with_name("playlists.json.tmp").exists())
-
-    def test_invalid_playlist_file_is_ignored(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            path = Path(temporary_directory) / "playlists.json"
-            path.write_text("{invalid", encoding="utf-8")
-
-            self.assertEqual(PlaylistStore(path).load(), [])
+            self.assertTrue(path.exists())
 
     def test_total_duration_sums_tracks_and_reports_unknown_values(self) -> None:
         self.assertEqual(playlist_total_duration(()), "00:00")

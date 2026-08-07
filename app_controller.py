@@ -5,7 +5,7 @@ import stat as stat_module
 import threading
 import time
 import winsound
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol
 
@@ -16,6 +16,7 @@ from audio_buffer import (
     normalize_audio_response_frames,
     normalize_qt_audio_frames,
 )
+from app_database import ApplicationDatabase, MidiMetadata
 from app_state import AppState, MidiListRow, TrackChannelItem
 from chord_optimization import ChordOptimizationPlan
 from config import (
@@ -64,7 +65,7 @@ from playlist_store import Playlist, PlaylistStore, normalize_playlists
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 from player import MidiKeyboardPlayer
 from rhythm_judgment import RhythmJudge, RhythmJudgment
-from settings import AppSettings, load_settings, save_settings
+from settings import AppSettings, database_path, load_settings, save_settings
 from sound_sources import normalize_sound_source
 from source_colors import track_channel_color
 
@@ -86,7 +87,21 @@ else:
 GAME_COUNTDOWN_KEY_HOLD_SECONDS = 0.12
 OUTPUT_NOTE_MIN_VISIBLE_SECONDS = 0.075
 RHYTHM_HIT_EVENT_HISTORY_LIMIT = 128
+METADATA_SCAN_BATCH_SIZE = 10
 UI_SCALE_PERCENT_OPTIONS = (100, 110, 125, 150, 175, 200)
+
+
+MidiSortKey = tuple[tuple[str, ...], str, str]
+
+
+@dataclass(frozen=True)
+class StartupFolderScan:
+    folder: Path
+    files: tuple[Path, ...]
+    file_stats: dict[Path, tuple[int, int]]
+    sort_keys: dict[Path, MidiSortKey]
+    rows: tuple[MidiListRow, ...]
+    cached_paths: frozenset[Path]
 
 
 class ControllerView(Protocol):
@@ -121,9 +136,11 @@ class AppController:
         settings: AppSettings | None = None,
         *,
         playlist_store: PlaylistStore | None = None,
+        database: ApplicationDatabase | None = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.playlist_store = playlist_store or PlaylistStore()
+        self.database = database or ApplicationDatabase(database_path())
+        self.playlist_store = playlist_store or PlaylistStore(self.database.path)
         playlists = self.playlist_store.load()
         self.state = AppState(
             language=self.settings.language,
@@ -215,7 +232,7 @@ class AppController:
         self._midi_file_stats: dict[Path, tuple[int, int]] = {}
         self._midi_sort_keys: dict[
             Path,
-            tuple[tuple[str, ...], str, str],
+            MidiSortKey,
         ] = {}
         self._midi_metadata_complete: set[Path] = set()
         self.last_midi_folder = self.settings.last_midi_folder
@@ -240,6 +257,9 @@ class AppController:
         self._event_notification_pending = False
         self.metadata_cancel = threading.Event()
         self.metadata_scan_id = 0
+        self._startup_folder_load_id = 0
+        self._startup_folder_cancel = threading.Event()
+        self._startup_folder_thread: threading.Thread | None = None
         self.playback_id = 0
         self.position_generation = 0
         self.midi_input_id = 0
@@ -286,8 +306,14 @@ class AppController:
         self.worker_queue.put(message)
         self._request_event_dispatch()
 
-    def _queue_metadata_result(self, result: tuple[int, Path, str]) -> None:
-        self.metadata_queue.put(result)
+    def _queue_metadata_results(
+        self,
+        results: list[tuple[int, Path, str]],
+    ) -> None:
+        if not results:
+            return
+        for result in results:
+            self.metadata_queue.put(result)
         self._request_event_dispatch()
 
     def _request_event_dispatch(self) -> None:
@@ -329,7 +355,149 @@ class AppController:
         if self.last_midi_folder:
             folder = Path(self.last_midi_folder)
             if folder.is_dir():
-                self.load_midi_folder(folder, save_folder=False, show_empty_message=False)
+                self._start_startup_folder_load(folder)
+
+    def _cancel_startup_folder_load(self) -> None:
+        self._startup_folder_load_id += 1
+        self._startup_folder_cancel.set()
+
+    def _start_startup_folder_load(self, folder: Path) -> None:
+        self._cancel_startup_folder_load()
+        self.metadata_cancel.set()
+        self.metadata_scan_id += 1
+        scan_id = self.metadata_scan_id
+        cancel = threading.Event()
+        self.metadata_cancel = cancel
+        self._startup_folder_cancel = cancel
+        load_id = self._startup_folder_load_id
+
+        def load() -> None:
+            try:
+                scan = self._scan_startup_midi_folder(folder, cancel)
+            except OSError as exc:
+                self._queue_worker_message(
+                    ("startup_folder_error", load_id, str(exc))
+                )
+                return
+            if scan is None or cancel.is_set():
+                return
+
+            scan_applied = threading.Event()
+            self._queue_worker_message(
+                (
+                    "startup_folder_scanned",
+                    load_id,
+                    scan,
+                    scan_applied,
+                )
+            )
+            while not scan_applied.wait(0.05):
+                if cancel.is_set():
+                    return
+            if cancel.is_set() or not scan.files:
+                return
+
+            metadata_batch: list[tuple[int, Path, str]] = []
+            for path in scan.files:
+                if path in scan.cached_paths:
+                    continue
+                if cancel.is_set():
+                    return
+                try:
+                    _events, summary = self.midi_parser_process.parse(path)
+                    self._save_midi_metadata(
+                        path,
+                        scan.file_stats[path],
+                        summary,
+                    )
+                    duration = self.format_time(summary.duration)
+                except Exception:
+                    duration = "--:--"
+                metadata_batch.append((scan_id, path, duration))
+                if len(metadata_batch) >= METADATA_SCAN_BATCH_SIZE:
+                    self._queue_metadata_results(metadata_batch)
+                    metadata_batch = []
+            self._queue_metadata_results(metadata_batch)
+
+        thread = threading.Thread(
+            target=load,
+            name="StartupMidiFolderLoad",
+            daemon=True,
+        )
+        self._startup_folder_thread = thread
+        thread.start()
+
+    def _scan_startup_midi_folder(
+        self,
+        folder: Path,
+        cancel: threading.Event,
+    ) -> StartupFolderScan | None:
+        discovered: list[Path] = []
+        file_stats: dict[Path, tuple[int, int]] = {}
+        sort_keys: dict[Path, MidiSortKey] = {}
+        for path in folder.rglob("*"):
+            if cancel.is_set():
+                return None
+            if path.suffix.lower() not in {".mid", ".midi"}:
+                continue
+            file_stat = path.stat()
+            if not stat_module.S_ISREG(file_stat.st_mode):
+                continue
+            relative = path.relative_to(folder)
+            file_stats[path] = (
+                file_stat.st_size,
+                file_stat.st_mtime_ns,
+            )
+            sort_keys[path] = (
+                tuple(part.casefold() for part in relative.parent.parts),
+                path.name.casefold(),
+                relative.as_posix(),
+            )
+            discovered.append(path)
+        files = tuple(sorted(discovered, key=sort_keys.__getitem__))
+        self._prune_missing_midi_metadata(folder, files)
+        cached_metadata = self._load_valid_midi_metadata(file_stats)
+        rows = tuple(
+            MidiListRow(
+                path=path,
+                name=path.name,
+                folder=self._format_midi_folder(folder, path),
+                duration=(
+                    self.format_time(cached_metadata[path].duration)
+                    if path in cached_metadata
+                    else "--:--"
+                ),
+            )
+            for path in files
+        )
+        return StartupFolderScan(
+            folder=folder,
+            files=files,
+            file_stats=file_stats,
+            sort_keys=sort_keys,
+            rows=rows,
+            cached_paths=frozenset(cached_metadata),
+        )
+
+    def _apply_startup_folder_scan(self, scan: StartupFolderScan) -> None:
+        self.midi_files = list(scan.files)
+        self._midi_cache_root = scan.folder
+        self._midi_file_stats = scan.file_stats
+        self._midi_sort_keys = scan.sort_keys
+        self._midi_metadata_complete = set(scan.cached_paths)
+        self.state.midi_rows = list(scan.rows)
+        self.source_events = []
+        self.events = []
+        self.summary = None
+        self.arrangement_plan = None
+        self.state.arrangement_status = "idle"
+        self.state.arrangement_progress = 0
+        self.state.duration = 0.0
+        self.state.position = 0.0
+        self.state.selected_midi_index = -1
+        self.state.track_channels = []
+        self.state.status = self.text("waiting")
+        self._set_enabled_sources(())
 
     def text(self, key: str) -> str:
         return TEXT[self.state.language][key]
@@ -342,6 +510,7 @@ class AppController:
         show_empty_message: bool = True,
         preserve_sound_playback: bool = False,
     ) -> None:
+        self._cancel_startup_folder_load()
         folder = Path(folder_path)
         previous_selected_path = (
             self.summary.path
@@ -405,12 +574,16 @@ class AppController:
             self._message("error", "load_failed_title", str(exc))
             return
 
-        removed_paths = set(previous_stats).difference(next_stats)
+        self._prune_missing_midi_metadata(folder, files)
+        cached_metadata = self._load_valid_midi_metadata(next_stats)
         if not cache_matches:
             self._midi_metadata_complete.clear()
         else:
             self._midi_metadata_complete.intersection_update(next_stats)
-        self._midi_metadata_complete.difference_update(changed_paths)
+        self._midi_metadata_complete.difference_update(
+            changed_paths.difference(cached_metadata)
+        )
+        self._midi_metadata_complete.update(cached_metadata)
         rows = [
             (
                 previous_rows[path]
@@ -419,6 +592,11 @@ class AppController:
                     path=path,
                     name=path.name,
                     folder=self._format_midi_folder(folder, path),
+                    duration=(
+                        self.format_time(cached_metadata[path].duration)
+                        if path in cached_metadata
+                        else "--:--"
+                    ),
                 )
             )
             for path in files
@@ -441,14 +619,12 @@ class AppController:
             self.last_midi_folder = str(folder)
             self.request_save()
 
-        restart_metadata_scan = (
-            not cache_matches
-            or bool(changed_paths)
-            or bool(removed_paths)
-        )
+        metadata_paths = [
+            path
+            for path in files
+            if path not in self._midi_metadata_complete
+        ]
         if not files:
-            if restart_metadata_scan:
-                self._start_metadata_scan([])
             if not preserve_sound:
                 self.cancel_piano_arrangement(notify=False)
                 self.source_events = []
@@ -471,14 +647,8 @@ class AppController:
         if preserve_sound:
             if self.summary is not None:
                 self.state.selected_midi_index = self._find_midi_index(self.summary.path)
-            if restart_metadata_scan:
-                self._start_metadata_scan(
-                    [
-                        path
-                        for path in files
-                        if path not in self._midi_metadata_complete
-                    ]
-                )
+            if metadata_paths:
+                self._start_metadata_scan(metadata_paths)
             self._notify()
             return
         selected_index = (
@@ -492,25 +662,18 @@ class AppController:
             and self.summary is not None
         ):
             self.state.selected_midi_index = selected_index
-            if restart_metadata_scan:
-                self._start_metadata_scan(
-                    [
-                        path
-                        for path in files
-                        if path not in self._midi_metadata_complete
-                    ]
-                )
+            if metadata_paths:
+                self._start_metadata_scan(metadata_paths)
             self._notify()
             return
         self.select_midi(selected_index if selected_index >= 0 else 0)
-        if restart_metadata_scan:
-            self._start_metadata_scan(
-                [
-                    path
-                    for path in files
-                    if path not in self._midi_metadata_complete
-                ]
-            )
+        remaining_metadata_paths = [
+            path
+            for path in metadata_paths
+            if path not in self._midi_metadata_complete
+        ]
+        if remaining_metadata_paths:
+            self._start_metadata_scan(remaining_metadata_paths)
 
     def reload_midi_folder(self) -> None:
         if not self.last_midi_folder:
@@ -1904,6 +2067,30 @@ class AppController:
                 except queue.Empty:
                     break
                 kind = str(message[0])
+                if kind == "startup_folder_scanned":
+                    load_id = int(message[1])
+                    scan_applied = message[3]
+                    try:
+                        if (
+                            load_id == self._startup_folder_load_id
+                            and not self.exiting
+                        ):
+                            self._apply_startup_folder_scan(message[2])
+                            changed = True
+                    finally:
+                        scan_applied.set()
+                    continue
+                if kind == "startup_folder_error":
+                    if (
+                        int(message[1]) == self._startup_folder_load_id
+                        and not self.exiting
+                    ):
+                        self._message(
+                            "error",
+                            "load_failed_title",
+                            str(message[2]),
+                        )
+                    continue
                 if kind == "keyboard_sound_cleanup":
                     self._complete_keyboard_sound_cleanup(message[1])
                     continue
@@ -2341,6 +2528,7 @@ class AppController:
             return
         self.exiting = True
         self.set_event_notifier(None)
+        self._cancel_startup_folder_load()
         self.release_bound_keyboard_keys()
         self._close_bound_key_sound_output()
         self.metadata_cancel.set()
@@ -2654,17 +2842,29 @@ class AppController:
         scan_id = self.metadata_scan_id
         cancel = threading.Event()
         self.metadata_cancel = cancel
+        file_stats = {
+            path: self._midi_file_stats.get(path)
+            for path in paths
+        }
 
         def scan() -> None:
+            batch: list[tuple[int, Path, str]] = []
             for path in paths:
                 if cancel.is_set():
                     return
                 try:
                     _events, summary = self.midi_parser_process.parse(path)
+                    file_stat = file_stats.get(path)
+                    if file_stat is not None:
+                        self._save_midi_metadata(path, file_stat, summary)
                     duration = self.format_time(summary.duration)
                 except Exception:
                     duration = "--:--"
-                self._queue_metadata_result((scan_id, path, duration))
+                batch.append((scan_id, path, duration))
+                if len(batch) >= METADATA_SCAN_BATCH_SIZE:
+                    self._queue_metadata_results(batch)
+                    batch = []
+            self._queue_metadata_results(batch)
 
         threading.Thread(target=scan, daemon=True).start()
 
@@ -2700,6 +2900,9 @@ class AppController:
     def _update_row_metadata(self, path: Path, summary: MidiSummary | None) -> None:
         if summary is None:
             return
+        file_stat = self._midi_file_stats.get(path)
+        if file_stat is not None:
+            self._save_midi_metadata(path, file_stat, summary)
         self._midi_metadata_complete.add(path)
         for index, row in enumerate(self.state.midi_rows):
             if row.path == path:
@@ -2713,6 +2916,36 @@ class AppController:
                 )
                 self.state.midi_rows = rows
                 return
+
+    def _load_valid_midi_metadata(
+        self,
+        file_stats: dict[Path, tuple[int, int]],
+    ) -> dict[Path, MidiMetadata]:
+        try:
+            return self.database.load_valid_midi_metadata(file_stats)
+        except Exception:
+            return {}
+
+    def _prune_missing_midi_metadata(
+        self,
+        folder: Path,
+        existing_paths: tuple[Path, ...] | list[Path],
+    ) -> None:
+        try:
+            self.database.prune_missing_midi_metadata(folder, existing_paths)
+        except Exception:
+            pass
+
+    def _save_midi_metadata(
+        self,
+        path: Path,
+        file_stat: tuple[int, int],
+        summary: MidiSummary,
+    ) -> None:
+        try:
+            self.database.save_midi_metadata(path, file_stat, summary)
+        except Exception:
+            pass
 
     def _find_midi_index(self, path: Path) -> int:
         for index, candidate in enumerate(self.midi_files):

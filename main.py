@@ -59,7 +59,7 @@ def main() -> int:
     window.show()
     if consume_update_restart_request():
         QTimer.singleShot(0, window._restore_from_tray)
-    controller.start()
+    QTimer.singleShot(0, controller.start)
     single_instance.start_activation_listener(window.activation_requested.emit)
     QTimer.singleShot(0, window.run_startup_tasks)
 

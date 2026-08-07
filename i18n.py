@@ -68,7 +68,26 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.8.3
+    "en": """v1.9.0
+
+This release unifies local data storage and improves startup MIDI-folder
+loading.
+
+[Main changes]
+
+- Settings, playlists, and MIDI summary metadata are now stored in the local
+  SQLite database `bpsr_midi_to_key_player.db`.
+- Cached duration, note range, format, and track/channel summaries are reused
+  for unchanged MIDI files, reducing repeat folder-load work.
+- The previous MIDI folder is loaded in the background after the window opens,
+  and uncached metadata is applied to the list in batches of 10 files.
+- Reloading reparses only added or changed MIDI files. Metadata for files that
+  no longer exist is removed from the database.
+- MIDI playback events and audio data are not stored in the database.
+
+[v1.8.3]
+
+v1.8.3
 
 This release improves live playback settings, keyboard-binding preview, and
 startup responsiveness.
@@ -192,7 +211,7 @@ This release adds saved playlists and sequential MIDI playback.
   after the final track.
 - Wait for the configured countdown between playlist tracks. A countdown of
   0 seconds starts the next track immediately.
-- Save playlists in playlists.json beside the application and remember the
+- Save playlists in the local application database and remember the
   playlist-list pane width.
 
 [v1.6.1]
@@ -285,7 +304,7 @@ This release adds secure in-app updates through GitHub Releases.
   a notification only when an update is available.
 - Added Other > Check for Updates for manual update checks.
 - Automatic checks are limited to once per hour. The last check time is saved
-  in settings.json, while manual checks remain available at any time.
+  in the local database, while manual checks remain available at any time.
 - Added confirmation before updating and a single progress window for the
   download, verification, installation, and restart process.
 - Release ZIP size, SHA-256 digest, archive structure, and paths are validated
@@ -364,9 +383,27 @@ performance visualization, and automatic sustain generation.
 
 - Distribution changed from a single executable to an install-free extracted
   folder. Keep the executable and _internal folder together.
-- settings.json is now stored in the extracted application folder. Settings
-  from the previous location are not migrated automatically.""",
-    "ja": """v1.8.3
+- Settings and playlists are stored in the local SQLite database in the
+  extracted application folder.""",
+    "ja": """v1.9.0
+
+ローカルデータ保存を統合し、起動時のMIDIフォルダ読込を改善しました。
+
+【主な変更】
+
+- 設定、プレイリスト、MIDI概要情報を、ローカルSQLite DB
+  `bpsr_midi_to_key_player.db`へ保存する構成に統合しました。
+- 変更されていないMIDIは、保存済みの長さ、音域、形式、
+  トラック／チャンネル概要を再利用し、フォルダ再読込の処理を軽減しました。
+- 画面表示後に前回のMIDIフォルダをバックグラウンドで読み込み、
+  未解析情報は10件単位でMIDI一覧へ反映します。
+- リロード時は追加・変更されたMIDIだけを再解析し、存在しなくなった
+  MIDIの概要情報をDBから削除します。
+- MIDI再生イベントや音声データはDBへ保存しません。
+
+【v1.8.3】
+
+v1.8.3
 
 実行中設定の反映、キーバインド試聴、起動時の応答性を改善しました。
 
@@ -480,7 +517,7 @@ v1.7.0
   自動停止します。
 - 曲間は設定中のカウントダウン秒数だけ待機します。0秒の場合は
   待機せず次の曲を開始します。
-- プレイリストをアプリと同じ場所のplaylists.jsonへ保存し、
+- プレイリストをアプリと同じ場所のローカルDBへ保存し、
   プレイリスト一覧の表示幅も保持します。
 
 【v1.6.1】
@@ -570,7 +607,7 @@ v1.4.0
 - 起動時にGitHub Releasesの最新バージョンを確認し、
   更新がある場合だけ通知するようにしました。
 - 「その他 > 更新を確認」から、いつでも手動で更新を確認できます。
-- 自動確認は1時間に1回までに制限し、最終確認時刻をsettings.jsonへ
+- 自動確認は1時間に1回までに制限し、最終確認時刻をローカルDBへ
   保存します。手動確認はこの制限に関係なく実行できます。
 - 更新前の確認画面と、ダウンロード、検証、適用、再起動の進捗を
   1つのウィンドウで確認できる更新画面を追加しました。
@@ -658,9 +695,25 @@ v1.4.0
 
 - 配布形式を単体EXEから、インストール不要のフォルダ展開版へ
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
-- 設定ファイルの保存先を、アプリの展開先にあるsettings.jsonへ
-  変更しました。旧保存先の設定は自動移行されません。""",
-    "zh": """v1.8.3
+- 設定とプレイリストを、アプリの展開先にあるSQLite DBへ保存します。""",
+    "zh": """v1.9.0
+
+本版本统一了本地数据存储，并改进启动时的MIDI文件夹加载。
+
+【主要变更】
+
+- 设置、播放列表和MIDI概要信息现在统一保存在本地SQLite数据库
+  `bpsr_midi_to_key_player.db`中。
+- 未发生变化的MIDI文件会复用已保存的时长、音域、格式及轨道／通道概要，
+  减少重复加载文件夹时的解析工作。
+- 窗口显示后会在后台加载上次使用的MIDI文件夹，未缓存的信息按每10个文件
+  一批更新到MIDI列表。
+- 重新加载时仅重新解析新增或已修改的MIDI文件，并从数据库删除已不存在文件的概要信息。
+- MIDI播放事件和音频数据不会保存到数据库。
+
+【v1.8.3】
+
+v1.8.3
 
 本版本改进了运行中设置的应用、按键绑定试听和启动响应速度。
 
@@ -758,7 +811,7 @@ v1.7.0
   调整顺序、移除曲目并保存。
 - 所选播放列表会从上到下播放一次，并在最后一首结束后自动停止。
 - 曲目之间按照当前倒计时秒数等待；设为0秒时会立即播放下一首。
-- 播放列表保存在应用程序旁的playlists.json中，并保存播放列表窗格宽度。
+- 播放列表保存在应用程序旁的本地数据库中，并保存播放列表窗格宽度。
 
 【v1.6.1】
 
@@ -830,7 +883,7 @@ v1.4.0
 
 - 启动时检查GitHub Releases中的最新版本，仅在有可用更新时通知。
 - 可通过“其他 > 检查更新”随时手动检查更新。
-- 自动检查限制为每小时一次，并将上次检查时间保存到settings.json。
+- 自动检查限制为每小时一次，并将上次检查时间保存到本地数据库。
   手动检查不受此限制。
 - 更新前显示确认窗口，并在一个进度窗口中显示下载、验证、安装和重启状态。
 - 替换应用文件前会验证发布ZIP的文件大小、SHA-256、目录结构和路径安全性。
@@ -898,7 +951,7 @@ v1.4.0
 
 - 发布形式由单文件EXE改为免安装文件夹版。请将EXE与_internal文件夹
   保持在同一位置。
-- settings.json改为保存在应用展开目录中，旧位置的设置不会自动迁移。""",
+- 设置和播放列表保存在应用展开目录中的SQLite数据库。""",
 }
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import app_controller
+from app_database import ApplicationDatabase, DATABASE_FILE_NAME
 from app_controller import AppController
 from app_state import TrackChannelItem
 from config import (
@@ -16,7 +17,7 @@ from config import (
     SOUND_PLAYBACK_MODE_REPEAT_ONE,
 )
 from midi_parser import MidiEvent, MidiSummary, MidiTrackSummary
-from playlist_store import Playlist, PlaylistTrack
+from playlist_store import Playlist, PlaylistStore, PlaylistTrack
 from settings import AppSettings
 from source_colors import track_channel_color
 
@@ -85,7 +86,16 @@ class FakeRealtimeSoundOutput:
 
 class AppControllerTests(unittest.TestCase):
     def make_controller(self, **settings) -> AppController:  # type: ignore[no-untyped-def]
-        return AppController(AppSettings(**settings))
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        database = ApplicationDatabase(
+            Path(temporary_directory.name) / DATABASE_FILE_NAME
+        )
+        return AppController(
+            AppSettings(**settings),
+            database=database,
+            playlist_store=PlaylistStore(database.path),
+        )
 
     def test_controller_has_no_qt_dependency(self) -> None:
         source = inspect.getsource(app_controller)
@@ -1810,6 +1820,140 @@ class AppControllerTests(unittest.TestCase):
         metadata_scan.assert_called_once_with(controller.midi_files)
         select_midi.assert_called_once_with(0)
 
+    def test_startup_folder_load_keeps_midi_unselected_until_user_selects(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            midi_path = root / "song.mid"
+            midi_path.write_bytes(b"midi")
+            summary = MidiSummary(
+                path=midi_path,
+                duration=1.5,
+                channels=(0,),
+                event_count=1,
+                tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+            )
+            controller = self.make_controller(last_midi_folder=str(root))
+            dispatch_requested = threading.Event()
+            parse_started = threading.Event()
+            release_parse = threading.Event()
+
+            def parse(_path: Path) -> tuple[list[MidiEvent], MidiSummary]:
+                parse_started.set()
+                self.assertTrue(release_parse.wait(1.0))
+                return [], summary
+
+            controller.set_event_notifier(dispatch_requested.set)
+            with (
+                patch.object(controller, "_bind_global_hotkeys"),
+                patch.object(
+                    controller.midi_parser_process,
+                    "parse",
+                    side_effect=parse,
+                ),
+                patch.object(controller, "_load_cached_piano_arrangement"),
+            ):
+                controller.start()
+
+                self.assertEqual(controller.state.midi_rows, [])
+                self.assertTrue(dispatch_requested.wait(1.0))
+                controller.process_pending_events()
+                dispatch_requested.clear()
+
+                self.assertEqual(
+                    [row.path for row in controller.state.midi_rows],
+                    [midi_path],
+                )
+                self.assertEqual(controller.state.selected_midi_index, -1)
+                self.assertTrue(parse_started.wait(1.0))
+                self.assertIsNone(controller.summary)
+
+                release_parse.set()
+                self.assertTrue(dispatch_requested.wait(1.0))
+                controller.process_pending_events()
+
+                self.assertIsNone(controller.summary)
+                self.assertEqual(controller.state.selected_midi_index, -1)
+                self.assertEqual(controller.state.midi_rows[0].duration, "00:02")
+
+                controller.select_midi(0)
+
+            self.assertIs(controller.summary, summary)
+            self.assertEqual(controller.state.selected_midi_index, 0)
+            self.assertEqual(controller.state.midi_rows[0].duration, "00:02")
+            controller._cancel_startup_folder_load()
+
+    def test_startup_folder_load_uses_cached_midi_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            midi_path = root / "cached.mid"
+            midi_path.write_bytes(b"midi")
+            file_stat = midi_path.stat()
+            controller = self.make_controller(last_midi_folder=str(root))
+            controller.database.save_midi_metadata(
+                midi_path,
+                (file_stat.st_size, file_stat.st_mtime_ns),
+                MidiSummary(
+                    path=midi_path,
+                    duration=61.2,
+                    channels=(0,),
+                    event_count=2,
+                    tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+                    note_range=(60, 72),
+                    midi_format=1,
+                    file_hash="b" * 64,
+                ),
+            )
+            dispatch_requested = threading.Event()
+            controller.set_event_notifier(dispatch_requested.set)
+
+            with (
+                patch.object(controller, "_bind_global_hotkeys"),
+                patch.object(controller.midi_parser_process, "parse") as parse,
+            ):
+                controller.start()
+                self.assertTrue(dispatch_requested.wait(1.0))
+                controller.process_pending_events()
+
+            self.assertEqual(controller.state.selected_midi_index, -1)
+            self.assertEqual(controller.state.midi_rows[0].duration, "01:01")
+            parse.assert_not_called()
+            controller._cancel_startup_folder_load()
+
+    def test_metadata_scan_queues_results_in_batches(self) -> None:
+        controller = self.make_controller()
+        paths = [Path(f"song-{index}.mid") for index in range(17)]
+        summary = MidiSummary(
+            path=paths[0],
+            duration=1.0,
+            channels=(0,),
+            event_count=1,
+            tracks=(MidiTrackSummary(index=0, channels=(0,)),),
+        )
+        with (
+            patch.object(
+                controller.midi_parser_process,
+                "parse",
+                return_value=([], summary),
+            ),
+            patch.object(controller, "_queue_metadata_results") as queue_results,
+            patch("app_controller.threading.Thread") as thread_class,
+        ):
+            controller._start_metadata_scan(paths)
+            scan = thread_class.call_args.kwargs["target"]
+            scan()
+
+        batches = [
+            call_args.args[0]
+            for call_args in queue_results.call_args_list
+        ]
+        self.assertEqual([len(batch) for batch in batches], [10, 7])
+        self.assertEqual(
+            [path for batch in batches for _scan_id, path, _duration in batch],
+            paths,
+        )
+
     def test_reload_reuses_unchanged_midi_rows_without_restarting_metadata(self) -> None:
         controller = self.make_controller()
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1835,6 +1979,7 @@ class AppControllerTests(unittest.TestCase):
             ):
                 controller.load_midi_folder(root)
                 rows = controller.state.midi_rows
+                controller._midi_metadata_complete.add(second)
                 metadata_scan.reset_mock()
 
                 controller.reload_midi_folder()

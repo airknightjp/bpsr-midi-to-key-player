@@ -49,10 +49,11 @@ class QtPlaylistTests(unittest.TestCase):
             root = Path(temporary_directory)
             midi_path = root / "song.mid"
             midi_path.write_bytes(b"MThd")
-            store = PlaylistStore(root / "playlists.json")
+            store = PlaylistStore(root / "bpsr_midi_to_key_player.db")
             controller = AppController(
                 AppSettings(),
                 playlist_store=store,
+                database=store.database,
             )
             controller.state.playlists = [Playlist.create("Set")]
             controller.state.selected_playlist_index = 0
@@ -116,29 +117,37 @@ class QtPlaylistTests(unittest.TestCase):
             controller.shutdown()
 
     def test_unsaved_confirmation_buttons_follow_language(self) -> None:
-        controller = AppController(AppSettings())
-        dialog = PlaylistEditorDialog(controller, "ja")
-        message_box = dialog._make_unsaved_message_box()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            store = PlaylistStore(
+                Path(temporary_directory) / "bpsr_midi_to_key_player.db"
+            )
+            controller = AppController(
+                AppSettings(),
+                playlist_store=store,
+                database=store.database,
+            )
+            dialog = PlaylistEditorDialog(controller, "ja")
+            message_box = dialog._make_unsaved_message_box()
 
-        self.assertEqual(
-            dialog.total_duration_label.text(),
-            "\u5408\u8a08\u6642\u9593: 00:00",
-        )
-        self.assertEqual(
-            message_box.button(QMessageBox.StandardButton.Save).text(),
-            "\u4fdd\u5b58",
-        )
-        self.assertEqual(
-            message_box.button(QMessageBox.StandardButton.Discard).text(),
-            "\u4fdd\u5b58\u3057\u306a\u3044",
-        )
-        self.assertEqual(
-            message_box.button(QMessageBox.StandardButton.Cancel).text(),
-            "\u30ad\u30e3\u30f3\u30bb\u30eb",
-        )
-        message_box.close()
-        dialog.close()
-        controller.shutdown()
+            self.assertEqual(
+                dialog.total_duration_label.text(),
+                "\u5408\u8a08\u6642\u9593: 00:00",
+            )
+            self.assertEqual(
+                message_box.button(QMessageBox.StandardButton.Save).text(),
+                "\u4fdd\u5b58",
+            )
+            self.assertEqual(
+                message_box.button(QMessageBox.StandardButton.Discard).text(),
+                "\u4fdd\u5b58\u3057\u306a\u3044",
+            )
+            self.assertEqual(
+                message_box.button(QMessageBox.StandardButton.Cancel).text(),
+                "\u30ad\u30e3\u30f3\u30bb\u30eb",
+            )
+            message_box.close()
+            dialog.close()
+            controller.shutdown()
 
 
 if __name__ == "__main__":

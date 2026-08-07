@@ -68,7 +68,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.8.3 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.9.0 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -89,11 +89,11 @@ The `_internal` folder contains files required by the application. Do not move t
 ## Software Updates
 
 - At startup, the app checks GitHub Releases and notifies you only when an update is available.
-- Automatic checks run at most once per hour. The last check time is stored in `settings.json`.
+- Automatic checks run at most once per hour. The last check time is stored in the local database.
 - Manual checks from `Other > Check for Updates` are always available.
 - A confirmation is shown before updating, followed by one progress window for download, verification, installation, and restart.
 - The release ZIP size, SHA-256 digest, archive structure, and path safety are verified before installation.
-- The local `settings.json` is preserved. After a successful update, the app restarts automatically and returns to the foreground.
+- The local database is preserved. After a successful update, the app restarts automatically and returns to the foreground.
 - If an update fails, the previous application files are restored and the error is reported on the next launch.
 - A dedicated supervisor process monitors update progress. If the updater stalls or exits abnormally, it is stopped, the backup is restored, and temporary files are removed.
 - No GitHub credentials or access tokens are included in the application.
@@ -106,7 +106,7 @@ MIDI sound playback and realtime preview sound use an in-app software synthesize
 - Play up to 64 simultaneous voices.
 - Prefer the output device's recommended audio format, with fallback to Float32, Int16, or Int32 when needed.
 - Select the Qt audio queue and internal Buffer from menu-bar drop-downs to suit the current environment.
-- The defaults are `Qt 1024` and `Buffer 512`. Selected values are saved to `settings.json`.
+- The defaults are `Qt 1024` and `Buffer 512`. Selected values are saved to the local database.
 - The current values are shown as `Qt ... | Buffer ...` in the menu bar.
 
 ## Multiprocess Architecture
@@ -199,15 +199,15 @@ The app uses the Windows `SendInput` API for keyboard output. If the target appl
 
 To prevent accidental input, keyboard output from this app is suppressed while its main window or a child window has focus.
 
-## Settings File
+## Local Database
 
-Settings are saved in the extracted application folder:
+Settings, playlists, and MIDI duration, range, format, and track/channel summaries are stored in a SQLite database in the extracted application folder. MIDI playback events are not stored in the database.
 
 ```text
-BPSR_MIDI_to_KEY_Player\settings.json
+BPSR_MIDI_to_KEY_Player\bpsr_midi_to_key_player.db
 ```
 
-Settings are saved atomically to reduce the chance of broken settings after an interrupted write.
+Settings are saved using SQLite transactions.
 Normal setting changes are saved together when the application exits. Use `File > Save Settings` to save them immediately.
 
 ## Requirements
@@ -218,7 +218,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.8.3
+v1.9.0
 
 ## Copyright
 

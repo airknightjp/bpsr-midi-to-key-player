@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app_database import ApplicationDatabase, DATABASE_FILE_NAME
 from config import (
     DEFAULT_COUNTDOWN_SECONDS,
     DEFAULT_INPUT_CONVERSION_MODE,
@@ -47,7 +46,6 @@ from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
 from piano_arrangement_models import normalize_arrangement_quality
 
 
-SETTINGS_FILE_NAME = "settings.json"
 _last_settings_error = ""
 
 
@@ -105,40 +103,16 @@ class AppSettings:
     audio_chunk_frames: int = DEFAULT_AUDIO_CHUNK_FRAMES
     audio_fallback_interval_ms: int = DEFAULT_AUDIO_FALLBACK_INTERVAL_MS
 
+
 def load_settings() -> AppSettings:
     global _last_settings_error
     _last_settings_error = ""
-    path = _settings_path()
-    temporary_path = _temporary_settings_path(path)
-    candidates = [
-        candidate
-        for candidate in (path, temporary_path)
-        if candidate.exists()
-    ]
-    if not candidates:
+    try:
+        data = ApplicationDatabase(database_path()).load_settings()
+    except Exception as exc:
+        _last_settings_error = f"Settings could not be loaded: {exc}"
         return AppSettings()
-
-    data: object | None = None
-    errors: list[str] = []
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-            if candidate == temporary_path:
-                _last_settings_error = "Recovered settings from an interrupted save"
-                try:
-                    os.replace(temporary_path, path)
-                except OSError:
-                    pass
-            elif temporary_path.exists():
-                try:
-                    temporary_path.unlink()
-                except OSError:
-                    pass
-            break
-        except Exception as exc:
-            errors.append(f"{candidate.name}: {exc}")
-    if not isinstance(data, dict):
-        _last_settings_error = "Settings could not be loaded: " + "; ".join(errors)
+    if not data:
         return AppSettings()
 
     keyboard_shortcuts = (
@@ -281,109 +255,89 @@ def load_settings() -> AppSettings:
 
 
 def save_settings(settings: AppSettings) -> None:
-    path = _settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = _temporary_settings_path(path)
-    payload = json.dumps(
-        {
-            "countdown_seconds": settings.countdown_seconds,
-            "midi_sound_volume": settings.midi_sound_volume,
-            "sound_source": settings.sound_source,
-            "arrangement_quality": normalize_arrangement_quality(
-                settings.arrangement_quality
-            ).value,
-            "use_piano_arrangement": settings.use_piano_arrangement,
-            "play_sound": settings.play_sound,
-            "countdown_sound": settings.countdown_sound,
-            "game_countdown_sound": settings.game_countdown_sound,
-            "auto_fit_note_range": settings.auto_fit_note_range,
-            "transpose_semitones": settings.transpose_semitones,
-            "octave_shift": settings.octave_shift,
-            "humanize_timing": settings.humanize_timing,
-            "chord_optimization": settings.chord_optimization,
-            "chord_strum": settings.chord_strum,
-            "auto_sustain": settings.auto_sustain,
-            "repeat_prevention": settings.repeat_prevention,
-            "playback_speed_percent": settings.playback_speed_percent,
-            "sound_playback_mode": normalize_sound_playback_mode(
-                settings.sound_playback_mode
-            ),
-            "language": settings.language,
-            "color_theme": settings.color_theme,
-            "always_on_top": settings.always_on_top,
-            "tray_resident": settings.tray_resident,
-            "run_as_administrator": settings.run_as_administrator,
-            "hide_release_notes_on_startup": (
-                settings.hide_release_notes_on_startup
-            ),
-            "window_opacity": settings.window_opacity,
-            "ui_scale_percent": settings.ui_scale_percent,
-            "window_width": settings.window_width,
-            "window_height": settings.window_height,
-            "midi_column_widths": list(
-                normalize_midi_column_widths(settings.midi_column_widths)
-            ),
-            "playlist_name_width": _clamp_int(
-                settings.playlist_name_width,
-                minimum=80,
-                maximum=2000,
-                default=240,
-            ),
-            "last_midi_folder": settings.last_midi_folder,
-            "keyboard_play_shortcut": settings.keyboard_play_shortcut,
-            "keyboard_pause_shortcut": settings.keyboard_pause_shortcut,
-            "keyboard_stop_shortcut": settings.keyboard_stop_shortcut,
-            "shortcut_locked": settings.shortcut_locked,
-            "midi_input_device": settings.midi_input_device,
-            "input_conversion_mode": normalize_input_conversion_mode(
-                settings.input_conversion_mode
-            ),
-            "key_bindings": {
-                str(note): key
-                for note, key in normalized_key_bindings(settings.key_bindings).items()
-                if DEFAULT_KEY_BINDINGS[note] != key
-            },
-            "sustain_key": settings.sustain_key,
-            "octave_down_key": settings.octave_down_key,
-            "octave_up_key": settings.octave_up_key,
-            "panel_order": list(normalize_panel_order(settings.panel_order)),
-            "section_visibility": normalize_section_visibility(
-                settings.section_visibility
-            ),
-            "last_update_check_at": _parse_nonnegative_int(
-                settings.last_update_check_at
-            ),
-            "audio_qt_frames": normalize_qt_audio_frames(
-                settings.audio_qt_frames
-            ),
-            "audio_buffer_frames": normalize_audio_buffer_frames(
-                settings.audio_buffer_frames
-            ),
-            "audio_response_frames": normalize_audio_response_frames(
-                settings.audio_response_frames
-            ),
-            "audio_chunk_frames": normalize_audio_chunk_frames(
-                settings.audio_chunk_frames
-            ),
-            "audio_fallback_interval_ms": normalize_audio_fallback_interval_ms(
-                settings.audio_fallback_interval_ms
-            ),
+    payload: dict[str, object] = {
+        "countdown_seconds": settings.countdown_seconds,
+        "midi_sound_volume": settings.midi_sound_volume,
+        "sound_source": settings.sound_source,
+        "arrangement_quality": normalize_arrangement_quality(
+            settings.arrangement_quality
+        ).value,
+        "use_piano_arrangement": settings.use_piano_arrangement,
+        "play_sound": settings.play_sound,
+        "countdown_sound": settings.countdown_sound,
+        "game_countdown_sound": settings.game_countdown_sound,
+        "auto_fit_note_range": settings.auto_fit_note_range,
+        "transpose_semitones": settings.transpose_semitones,
+        "octave_shift": settings.octave_shift,
+        "humanize_timing": settings.humanize_timing,
+        "chord_optimization": settings.chord_optimization,
+        "chord_strum": settings.chord_strum,
+        "auto_sustain": settings.auto_sustain,
+        "repeat_prevention": settings.repeat_prevention,
+        "playback_speed_percent": settings.playback_speed_percent,
+        "sound_playback_mode": normalize_sound_playback_mode(
+            settings.sound_playback_mode
+        ),
+        "language": settings.language,
+        "color_theme": settings.color_theme,
+        "always_on_top": settings.always_on_top,
+        "tray_resident": settings.tray_resident,
+        "run_as_administrator": settings.run_as_administrator,
+        "hide_release_notes_on_startup": settings.hide_release_notes_on_startup,
+        "window_opacity": settings.window_opacity,
+        "ui_scale_percent": settings.ui_scale_percent,
+        "window_width": settings.window_width,
+        "window_height": settings.window_height,
+        "midi_column_widths": list(
+            normalize_midi_column_widths(settings.midi_column_widths)
+        ),
+        "playlist_name_width": _clamp_int(
+            settings.playlist_name_width,
+            minimum=80,
+            maximum=2000,
+            default=240,
+        ),
+        "last_midi_folder": settings.last_midi_folder,
+        "keyboard_play_shortcut": settings.keyboard_play_shortcut,
+        "keyboard_pause_shortcut": settings.keyboard_pause_shortcut,
+        "keyboard_stop_shortcut": settings.keyboard_stop_shortcut,
+        "shortcut_locked": settings.shortcut_locked,
+        "midi_input_device": settings.midi_input_device,
+        "input_conversion_mode": normalize_input_conversion_mode(
+            settings.input_conversion_mode
+        ),
+        "key_bindings": {
+            str(note): key
+            for note, key in normalized_key_bindings(
+                settings.key_bindings
+            ).items()
+            if DEFAULT_KEY_BINDINGS[note] != key
         },
-        indent=2,
-        ensure_ascii=False,
-    )
-    try:
-        with temporary_path.open("w", encoding="utf-8", newline="\n") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-    except Exception:
-        try:
-            temporary_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+        "sustain_key": settings.sustain_key,
+        "octave_down_key": settings.octave_down_key,
+        "octave_up_key": settings.octave_up_key,
+        "panel_order": list(normalize_panel_order(settings.panel_order)),
+        "section_visibility": normalize_section_visibility(
+            settings.section_visibility
+        ),
+        "last_update_check_at": _parse_nonnegative_int(
+            settings.last_update_check_at
+        ),
+        "audio_qt_frames": normalize_qt_audio_frames(settings.audio_qt_frames),
+        "audio_buffer_frames": normalize_audio_buffer_frames(
+            settings.audio_buffer_frames
+        ),
+        "audio_response_frames": normalize_audio_response_frames(
+            settings.audio_response_frames
+        ),
+        "audio_chunk_frames": normalize_audio_chunk_frames(
+            settings.audio_chunk_frames
+        ),
+        "audio_fallback_interval_ms": normalize_audio_fallback_interval_ms(
+            settings.audio_fallback_interval_ms
+        ),
+    }
+    ApplicationDatabase(database_path()).save_settings(payload)
 
 
 def consume_settings_error() -> str:
@@ -402,8 +356,8 @@ def _parse_nonnegative_int(value: object) -> int:
         return 0
 
 
-def _settings_path() -> Path:
-    return _application_directory() / SETTINGS_FILE_NAME
+def database_path() -> Path:
+    return _application_directory() / DATABASE_FILE_NAME
 
 
 def _application_directory() -> Path:
@@ -414,10 +368,6 @@ def _application_directory() -> Path:
 
 def application_directory() -> Path:
     return _application_directory()
-
-
-def _temporary_settings_path(path: Path) -> Path:
-    return path.with_name(f"{path.name}.tmp")
 
 
 def _clamp_int(value: object, minimum: int, maximum: int, default: int) -> int:

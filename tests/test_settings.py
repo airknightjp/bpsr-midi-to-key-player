@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from app_database import ApplicationDatabase, DATABASE_FILE_NAME
 from config import normalized_key_bindings
-from settings import AppSettings, consume_settings_error, load_settings, save_settings
+from settings import AppSettings, database_path, load_settings, save_settings
 
 
 @contextmanager
@@ -17,6 +17,14 @@ def isolated_settings_directory():
         settings_dir = Path(temp_dir)
         with patch("settings._application_directory", return_value=settings_dir):
             yield settings_dir
+
+
+def save_raw_settings(settings_dir: Path, payload: dict[str, object]) -> None:
+    ApplicationDatabase(settings_dir / DATABASE_FILE_NAME).save_settings(payload)
+
+
+def load_raw_settings(settings_dir: Path) -> dict[str, object]:
+    return ApplicationDatabase(settings_dir / DATABASE_FILE_NAME).load_settings()
 
 
 class SettingsTests(unittest.TestCase):
@@ -142,11 +150,9 @@ class SettingsTests(unittest.TestCase):
                 )
             )
 
-            saved_payload = json.loads(
-                (settings_dir / "settings.json").read_text(encoding="utf-8")
-            )
+            saved_payload = load_raw_settings(settings_dir)
             loaded = load_settings()
-            self.assertFalse((settings_dir / "settings.json.tmp").exists())
+            self.assertTrue((settings_dir / DATABASE_FILE_NAME).exists())
 
         self.assertFalse(saved_payload["play_sound"])
         self.assertNotIn("dry_run", saved_payload)
@@ -214,29 +220,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(loaded.audio_fallback_interval_ms, 8)
         self.assertEqual(loaded.last_update_check_at, 1_789_123_456)
 
-    def test_removed_dry_run_setting_is_not_loaded(self) -> None:
-        with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                json.dumps({"dry_run": False}),
-                encoding="utf-8",
-            )
-
-            loaded = load_settings()
-
-        self.assertTrue(loaded.play_sound)
-
     def test_midi_column_widths_are_clamped_or_reset_when_loaded(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            settings_path = settings_dir / "settings.json"
-            settings_path.write_text(
-                '{"midi_column_widths":[10,180,5000,90]}',
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {"midi_column_widths": [10, 180, 5000, 90]},
             )
             clamped = load_settings()
-            settings_path.write_text(
-                '{"midi_column_widths":[630,180]}',
-                encoding="utf-8",
-            )
+            save_raw_settings(settings_dir, {"midi_column_widths": [630, 180]})
             reset = load_settings()
 
         self.assertEqual(clamped.midi_column_widths, (40, 180, 2000))
@@ -244,18 +235,19 @@ class SettingsTests(unittest.TestCase):
 
     def test_legacy_audio_learning_keys_are_discarded(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            settings_path = settings_dir / "settings.json"
-            settings_path.write_text(
-                '{"minimum_stable_qt_frames":333,'
-                '"qt_audio_environment":"old-device",'
-                '"automatic_audio_buffer_frames":2048,'
-                '"qt_frames_retest_after":1800000000}',
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {
+                    "minimum_stable_qt_frames": 333,
+                    "qt_audio_environment": "old-device",
+                    "automatic_audio_buffer_frames": 2048,
+                    "qt_frames_retest_after": 1_800_000_000,
+                },
             )
 
             loaded = load_settings()
             save_settings(loaded)
-            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            saved = load_raw_settings(settings_dir)
 
         self.assertFalse(hasattr(loaded, "audio_tuning_profiles"))
         self.assertNotIn("minimum_stable_qt_frames", saved)
@@ -266,9 +258,9 @@ class SettingsTests(unittest.TestCase):
 
     def test_invalid_panel_order_is_repaired_without_duplicates(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"panel_order": ["player", "player", "unknown", "keyboard"]}',
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {"panel_order": ["player", "player", "unknown", "keyboard"]},
             )
 
             loaded = load_settings()
@@ -279,14 +271,16 @@ class SettingsTests(unittest.TestCase):
 
     def test_invalid_section_visibility_values_use_visible_defaults(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"section_visibility": {'
-                '"input_conversion": false,'
-                '"common_settings": "false",'
-                '"piano_roll": true,'
-                '"unknown": false'
-                "}}",
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {
+                    "section_visibility": {
+                        "input_conversion": False,
+                        "common_settings": "false",
+                        "piano_roll": True,
+                        "unknown": False,
+                    }
+                },
             )
 
             loaded = load_settings()
@@ -304,9 +298,9 @@ class SettingsTests(unittest.TestCase):
 
     def test_note_shift_settings_are_clamped(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"transpose_semitones": 99, "octave_shift": -99}',
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {"transpose_semitones": 99, "octave_shift": -99},
             )
 
             loaded = load_settings()
@@ -316,10 +310,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_unknown_sound_source_uses_piano(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"sound_source":"missing"}',
-                encoding="utf-8",
-            )
+            save_raw_settings(settings_dir, {"sound_source": "missing"})
 
             loaded = load_settings()
 
@@ -327,15 +318,14 @@ class SettingsTests(unittest.TestCase):
 
     def test_manual_audio_buffer_setting_is_preserved(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            settings_path = settings_dir / "settings.json"
-            settings_path.write_text(
-                '{"audio_buffer_frames":512,"auto_audio_buffer":false}',
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {"audio_buffer_frames": 512, "auto_audio_buffer": False},
             )
 
             loaded = load_settings()
             save_settings(loaded)
-            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            saved = load_raw_settings(settings_dir)
 
         self.assertEqual(loaded.audio_buffer_frames, 512)
         self.assertEqual(saved["audio_buffer_frames"], 512)
@@ -343,11 +333,13 @@ class SettingsTests(unittest.TestCase):
 
     def test_previous_default_shortcuts_are_migrated(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"keyboard_play_shortcut":"F5",'
-                '"keyboard_pause_shortcut":"F7",'
-                '"keyboard_stop_shortcut":"F6"}',
-                encoding="utf-8",
+            save_raw_settings(
+                settings_dir,
+                {
+                    "keyboard_play_shortcut": "F5",
+                    "keyboard_pause_shortcut": "F7",
+                    "keyboard_stop_shortcut": "F6",
+                },
             )
 
             loaded = load_settings()
@@ -366,36 +358,11 @@ class SettingsTests(unittest.TestCase):
 
     def test_unknown_sound_playback_mode_uses_off(self) -> None:
         with isolated_settings_directory() as settings_dir:
-            (settings_dir / "settings.json").write_text(
-                '{"sound_playback_mode":"unknown"}',
-                encoding="utf-8",
-            )
+            save_raw_settings(settings_dir, {"sound_playback_mode": "unknown"})
 
             loaded = load_settings()
 
         self.assertEqual(loaded.sound_playback_mode, "off")
-
-    def test_interrupted_atomic_save_is_recovered(self) -> None:
-        with isolated_settings_directory() as settings_dir:
-            temporary_path = settings_dir / "settings.json.tmp"
-            temporary_path.write_text('{"midi_sound_volume": 42}', encoding="utf-8")
-
-            loaded = load_settings()
-            error = consume_settings_error()
-
-            self.assertEqual(loaded.midi_sound_volume, 42)
-            self.assertIn("Recovered settings", error)
-            self.assertTrue((settings_dir / "settings.json").exists())
-            self.assertFalse(temporary_path.exists())
-
-    def test_failed_atomic_replace_removes_temporary_file(self) -> None:
-        with isolated_settings_directory() as settings_dir:
-            with patch("settings.os.replace", side_effect=OSError("disk error")):
-                with self.assertRaises(OSError):
-                    save_settings(AppSettings())
-
-            temporary_path = settings_dir / "settings.json.tmp"
-            self.assertFalse(temporary_path.exists())
 
     def test_frozen_app_uses_executable_directory(self) -> None:
         executable = Path("C:/portable/BPSR_MIDI_to_KEY_Player.exe")
@@ -403,11 +370,9 @@ class SettingsTests(unittest.TestCase):
             patch("settings.sys.frozen", True, create=True),
             patch("settings.sys.executable", str(executable)),
         ):
-            from settings import _settings_path
-
             self.assertEqual(
-                _settings_path(),
-                executable.parent / "settings.json",
+                database_path(),
+                executable.parent / DATABASE_FILE_NAME,
             )
 
 if __name__ == "__main__":

@@ -2,16 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-import json
-import os
 from pathlib import Path
 from uuid import uuid4
 
-from settings import application_directory
+from app_database import ApplicationDatabase
+from settings import database_path
 
 
-PLAYLISTS_FILE_NAME = "playlists.json"
-PLAYLISTS_FORMAT_VERSION = 1
 MAX_PLAYLISTS = 500
 MAX_TRACKS_PER_PLAYLIST = 5000
 
@@ -62,119 +59,65 @@ def _duration_seconds(value: str) -> int | None:
 
 class PlaylistStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or (application_directory() / PLAYLISTS_FILE_NAME)
+        self.path = Path(path) if path is not None else database_path()
+        self.database = ApplicationDatabase(self.path)
 
     def load(self) -> list[Playlist]:
-        if not self.path.exists():
-            return []
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+            rows = self.database.load_playlists()
+        except Exception:
             return []
-        if not isinstance(payload, dict):
-            return []
-        raw_playlists = payload.get("playlists")
-        if not isinstance(raw_playlists, list):
-            return []
-
         playlists: list[Playlist] = []
         used_ids: set[str] = set()
-        for raw_playlist in raw_playlists[:MAX_PLAYLISTS]:
-            playlist = self._parse_playlist(raw_playlist, used_ids)
-            if playlist is not None:
-                playlists.append(playlist)
-                used_ids.add(playlist.playlist_id)
+        for raw_id, raw_name, raw_tracks in rows[:MAX_PLAYLISTS]:
+            name = raw_name.strip()
+            if not name:
+                continue
+            playlist_id = (
+                raw_id.strip()
+                if raw_id.strip() and raw_id.strip() not in used_ids
+                else uuid4().hex
+            )
+            tracks = tuple(
+                PlaylistTrack(
+                    path=Path(path).expanduser(),
+                    name=(track_name.strip() or Path(path).name),
+                    duration=(duration.strip() or "--:--"),
+                )
+                for path, track_name, duration in raw_tracks[
+                    :MAX_TRACKS_PER_PLAYLIST
+                ]
+                if path.strip()
+            )
+            playlists.append(
+                Playlist(
+                    playlist_id=playlist_id,
+                    name=name,
+                    tracks=tracks,
+                )
+            )
+            used_ids.add(playlist_id)
         return playlists
 
     def save(self, playlists: object) -> None:
         normalized = normalize_playlists(playlists)
-        payload = json.dumps(
-            {
-                "version": PLAYLISTS_FORMAT_VERSION,
-                "playlists": [
-                    {
-                        "id": playlist.playlist_id,
-                        "name": playlist.name,
-                        "tracks": [
-                            {
-                                "path": str(track.path),
-                                "name": track.name,
-                                "duration": track.duration,
-                            }
-                            for track in playlist.tracks
-                        ],
-                    }
-                    for playlist in normalized
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
+        self.database.save_playlists(
+            (
+                (
+                    playlist.playlist_id,
+                    playlist.name,
+                    (
+                        (
+                            str(track.path),
+                            track.name,
+                            track.duration,
+                        )
+                        for track in playlist.tracks
+                    ),
+                )
+                for playlist in normalized
+            )
         )
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = self.path.with_name(f"{self.path.name}.tmp")
-        try:
-            with temporary_path.open("w", encoding="utf-8", newline="\n") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary_path, self.path)
-        except Exception:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
-
-    @staticmethod
-    def _parse_playlist(
-        value: object,
-        used_ids: set[str],
-    ) -> Playlist | None:
-        if not isinstance(value, dict):
-            return None
-        name = value.get("name")
-        if not isinstance(name, str) or not name.strip():
-            return None
-        raw_id = value.get("id")
-        playlist_id = (
-            raw_id.strip()
-            if isinstance(raw_id, str) and raw_id.strip() not in used_ids
-            else uuid4().hex
-        )
-        raw_tracks = value.get("tracks")
-        tracks: list[PlaylistTrack] = []
-        if isinstance(raw_tracks, list):
-            for raw_track in raw_tracks[:MAX_TRACKS_PER_PLAYLIST]:
-                track = PlaylistStore._parse_track(raw_track)
-                if track is not None:
-                    tracks.append(track)
-        return Playlist(
-            playlist_id=playlist_id,
-            name=name.strip(),
-            tracks=tuple(tracks),
-        )
-
-    @staticmethod
-    def _parse_track(value: object) -> PlaylistTrack | None:
-        if not isinstance(value, dict):
-            return None
-        raw_path = value.get("path")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            return None
-        path = Path(raw_path).expanduser()
-        raw_name = value.get("name")
-        name = (
-            raw_name.strip()
-            if isinstance(raw_name, str) and raw_name.strip()
-            else path.name
-        )
-        raw_duration = value.get("duration")
-        duration = (
-            raw_duration.strip()
-            if isinstance(raw_duration, str) and raw_duration.strip()
-            else "--:--"
-        )
-        return PlaylistTrack(path=path, name=name, duration=duration)
 
 
 def normalize_playlists(value: object) -> list[Playlist]:
