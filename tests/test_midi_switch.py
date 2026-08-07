@@ -466,7 +466,11 @@ class MidiSwitchTests(unittest.TestCase):
 
     def test_sound_player_forwards_auto_sustain_to_the_software_synth(self) -> None:
         messages: list[tuple[int, int, int]] = []
-        player = MidiSoundPlayer(auto_sustain=True)
+        sustain_states: list[bool] = []
+        player = MidiSoundPlayer(
+            auto_sustain=True,
+            on_sustain_change=sustain_states.append,
+        )
         player._synth = RecordingSynthClient(messages)
 
         player._handle_event(
@@ -490,6 +494,7 @@ class MidiSwitchTests(unittest.TestCase):
 
         self.assertEqual(messages, [(0xB2, 64, 127), (0xB2, 64, 0)])
         self.assertEqual(player._active_notes, set())
+        self.assertEqual(sustain_states, [True, False])
 
     def test_sound_repeat_prevention_ignores_rapid_note_and_matching_note_off(self) -> None:
         player = RecordingShortMessageSoundPlayer(repeat_prevention=True)

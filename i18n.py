@@ -48,27 +48,35 @@ COLOR_THEME_NAMES = {
 SOUND_SOURCE_NAMES = {
     "en": {
         "piano": "Piano",
-        "electric_piano": "Electric Piano",
-        "organ": "Organ",
-        "synth": "Synth",
+        "star_resonance_guitar": "Starra Guitar",
     },
     "ja": {
         "piano": "ピアノ",
-        "electric_piano": "エレクトリックピアノ",
-        "organ": "オルガン",
-        "synth": "シンセ",
+        "star_resonance_guitar": "スタレゾギター",
     },
     "zh": {
         "piano": "钢琴",
-        "electric_piano": "电钢琴",
-        "organ": "风琴",
-        "synth": "合成器",
+        "star_resonance_guitar": "星痕吉他",
     },
 }
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.9.1
+    "en": """v1.9.2
+
+This release adds the Starra Guitar sound source and improves automatic sustain.
+
+[Main changes]
+
+- Added Starra Guitar using a dedicated resynthesized sound bank.
+- Reduced selectable sound sources to Piano and Starra Guitar.
+- Refined automatic sustain repedaling to reduce muddiness and keep the final
+  pedal for 0.5 seconds.
+- Added an indicator below the playback-position bar while sustain is active.
+
+[v1.9.1]
+
+v1.9.1
 
 This release adds a freely selectable note-fitting range and per-song settings.
 
@@ -361,7 +369,7 @@ performance visualization, and automatic sustain generation.
 
 - Replaced WinMM-based MIDI playback and realtime preview audio with an
   in-app software synthesizer.
-- Added four selectable sound sources: Piano, Electric Piano, Organ, and Synth.
+- Added selectable Piano and Starra Guitar sound sources.
 - Added automatic tuning for the Qt audio queue and internal Buffer. The app
   monitors audio starvation, output underruns, and synthesis load to balance
   latency and stability for the current environment.
@@ -405,7 +413,21 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - Settings and playlists are stored in the local SQLite database in the
   extracted application folder.""",
-    "ja": """v1.9.1
+    "ja": """v1.9.2
+
+スタレゾギター音源を追加し、サスティンの自動生成を改善しました。
+
+【主な変更】
+
+- 専用の再合成音源バンクを使用するスタレゾギター音源を追加しました。
+- 選択できる音源を、ピアノとスタレゾギターの2種類へ整理しました。
+- 音が濁りにくいようにサスティンの踏み替えを細かくし、曲末の保持時間を
+  0.5秒へ調整しました。
+- サスティンが有効な間、再生バーの下にインジケーターを表示します。
+
+【v1.9.1】
+
+v1.9.1
 
 音域を自由に指定する機能と、MIDIごとの個別設定を追加しました。
 
@@ -685,8 +707,7 @@ v1.4.0
 
 - MIDI音源再生とリアルタイム試聴音を、WinMMに依存しない
   アプリ内ソフトウェアシンセへ変更しました。
-- ピアノ、エレクトリックピアノ、オルガン、シンセの
-  4種類から音源を選択できるようになりました。
+- ピアノとスタレゾギターから音源を選択できるようになりました。
 - Qtの音声待機量と内部Bufferを自動調整する機能を追加しました。
   音声供給不足、出力空状態、波形生成負荷を監視し、
   利用環境に合わせて遅延と安定性のバランスを自動調整します。
@@ -735,7 +756,21 @@ v1.4.0
 - 配布形式を単体EXEから、インストール不要のフォルダ展開版へ
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定とプレイリストを、アプリの展開先にあるSQLite DBへ保存します。""",
-    "zh": """v1.9.1
+    "zh": """v1.9.2
+
+本版本新增星痕吉他音源，并改进自动延音生成。
+
+【主要变更】
+
+- 新增使用专用重合成音色库的星痕吉他音源。
+- 可选音源调整为钢琴和星痕吉他两种。
+- 优化自动延音的换踏逻辑以减少声音浑浊，并将曲末延音保持时间调整为
+  0.5秒。
+- 延音启用期间，会在播放进度条下方显示指示点。
+
+【v1.9.1】
+
+v1.9.1
 
 本版本新增了可自由选择的音域压缩范围和按曲目保存的单曲设置。
 
@@ -970,7 +1005,7 @@ v1.4.0
 【主要变更】
 
 - 将MIDI音源播放和实时试听音频从WinMM改为应用内软件合成器。
-- 新增钢琴、电钢琴、风琴和合成器四种可选音源。
+- 新增钢琴和星痕吉他两种可选音源。
 - 新增Qt音频等待量和内部Buffer的自动调节。应用会监控音频供给不足、
   输出欠载和波形生成负载，并根据当前环境自动平衡延迟与稳定性。
 - 学习当前音频环境中可稳定使用的最小Qt值，并保存为下次启动值。

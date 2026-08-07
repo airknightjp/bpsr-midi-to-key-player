@@ -42,6 +42,17 @@ class BuildDistributionTests(unittest.TestCase):
         self.assertNotIn('"assets\\fonts;assets\\fonts"', self.script)
         self.assertFalse((self.project_root / "assets" / "fonts").exists())
 
+    def test_build_includes_the_starra_guitar_resynthesis_bank(self) -> None:
+        self.assertIn(
+            '"assets\\starra_guitar_bank.npy;assets"',
+            self.script,
+        )
+        self.assertIn(
+            '"assets\\starra_guitar_bank.json;assets"',
+            self.script,
+        )
+        self.assertNotIn("starra_guitar_model.npz;assets", self.script)
+
     def test_build_preserves_the_existing_application_database(self) -> None:
         self.assertIn(
             '$OutputDatabase = Join-Path $OutputDir "bpsr_midi_to_key_player.db"',

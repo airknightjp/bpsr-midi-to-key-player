@@ -39,6 +39,7 @@ PositionCallback = Callable[[float], None]
 OptimizationProgressCallback = Callable[[int | None], None]
 OutputNoteCallback = Callable[[int, bool], None]
 OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
+SustainStateCallback = Callable[[bool], None]
 AudioRuntimeChangedCallback = Callable[
     [int, int, int, int, int, str],
     None,
@@ -58,6 +59,7 @@ class MidiSoundPlayer:
         on_output_note: OutputNoteCallback | None = None,
         on_output_remap: OutputNoteCallback | None = None,
         on_output_source_note: OutputSourceNoteCallback | None = None,
+        on_sustain_change: SustainStateCallback | None = None,
         enabled_channels: ChannelProvider | None = None,
         enabled_sources: SourceProvider | None = None,
         volume: int = 100,
@@ -91,6 +93,7 @@ class MidiSoundPlayer:
             on_output_source_note
             or (lambda _note, _track, _channel, _pressed: None)
         )
+        self.on_sustain_change = on_sustain_change or (lambda _enabled: None)
         self.enabled_channels = enabled_channels or (lambda: set(range(16)))
         self.enabled_sources = enabled_sources
         self._volume = self._clamp_volume(volume)
@@ -139,6 +142,7 @@ class MidiSoundPlayer:
         self._sustain_channels: set[int] = set()
         self._manual_sustain_sources: set[tuple[int, int]] = set()
         self._auto_sustain_sources: set[tuple[int, int]] = set()
+        self._reported_sustain_active = False
         self._suppressed_note_offs: dict[tuple[int, int, int], int] = defaultdict(int)
         self._chord_optimization_plan: ChordOptimizationPlan | None = None
         self._chord_optimization_plan_auto_fit: bool | None = None
@@ -358,6 +362,7 @@ class MidiSoundPlayer:
             self._sustain_channels.clear()
             self._manual_sustain_sources.clear()
             self._auto_sustain_sources.clear()
+            self._report_sustain_state(False)
             for channel, note in list(self._active_notes):
                 self._send_note_off(
                     channel,
@@ -859,6 +864,7 @@ class MidiSoundPlayer:
     ) -> None:
         source = (track if track is not None else -1, channel)
         target = self._auto_sustain_sources if automatic else self._manual_sustain_sources
+        was_any_active = bool(self._sustain_channels)
         was_active = channel in self._sustain_channels
         if enabled:
             target.add(source)
@@ -874,8 +880,11 @@ class MidiSoundPlayer:
             self._sustain_channels.discard(channel)
         if is_active != was_active:
             self._send_control_change(channel, 64, 127 if is_active else 0)
+        if was_any_active != bool(self._sustain_channels):
+            self._report_sustain_state(bool(self._sustain_channels))
 
     def _clear_auto_sustain_locked(self) -> None:
+        was_active = bool(self._sustain_channels)
         affected_channels = {channel for _track, channel in self._auto_sustain_sources}
         self._auto_sustain_sources.clear()
         for channel in affected_channels:
@@ -886,6 +895,18 @@ class MidiSoundPlayer:
             if not still_active and channel in self._sustain_channels:
                 self._sustain_channels.discard(channel)
                 self._send_control_change(channel, 64, 0)
+        if was_active != bool(self._sustain_channels):
+            self._report_sustain_state(bool(self._sustain_channels))
+
+    def _report_sustain_state(self, active: bool) -> None:
+        active = bool(active)
+        if self._reported_sustain_active == active:
+            return
+        self._reported_sustain_active = active
+        try:
+            self.on_sustain_change(active)
+        except Exception:
+            pass
 
     def _open_audio(self) -> bool:
         return self._synth.open()

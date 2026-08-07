@@ -12,7 +12,12 @@ ASSETS_DIR = PROJECT_ROOT / "assets"
 class IconAssetTests(unittest.TestCase):
     def test_only_current_icon_assets_remain(self) -> None:
         self.assertEqual(
-            {path.name for path in ASSETS_DIR.iterdir() if path.is_file()},
+            {
+                path.name
+                for path in ASSETS_DIR.iterdir()
+                if path.is_file()
+                and path.suffix.lower() in {".ico", ".png", ".svg"}
+            },
             {
                 "app_icon_whale.ico",
                 "app_icon_whale.png",

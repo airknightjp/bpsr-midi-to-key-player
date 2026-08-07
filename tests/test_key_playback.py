@@ -205,7 +205,11 @@ class KeyPlaybackTests(unittest.TestCase):
 
     def test_sustain_remains_pressed_until_all_channels_release(self) -> None:
         output = FakeOutput()
-        player = MidiKeyboardPlayer(output=output)
+        sustain_states: list[bool] = []
+        player = MidiKeyboardPlayer(
+            output=output,
+            on_sustain_change=sustain_states.append,
+        )
 
         player._handle_event(MidiEvent(time=0.0, kind="sustain", channel=0, value=127))
         player._handle_event(MidiEvent(time=0.1, kind="sustain", channel=1, value=127))
@@ -214,6 +218,7 @@ class KeyPlaybackTests(unittest.TestCase):
 
         self.assertEqual(output.pressed, ["space"])
         self.assertEqual(output.released, ["space"])
+        self.assertEqual(sustain_states, [True, False])
 
     def test_auto_sustain_uses_the_same_space_key_path(self) -> None:
         output = FakeOutput()

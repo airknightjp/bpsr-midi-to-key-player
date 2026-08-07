@@ -63,10 +63,12 @@ class SoftwareSynthTests(unittest.TestCase):
             id(stream._interleaved_scratch),
             id(stream._phase_scratch),
             id(stream._sample_scratch),
+            id(stream._sample_interp_scratch),
+            id(stream._sample_int16_scratch),
             id(stream._limiter_magnitude_scratch),
         )
 
-        stream.note_on(1, 0, 60, 100, "organ")
+        stream.note_on(1, 0, 60, 100, "piano")
         stream.take_pcm_frames(256)
         stream.take_pcm_frames(256)
 
@@ -76,6 +78,7 @@ class SoftwareSynthTests(unittest.TestCase):
             stream._interleaved_scratch,
             stream._phase_scratch,
             stream._sample_scratch,
+            stream._sample_interp_scratch,
             stream._limiter_magnitude_scratch,
         ):
             self.assertEqual(workspace.dtype, np.float32)
@@ -86,13 +89,19 @@ class SoftwareSynthTests(unittest.TestCase):
                 id(stream._interleaved_scratch),
                 id(stream._phase_scratch),
                 id(stream._sample_scratch),
+                id(stream._sample_interp_scratch),
+                id(stream._sample_int16_scratch),
                 id(stream._limiter_magnitude_scratch),
             ),
         )
+        self.assertEqual(stream._sample_int16_scratch.dtype, np.int16)
 
     def test_each_selectable_source_has_a_distinct_waveform(self) -> None:
         rendered = {}
-        for source in ("piano", "electric_piano", "organ", "synth"):
+        for source in (
+            "piano",
+            "star_resonance_guitar",
+        ):
             stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
             stream.note_on(1, 0, 60, 100, source)
             rendered[source] = stream.render(512)
@@ -101,7 +110,50 @@ class SoftwareSynthTests(unittest.TestCase):
             tuple(round(sample, 5) for sample in samples[128:256])
             for samples in rendered.values()
         }
-        self.assertEqual(len(fingerprints), 4)
+        self.assertEqual(len(fingerprints), 2)
+
+    def test_starra_guitar_uses_pitch_dependent_resynthesized_waveforms(self) -> None:
+        low_stream = SoftwareSynthStream(sample_rate=8_000, channels=1)
+        high_stream = SoftwareSynthStream(sample_rate=8_000, channels=1)
+        low_stream.note_on(1, 0, 48, 100, "star_resonance_guitar")
+        high_stream.note_on(1, 0, 71, 100, "star_resonance_guitar")
+
+        low_attack = low_stream.render(512)
+        high_attack = high_stream.render(512)
+
+        self.assertNotEqual(
+            tuple(round(sample, 5) for sample in low_attack[128:256]),
+            tuple(round(sample, 5) for sample in high_attack[128:256]),
+        )
+        low_voice = next(iter(low_stream._voices.values()))
+        high_voice = next(iter(high_stream._voices.values()))
+        self.assertGreater(low_voice.sample_length, high_voice.sample_length)
+
+    def test_starra_guitar_release_matches_the_measured_short_tail(self) -> None:
+        stream = SoftwareSynthStream(sample_rate=8_000, channels=1)
+        stream.note_on(1, 0, 60, 100, "star_resonance_guitar")
+        stream.render(2_000)
+        stream.note_off(1, 0, 60)
+        stream.render(round(8_000 * 0.14))
+
+        self.assertEqual(stream._voices, {})
+        self.assertEqual(stream.render(64), [0.0] * 64)
+
+    def test_starra_guitar_naturally_ends_at_the_measured_duration(self) -> None:
+        low_stream = SoftwareSynthStream(sample_rate=1_000, channels=1)
+        high_stream = SoftwareSynthStream(sample_rate=1_000, channels=1)
+        low_stream.note_on(1, 0, 48, 100, "star_resonance_guitar")
+        high_stream.note_on(1, 0, 71, 100, "star_resonance_guitar")
+
+        low_stream.render(round(low_stream.sample_rate * 10.7))
+        high_stream.render(round(high_stream.sample_rate * 7.4))
+        self.assertIn((1, 0, 48), low_stream._voices)
+        self.assertIn((1, 0, 71), high_stream._voices)
+
+        low_stream.render(round(low_stream.sample_rate * 0.3))
+        high_stream.render(round(high_stream.sample_rate * 0.3))
+        self.assertEqual(low_stream._voices, {})
+        self.assertEqual(high_stream._voices, {})
 
     def test_piano_naturally_decays_to_silence_while_key_is_held(self) -> None:
         stream = SoftwareSynthStream(sample_rate=8_000, channels=1)
@@ -127,16 +179,6 @@ class SoftwareSynthTests(unittest.TestCase):
 
         self.assertIn((1, 0, 36), stream._voices)
         self.assertNotIn((1, 0, 84), stream._voices)
-
-    def test_organ_still_sustains_while_key_is_held(self) -> None:
-        stream = SoftwareSynthStream(sample_rate=8_000, channels=1)
-        stream.note_on(1, 0, 60, 100, "organ")
-
-        stream.render(stream.sample_rate * 10)
-        held = stream.render(128)
-
-        self.assertNotEqual(stream._voices, {})
-        self.assertGreater(max(abs(sample) for sample in held), 0.01)
 
     def test_numpy_renderer_matches_preoptimization_reference(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
@@ -271,10 +313,10 @@ class SoftwareSynthTests(unittest.TestCase):
             channels=1,
             buffer_frames=128,
         )
-        expected.note_on(1, 0, 60, 100, "organ")
-        expected.note_on(1, 0, 64, 100, "organ")
+        expected.note_on(1, 0, 60, 100, "piano")
+        expected.note_on(1, 0, 64, 100, "piano")
         first_expected = expected.take_pcm_frames(128)
-        expected.note_on(1, 0, 67, 100, "organ")
+        expected.note_on(1, 0, 67, 100, "piano")
         second_expected = expected.take_pcm_frames(128)
 
         stream = SoftwareSynthStream(
@@ -282,8 +324,8 @@ class SoftwareSynthTests(unittest.TestCase):
             channels=1,
             buffer_frames=128,
         )
-        stream.note_on(1, 0, 60, 100, "organ")
-        stream.note_on(1, 0, 64, 100, "organ")
+        stream.note_on(1, 0, 60, 100, "piano")
+        stream.note_on(1, 0, 64, 100, "piano")
         try:
             self.assertTrue(stream.start_worker())
             first_actual = stream.take_pcm_frames(128)
@@ -296,7 +338,7 @@ class SoftwareSynthTests(unittest.TestCase):
                     stream._ring_condition.wait(
                         max(0.0, deadline - time.monotonic())
                     )
-            stream.note_on(1, 0, 67, 100, "organ")
+            stream.note_on(1, 0, 67, 100, "piano")
             deadline = time.monotonic() + 1.0
             with stream._ring_condition:
                 while (
@@ -445,7 +487,7 @@ class SoftwareSynthTests(unittest.TestCase):
             channels=1,
             buffer_frames=2_048,
         )
-        stream.note_on(1, 0, 69, 100, "organ")
+        stream.note_on(1, 0, 69, 100, "piano")
         try:
             self.assertTrue(stream.start_worker())
             worker = stream._worker_thread
@@ -973,14 +1015,14 @@ class SoftwareSynthTests(unittest.TestCase):
 
     def test_sustain_holds_released_note_until_pedal_is_lifted(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
-        stream.note_on(1, 2, 60, 100, "organ")
+        stream.note_on(1, 2, 60, 100, "piano")
         stream.render(2_048)
         stream.set_sustain(1, 2, True)
         stream.note_off(1, 2, 60)
 
         held = stream.render(12_000)
         stream.set_sustain(1, 2, False)
-        stream.render(8_000)
+        stream.render(round(stream.sample_rate * 0.55))
         silence = stream.render(256)
 
         self.assertGreater(max(abs(sample) for sample in held), 0.01)
@@ -989,7 +1031,7 @@ class SoftwareSynthTests(unittest.TestCase):
     def test_separate_clients_can_play_the_same_note_at_the_same_time(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
         stream.note_on(1, 0, 60, 100, "piano")
-        stream.note_on(2, 0, 60, 100, "organ")
+        stream.note_on(2, 0, 60, 100, "piano")
         stream.render(1_024)
 
         stream.release_all(1, immediate=True)
@@ -1016,7 +1058,7 @@ class SoftwareSynthTests(unittest.TestCase):
     def test_polyphony_pressure_fades_a_voice_instead_of_cutting_it(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
         for index in range(software_synth.MAX_VOICES + 1):
-            stream.note_on(1, index // 64, 36 + (index % 64), 100, "organ")
+            stream.note_on(1, index // 64, 36 + (index % 64), 100, "piano")
         stream.render(0)
 
         self.assertEqual(len(stream._voices), software_synth.MAX_VOICES)
@@ -1038,7 +1080,7 @@ class SoftwareSynthTests(unittest.TestCase):
     def test_synth_supports_64_sustained_voices(self) -> None:
         stream = SoftwareSynthStream(sample_rate=44_100, channels=1)
         for index in range(64):
-            stream.note_on(1, index // 64, 36 + (index % 64), 100, "organ")
+            stream.note_on(1, index // 64, 36 + (index % 64), 100, "piano")
         stream.render(0)
 
         self.assertEqual(software_synth.MAX_VOICES, 64)

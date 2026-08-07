@@ -3676,6 +3676,9 @@ class SeekSlider(PositionSlider):
         self._whale_handle_size = 0
         self._whale_vertical_offset = 0.0
         self._playback_running = False
+        self._sustain_active = False
+        self._sustain_indicator_color = QColor("#00a7d6")
+        self._sustain_indicator_diameter = 7
         self._whale_timer = QTimer(self)
         self._whale_timer.setInterval(self.WHALE_FRAME_INTERVAL_MS)
         self._whale_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -3717,6 +3720,38 @@ class SeekSlider(PositionSlider):
         self._playback_running = running
         self._update_whale_timer()
         self.update()
+
+    @property
+    def sustain_active(self) -> bool:
+        return self._sustain_active
+
+    @property
+    def sustain_indicator_color(self) -> QColor:
+        return QColor(self._sustain_indicator_color)
+
+    def set_sustain_active(self, active: bool) -> None:
+        active = bool(active)
+        if self._sustain_active == active:
+            return
+        self._sustain_active = active
+        self.update()
+
+    def set_sustain_indicator_style(
+        self,
+        color: str,
+        diameter: int,
+    ) -> None:
+        next_color = QColor(color)
+        next_diameter = max(3, int(diameter))
+        if (
+            self._sustain_indicator_color == next_color
+            and self._sustain_indicator_diameter == next_diameter
+        ):
+            return
+        self._sustain_indicator_color = next_color
+        self._sustain_indicator_diameter = next_diameter
+        if self._sustain_active:
+            self.update()
 
     def set_whale_handle_frames(
         self,
@@ -3781,34 +3816,58 @@ class SeekSlider(PositionSlider):
 
     def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().paintEvent(event)
-        if not self._whale_frames or self._whale_handle_size <= 0:
-            return
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        handle_rect = self.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider,
-            option,
-            QStyle.SubControl.SC_SliderHandle,
-            self,
-        )
-        sequence_index = self.WHALE_FRAME_SEQUENCE[self._whale_frame_position]
-        frame = self._whale_frames[sequence_index % len(self._whale_frames)]
-        center_x = handle_rect.x() + handle_rect.width() / 2.0
-        center_y = handle_rect.y() + handle_rect.height() / 2.0
-        target = QRectF(
-            center_x - self._whale_handle_size / 2.0,
-            center_y
-            - self._whale_handle_size / 2.0
-            - self._whale_vertical_offset,
-            self._whale_handle_size,
-            self._whale_handle_size,
-        )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawPixmap(target, frame, QRectF(frame.rect()))
-        self._draw_whale_spout(painter, target)
+        if self._whale_frames and self._whale_handle_size > 0:
+            option = QStyleOptionSlider()
+            self.initStyleOption(option)
+            handle_rect = self.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider,
+                option,
+                QStyle.SubControl.SC_SliderHandle,
+                self,
+            )
+            sequence_index = self.WHALE_FRAME_SEQUENCE[
+                self._whale_frame_position
+            ]
+            frame = self._whale_frames[
+                sequence_index % len(self._whale_frames)
+            ]
+            center_x = handle_rect.x() + handle_rect.width() / 2.0
+            center_y = handle_rect.y() + handle_rect.height() / 2.0
+            target = QRectF(
+                center_x - self._whale_handle_size / 2.0,
+                center_y
+                - self._whale_handle_size / 2.0
+                - self._whale_vertical_offset,
+                self._whale_handle_size,
+                self._whale_handle_size,
+            )
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(target, frame, QRectF(frame.rect()))
+            self._draw_whale_spout(painter, target)
+        if self._sustain_active:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._sustain_indicator_color)
+            painter.drawEllipse(self._sustain_indicator_rect())
         painter.end()
+
+    def _sustain_indicator_rect(self) -> QRectF:
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderGroove,
+            self,
+        )
+        diameter = float(self._sustain_indicator_diameter)
+        margin = max(1.0, diameter * 0.15)
+        top = min(
+            float(self.height()) - diameter - margin,
+            float(groove_rect.bottom()) + margin + 3.0,
+        )
+        return QRectF(margin, max(margin, top), diameter, diameter)
 
     def _draw_whale_spout(self, painter: QPainter, target: QRectF) -> None:
         if not self._playback_running:

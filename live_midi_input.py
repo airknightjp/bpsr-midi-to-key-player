@@ -38,6 +38,7 @@ StateCallback = Callable[[str], None]
 MidiMessageCallback = Callable[[int, int, int, int, float], None]
 OutputNoteCallback = Callable[[int, bool], None]
 OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
+SustainStateCallback = Callable[[bool], None]
 NoteOwner = tuple[int, int]
 
 
@@ -85,6 +86,7 @@ class MidiInputKeyboardBridge:
         on_midi_message: MidiMessageCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
         on_output_source_note: OutputSourceNoteCallback | None = None,
+        on_sustain_change: SustainStateCallback | None = None,
         auto_fit_note_range: bool = False,
         fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
         transpose_semitones: int = 0,
@@ -107,6 +109,7 @@ class MidiInputKeyboardBridge:
             on_output_source_note
             or (lambda _note, _track, _channel, _pressed: None)
         )
+        self.on_sustain_change = on_sustain_change or (lambda _enabled: None)
         self.auto_fit_note_range = auto_fit_note_range
         self.fit_note_range = normalize_fit_note_range(fit_note_range)
         self.transpose_semitones = max(
@@ -133,6 +136,7 @@ class MidiInputKeyboardBridge:
         self._sustain_channels: set[int] = set()
         self._manual_sustain_channels: set[int] = set()
         self._auto_sustain_channels: set[int] = set()
+        self._reported_sustain_active = False
         self._suppressed_note_offs: dict[NoteOwner, int] = defaultdict(int)
         self._octave_shift = 0
         self._auto_sustain_controller = RealtimeAutoSustain(
@@ -208,9 +212,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.set_dry_run(enabled)
             self._auto_sustain_controller.reset()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
 
     def set_auto_fit_note_range(self, enabled: bool) -> None:
@@ -218,9 +220,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._auto_sustain_controller.reset()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
             self.auto_fit_note_range = bool(enabled)
 
@@ -232,9 +232,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._auto_sustain_controller.reset()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
             self.fit_note_range = normalized
 
@@ -253,9 +251,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._auto_sustain_controller.reset()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
             self.transpose_semitones = transpose_semitones
             self.note_octave_shift = octave_shift
@@ -265,9 +261,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._auto_sustain_controller.reset()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
             self.key_bindings = normalized_key_bindings(key_bindings)
 
@@ -281,9 +275,7 @@ class MidiInputKeyboardBridge:
             self._release_active_note_keys()
             self.output.release_all()
             self._auto_sustain_controller.reset()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
             self.sustain_key = str(sustain_key)
             self.octave_down_key = str(octave_down_key)
@@ -326,9 +318,7 @@ class MidiInputKeyboardBridge:
             self._active_notes.clear()
             self._active_key_owner.clear()
             self._active_key_note.clear()
-            self._sustain_channels.clear()
-            self._manual_sustain_channels.clear()
-            self._auto_sustain_channels.clear()
+            self._clear_sustain_state()
             self._reset_repeat_state()
             self._octave_shift = 0
 
@@ -459,6 +449,23 @@ class MidiInputKeyboardBridge:
             self.output.press(self.sustain_key)
         elif was_active and not is_active:
             self.output.release(self.sustain_key)
+        self._report_sustain_state(is_active)
+
+    def _clear_sustain_state(self) -> None:
+        self._sustain_channels.clear()
+        self._manual_sustain_channels.clear()
+        self._auto_sustain_channels.clear()
+        self._report_sustain_state(False)
+
+    def _report_sustain_state(self, active: bool) -> None:
+        active = bool(active)
+        if self._reported_sustain_active == active:
+            return
+        self._reported_sustain_active = active
+        try:
+            self.on_sustain_change(active)
+        except Exception:
+            pass
 
     def _playable_note(self, note: int) -> int | None:
         with self._lock:

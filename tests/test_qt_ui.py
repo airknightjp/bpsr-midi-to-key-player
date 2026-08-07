@@ -226,6 +226,46 @@ class QtUiTests(unittest.TestCase):
             self.window.render_position(1.0, 120.0)
             set_text.assert_called_once_with("00:01 / 02:00")
 
+    def test_sustain_indicator_follows_runtime_state_without_resizing_slider(self) -> None:
+        initial_size = self.window.position_slider.size()
+        self.assertFalse(self.window.position_slider.sustain_active)
+
+        self.controller.state.sustain_active = True
+        self.controller._notify()
+
+        self.assertTrue(self.window.position_slider.sustain_active)
+        self.assertEqual(self.window.position_slider.size(), initial_size)
+        self.assertEqual(
+            self.window.position_slider.sustain_indicator_color,
+            QColor(THEMES["sky_blue"].accent),
+        )
+        slider = self.window.position_slider
+        option = QStyleOptionSlider()
+        slider.initStyleOption(option)
+        groove_rect = slider.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderGroove,
+            slider,
+        )
+        indicator_rect = slider._sustain_indicator_rect()
+        diameter = float(slider._sustain_indicator_diameter)
+        margin = max(1.0, diameter * 0.15)
+        expected_top = max(
+            margin,
+            min(
+                float(slider.height()) - diameter - margin,
+                float(groove_rect.bottom()) + margin + 3.0,
+            ),
+        )
+        self.assertGreater(indicator_rect.top(), groove_rect.bottom())
+        self.assertAlmostEqual(indicator_rect.top(), expected_top)
+        self.assertLessEqual(indicator_rect.bottom(), slider.height())
+
+        self.controller.state.sustain_active = False
+        self.controller._notify()
+        self.assertFalse(self.window.position_slider.sustain_active)
+
     def test_player_has_midi_and_playlist_tabs(self) -> None:
         self.assertEqual(self.window.tab_bar.count(), 2)
         self.assertEqual(self.window.player_content_stack.count(), 2)
@@ -664,7 +704,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.9.1")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.9.2")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -4974,9 +5014,16 @@ class QtUiTests(unittest.TestCase):
             self.window.tab_bar_container.geometry().right(),
         )
 
-        organ_index = self.window.sound_source_combo.findData("organ")
-        self.window.sound_source_combo.setCurrentIndex(organ_index)
-        self.assertEqual(self.controller.state.sound_source, "organ")
+        guitar_index = self.window.sound_source_combo.findData(
+            "star_resonance_guitar"
+        )
+        self.assertGreaterEqual(guitar_index, 0)
+        self.window.sound_source_combo.setCurrentIndex(guitar_index)
+        self.assertEqual(
+            self.controller.state.sound_source,
+            "star_resonance_guitar",
+        )
+        self.assertEqual(self.window.sound_source_combo.count(), 2)
 
         self.controller.state.audio_qt_frames = 256
         self.controller.state.audio_buffer_frames = 1_024

@@ -40,6 +40,7 @@ OptimizationProgressCallback = Callable[[int | None], None]
 CountdownCallback = Callable[[int], None]
 OutputNoteCallback = Callable[[int, bool], None]
 OutputSourceNoteCallback = Callable[[int, int, int, bool], None]
+SustainStateCallback = Callable[[bool], None]
 EnabledChannelsCallback = Callable[[], set[int]]
 EnabledSourcesCallback = Callable[[], set[tuple[int, int]]]
 NoteOwner = tuple[int, int, int]
@@ -56,6 +57,7 @@ class MidiKeyboardPlayer:
         on_optimization_progress: OptimizationProgressCallback | None = None,
         on_output_note: OutputNoteCallback | None = None,
         on_output_source_note: OutputSourceNoteCallback | None = None,
+        on_sustain_change: SustainStateCallback | None = None,
         enabled_channels: EnabledChannelsCallback | None = None,
         enabled_sources: EnabledSourcesCallback | None = None,
         auto_fit_note_range: bool = False,
@@ -86,6 +88,7 @@ class MidiKeyboardPlayer:
             on_output_source_note
             or (lambda _note, _track, _channel, _pressed: None)
         )
+        self.on_sustain_change = on_sustain_change or (lambda _enabled: None)
         self.enabled_channels = enabled_channels
         self.enabled_sources = enabled_sources
         self.auto_fit_note_range = auto_fit_note_range
@@ -121,6 +124,7 @@ class MidiKeyboardPlayer:
         self._sustain_channels: set[tuple[int, int]] = set()
         self._auto_sustain_channels: set[tuple[int, int]] = set()
         self._sustain_lock = threading.RLock()
+        self._reported_sustain_active = False
         self._octave_shift = 0
         self._chord_optimization_plan: ChordOptimizationPlan | None = None
         self._chord_optimization_plan_auto_fit: bool | None = None
@@ -408,6 +412,7 @@ class MidiKeyboardPlayer:
             self._active_key_note.clear()
             self._sustain_channels.clear()
             self._auto_sustain_channels.clear()
+            self._report_sustain_state(False)
             self._octave_shift = 0
             with self._config_lock:
                 self._clock = None
@@ -429,6 +434,7 @@ class MidiKeyboardPlayer:
         self.output.release_all()
         self._sustain_channels.clear()
         self._auto_sustain_channels.clear()
+        self._report_sustain_state(False)
 
     def _remap_active_note_keys(self) -> None:
         active_owners = list(self._active_key_owner.values())
@@ -799,6 +805,7 @@ class MidiKeyboardPlayer:
             self.output.press(self.sustain_key)
         elif not enabled and is_inactive:
             self.output.release(self.sustain_key)
+        self._report_sustain_state(not is_inactive)
 
     def _clear_auto_sustain(self) -> None:
         with self._sustain_lock:
@@ -808,6 +815,17 @@ class MidiKeyboardPlayer:
             should_release = not self._sustain_channels
         if should_release:
             self.output.release(self.sustain_key)
+        self._report_sustain_state(not should_release)
+
+    def _report_sustain_state(self, active: bool) -> None:
+        active = bool(active)
+        if self._reported_sustain_active == active:
+            return
+        self._reported_sustain_active = active
+        try:
+            self.on_sustain_change(active)
+        except Exception:
+            pass
 
     def _remove_active_key(self, key: str) -> None:
         self._active_key_owner.pop(key, None)

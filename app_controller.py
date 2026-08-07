@@ -288,6 +288,8 @@ class AppController:
         self.playback_id = 0
         self.position_generation = 0
         self.midi_input_id = 0
+        self._playback_sustain_active = False
+        self._midi_input_sustain_active = False
         self._active_output_notes_by_source: dict[tuple[str, int], set[int]] = {}
         self._active_output_note_sources: dict[
             tuple[str, int],
@@ -1387,6 +1389,11 @@ class AppController:
                     )
                 )
             ),
+            on_sustain_change=lambda enabled, pid=playback_id: (
+                self._queue_worker_message(
+                    ("playback_sustain", pid, enabled)
+                )
+            ),
             enabled_channels=self.enabled_channels,
             enabled_sources=self.enabled_sources,
             auto_fit_note_range=self.state.auto_fit_note_range,
@@ -1515,6 +1522,13 @@ class AppController:
                         channel,
                         pressed,
                     )
+                )
+                if report_playback
+                else None
+            ),
+            on_sustain_change=(
+                lambda enabled, pid=playback_id: self._queue_worker_message(
+                    ("playback_sustain", pid, enabled)
                 )
                 if report_playback
                 else None
@@ -1759,6 +1773,11 @@ class AppController:
                         channel,
                         pressed,
                     )
+                )
+            ),
+            on_sustain_change=lambda enabled, iid=input_id: (
+                self._queue_worker_message(
+                    ("midi_sustain", iid, enabled)
                 )
             ),
             auto_fit_note_range=self.state.auto_fit_note_range,
@@ -2257,6 +2276,7 @@ class AppController:
                     "sound_output_remap",
                     "key_output_source",
                     "sound_output_source",
+                    "playback_sustain",
                     "key_complete",
                 }:
                     if int(message[1]) != self.playback_id:
@@ -2264,7 +2284,7 @@ class AppController:
                 if kind == "midi_output_note" and int(message[1]) != self.midi_input_id:
                     continue
                 if (
-                    kind == "midi_output_source"
+                    kind in {"midi_output_source", "midi_sustain"}
                     and int(message[1]) != self.midi_input_id
                 ):
                     continue
@@ -2324,6 +2344,22 @@ class AppController:
                     }:
                         self.stop_midi_input()
                     changed = True
+                elif kind == "playback_sustain":
+                    changed = (
+                        self._set_sustain_source_state(
+                            "playback",
+                            bool(message[2]),
+                        )
+                        or changed
+                    )
+                elif kind == "midi_sustain":
+                    changed = (
+                        self._set_sustain_source_state(
+                            "midi_input",
+                            bool(message[2]),
+                        )
+                        or changed
+                    )
                 elif kind == "position":
                     if int(message[2]) != self.position_generation:
                         continue
@@ -3208,6 +3244,7 @@ class AppController:
 
     def _next_playback_id(self) -> int:
         self.playback_id += 1
+        self._set_sustain_source_state("playback", False)
         return self.playback_id
 
     def _next_position_generation(self) -> int:
@@ -3226,7 +3263,28 @@ class AppController:
 
     def _next_midi_input_id(self) -> int:
         self.midi_input_id += 1
+        self._set_sustain_source_state("midi_input", False)
         return self.midi_input_id
+
+    def _set_sustain_source_state(
+        self,
+        source: str,
+        active: bool,
+    ) -> bool:
+        if source == "playback":
+            self._playback_sustain_active = bool(active)
+        elif source == "midi_input":
+            self._midi_input_sustain_active = bool(active)
+        else:
+            raise ValueError(f"Unknown sustain source: {source}")
+        next_active = (
+            self._playback_sustain_active
+            or self._midi_input_sustain_active
+        )
+        if self.state.sustain_active == next_active:
+            return False
+        self.state.sustain_active = next_active
+        return True
 
     def _rhythm_judging_is_enabled(self) -> bool:
         return bool(self.state.section_visibility.get("piano_roll", True))

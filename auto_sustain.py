@@ -14,10 +14,12 @@ CHORD_WINDOW_SECONDS = 0.035
 PEDAL_DEPRESSION_DELAY_SECONDS = 0.075
 PEDAL_RELEASE_LEAD_SECONDS = 0.025
 MIN_PEDALLED_NOTE_SECONDS = 0.09
-MIN_HARMONY_REPEDAL_SECONDS = 0.18
+MIN_HARMONY_REPEDAL_SECONDS = 0.12
 MAX_PEDAL_HOLD_SECONDS = 0.60
-FINAL_RELEASE_TAIL_SECONDS = 0.18
-MAX_RETAINED_NOTES = 6
+DENSE_PEDAL_HOLD_SECONDS = 0.28
+FINAL_RELEASE_TAIL_SECONDS = 0.5
+MAX_RETAINED_NOTES = 4
+DENSE_CHORD_NOTE_COUNT = 5
 PERCUSSION_CHANNEL = 9
 
 
@@ -188,13 +190,14 @@ class RealtimeAutoSustain:
                 not self._enabled
                 or channel in self._manual_channels
                 or not state.held
+                or len(state.held) >= DENSE_CHORD_NOTE_COUNT
                 or state.pedal_down
             ):
                 return
             state.pedal_down = True
             state.pedal_started_at = self._time_source()
             state.off_timer = threading.Timer(
-                MAX_PEDAL_HOLD_SECONDS,
+                _pedal_hold_seconds(len(state.held)),
                 self._release_after_limit,
                 args=(channel, generation),
             )
@@ -295,6 +298,8 @@ def _plan_source(source: tuple[int, int], notes: list[_PlannedNote]) -> list[Mid
             if note.release is not None
             and note.release - note.onset >= MIN_PEDALLED_NOTE_SECONDS
         ]
+        if len({note.note for note in eligible}) >= DENSE_CHORD_NOTE_COUNT:
+            eligible = []
         if pedal_down and pedal_expires_at <= start:
             transitions.append(_transition(source, pedal_expires_at, False))
             pedal_down = False
@@ -315,7 +320,9 @@ def _plan_source(source: tuple[int, int], notes: list[_PlannedNote]) -> list[Mid
             longest = max((note.release or note.onset) - note.onset for note in eligible)
             depression_delay = min(PEDAL_DEPRESSION_DELAY_SECONDS, longest * 0.45)
             pedal_started_at = start + depression_delay
-            pedal_expires_at = pedal_started_at + MAX_PEDAL_HOLD_SECONDS
+            pedal_expires_at = pedal_started_at + _pedal_hold_seconds(
+                len({note.note for note in eligible})
+            )
             transitions.append(_transition(source, pedal_started_at, True))
             pedal_down = True
         if pedal_down:
@@ -333,7 +340,7 @@ def _plan_source(source: tuple[int, int], notes: list[_PlannedNote]) -> list[Mid
         transitions.append(
             _transition(
                 source,
-                min(pedal_expires_at, last_release + FINAL_RELEASE_TAIL_SECONDS),
+                last_release + FINAL_RELEASE_TAIL_SECONDS,
                 False,
             )
         )
@@ -358,15 +365,18 @@ def _should_clear_pedal(
 ) -> bool:
     if not sustained_notes:
         return False
+    retained = sorted(set(sustained_notes))
+    incoming = sorted(set(incoming_notes))
     pedal_age = now - pedal_started_at
     if pedal_age >= MAX_PEDAL_HOLD_SECONDS:
         return True
-    if len(sustained_notes) + len(incoming_notes) > MAX_RETAINED_NOTES:
+    combined_notes = sorted(set(retained + incoming))
+    if len(combined_notes) > MAX_RETAINED_NOTES:
         return True
 
     conflicts = 0
-    for old in sustained_notes:
-        for new in incoming_notes:
+    for old in retained:
+        for new in incoming:
             if old == new:
                 continue
             interval = abs(new - old) % 12
@@ -381,20 +391,28 @@ def _should_clear_pedal(
         return True
 
     if pedal_age >= MIN_HARMONY_REPEDAL_SECONDS:
-        retained_pitch_classes = {note % 12 for note in sustained_notes}
-        incoming_pitch_classes = {note % 12 for note in incoming_notes}
+        retained_pitch_classes = {note % 12 for note in retained}
+        incoming_pitch_classes = {note % 12 for note in incoming}
         if retained_pitch_classes != incoming_pitch_classes:
             if len(retained_pitch_classes) > 1 or len(incoming_pitch_classes) > 1:
                 return True
-            old_pitch = sustained_notes[-1]
-            new_pitch = incoming_notes[0]
+            old_pitch = retained[-1]
+            new_pitch = incoming[0]
             pitch_class_distance = abs(new_pitch - old_pitch) % 12
             pitch_class_distance = min(pitch_class_distance, 12 - pitch_class_distance)
             if pitch_class_distance >= 3:
                 return True
 
-    combined = sustained_notes + incoming_notes
-    return bool(combined) and max(combined) - min(combined) > 36
+    low_pitch_classes = {note % 12 for note in combined_notes if note < 55}
+    if len(low_pitch_classes) >= 3:
+        return True
+    return bool(combined_notes) and max(combined_notes) - min(combined_notes) > 36
+
+
+def _pedal_hold_seconds(note_count: int) -> float:
+    if int(note_count) >= MAX_RETAINED_NOTES:
+        return DENSE_PEDAL_HOLD_SECONDS
+    return MAX_PEDAL_HOLD_SECONDS
 
 
 def _transition(source: tuple[int, int], at: float, enabled: bool) -> MidiEvent:

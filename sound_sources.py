@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 
-SOUND_SOURCE_IDS = ("piano", "electric_piano", "organ", "synth")
+STARRA_GUITAR_SOURCE = "star_resonance_guitar"
+
+SOUND_SOURCE_IDS = (
+    "piano",
+    STARRA_GUITAR_SOURCE,
+)
 DEFAULT_SOUND_SOURCE = "piano"
 
 

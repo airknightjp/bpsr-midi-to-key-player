@@ -49,7 +49,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Display used track/channel combinations as circular buttons in `11` format.
 - Toggle each track/channel combination, with immediate changes during playback.
 - Convert sustain pedal CC64 to the Space key.
-- Select Piano, Electric Piano, Organ, or Synth as the software sound source.
+- Select Piano or Starra Guitar as the software sound source.
 - Run the GUI, software synth/PCM output, and MIDI parsing in separate processes to distribute processing load.
 - Select the Qt audio queue and internal Buffer from the menu bar. Defaults are Qt 1024 and Buffer 512.
 - Show final output notes on a full A0-C8 keyboard and falling-note rhythm display.
@@ -69,7 +69,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.9.1 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.9.2 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -103,7 +103,8 @@ The `_internal` folder contains files required by the application. Do not move t
 
 MIDI sound playback and realtime preview sound use an in-app software synthesizer without connecting to WinMM MIDI output.
 
-- Select from Piano, Electric Piano, Organ, and Synth.
+- Select from Piano and Starra Guitar.
+- Starra Guitar uses a dedicated resynthesized sound bank.
 - Play up to 64 simultaneous voices.
 - Prefer the output device's recommended audio format, with fallback to Float32, Int16, or Int32 when needed.
 - Select the Qt audio queue and internal Buffer from menu-bar drop-downs to suit the current environment.
@@ -220,7 +221,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.9.1
+v1.9.2
 
 ## Copyright
 

@@ -95,7 +95,7 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.9.2"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
@@ -1681,6 +1681,13 @@ class MidiMainWindow(QMainWindow):
                     )
             piano_roll_running = self.controller.piano_roll_playback_running()
             self.position_slider.set_playback_running(piano_roll_running)
+            if self._signature_changed(
+                "sustain_indicator",
+                state.sustain_active,
+            ):
+                self.position_slider.set_sustain_active(
+                    state.sustain_active
+                )
             if state.section_visibility["piano_roll"]:
                 piano_roll_sequence_signature = (
                     id(self.controller.events),
@@ -2305,6 +2312,10 @@ class MidiMainWindow(QMainWindow):
             palette.panel_alt,
             palette.accent,
             palette.accent_hover,
+        )
+        self.position_slider.set_sustain_indicator_style(
+            palette.accent,
+            max(5, round(7 * percent / 100)),
         )
         if theme_name == "sky_blue":
             whale_frames = tuple(

@@ -76,6 +76,10 @@ try {
         "assets\whale_slider_frame_2.png;assets",
         "--add-data",
         "assets\check_white.svg;assets",
+        "--add-data",
+        "assets\starra_guitar_bank.npy;assets",
+        "--add-data",
+        "assets\starra_guitar_bank.json;assets",
         "--name",
         "BPSR_MIDI_to_KEY_Player",
         "main.py"

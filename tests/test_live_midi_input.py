@@ -148,8 +148,10 @@ class LiveMidiInputTests(unittest.TestCase):
 
     def test_special_key_bindings_are_used_for_sustain_and_octave_switching(self) -> None:
         output = FakeOutput()
+        sustain_states: list[bool] = []
         bridge = self._running_bridge(
             output,
+            on_sustain_change=sustain_states.append,
             sustain_key="p",
             octave_down_key="[",
             octave_up_key="]",
@@ -162,6 +164,19 @@ class LiveMidiInputTests(unittest.TestCase):
         self.assertIn(("press", "p"), output.events)
         self.assertIn(("release", "p"), output.events)
         self.assertIn(("tap", "]"), output.events)
+        self.assertEqual(sustain_states, [True, False])
+
+    def test_sustain_indicator_turns_off_when_realtime_input_is_reset(self) -> None:
+        sustain_states: list[bool] = []
+        bridge = self._running_bridge(
+            FakeOutput(),
+            on_sustain_change=sustain_states.append,
+        )
+        bridge._sustain(0, 127)
+
+        bridge.set_note_shift(transpose_semitones=1, octave_shift=0)
+
+        self.assertEqual(sustain_states, [True, False])
 
     def test_transpose_and_octave_shift_are_applied_to_realtime_input(self) -> None:
         output = FakeOutput()

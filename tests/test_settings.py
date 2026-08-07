@@ -88,7 +88,7 @@ class SettingsTests(unittest.TestCase):
                 AppSettings(
                     countdown_seconds=2,
                     midi_sound_volume=70,
-                    sound_source="synth",
+                    sound_source="star_resonance_guitar",
                     arrangement_quality="beta",
                     use_piano_arrangement=False,
                     play_sound=False,
@@ -163,7 +163,7 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn("minimum_stable_qt_frames", saved_payload)
         self.assertNotIn("qt_audio_environment", saved_payload)
         self.assertEqual(loaded.color_theme, "orange")
-        self.assertEqual(loaded.sound_source, "synth")
+        self.assertEqual(loaded.sound_source, "star_resonance_guitar")
         self.assertEqual(loaded.arrangement_quality, "beta")
         self.assertFalse(loaded.use_piano_arrangement)
         self.assertTrue(loaded.always_on_top)
@@ -317,6 +317,25 @@ class SettingsTests(unittest.TestCase):
             loaded = load_settings()
 
         self.assertEqual(loaded.sound_source, "piano")
+
+    def test_unsupported_sound_source_uses_piano(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            save_raw_settings(settings_dir, {"sound_source": "unsupported"})
+
+            loaded = load_settings()
+
+        self.assertEqual(loaded.sound_source, "piano")
+
+    def test_starra_guitar_sound_source_is_persistent(self) -> None:
+        with isolated_settings_directory() as settings_dir:
+            save_raw_settings(
+                settings_dir,
+                {"sound_source": "star_resonance_guitar"},
+            )
+
+            loaded = load_settings()
+
+        self.assertEqual(loaded.sound_source, "star_resonance_guitar")
 
     def test_manual_audio_buffer_setting_is_preserved(self) -> None:
         with isolated_settings_directory() as settings_dir:

@@ -85,7 +85,7 @@ def main() -> int:
         tuple[int, int, int, int, int, str]
     ] = []
     client = SoftwareSynthClient(
-        "organ",
+        "piano",
         on_runtime_changed=lambda qt, buffer, response, chunk, fallback, reason: runtime_changes.append(
             (qt, buffer, response, chunk, fallback, reason)
         ),

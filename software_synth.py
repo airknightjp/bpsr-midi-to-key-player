@@ -37,7 +37,12 @@ from audio_buffer import (
     normalize_audio_response_frames,
     normalize_qt_audio_frames,
 )
-from sound_sources import DEFAULT_SOUND_SOURCE, normalize_sound_source
+from sound_sources import (
+    DEFAULT_SOUND_SOURCE,
+    STARRA_GUITAR_SOURCE,
+    normalize_sound_source,
+)
+from starra_guitar_bank import get_starra_guitar_bank
 from process_lifecycle import (
     register_child_process,
     start_parent_process_watchdog,
@@ -95,9 +100,7 @@ TIMBRES = {
         0.48,
         held_decay=3.6,
     ),
-    "electric_piano": Timbre((1.0, 0.18, 0.30, 0.08, 0.05), 0.008, 1.05, 0.24, 0.62),
-    "organ": Timbre((1.0, 0.48, 0.26, 0.14, 0.08), 0.018, 0.10, 0.82, 0.16),
-    "synth": Timbre((1.0, 0.50, 0.33, 0.25, 0.20, 0.16, 0.14), 0.010, 0.22, 0.62, 0.34),
+    STARRA_GUITAR_SOURCE: Timbre((1.0,), 0.001, 0.001, 1.0, 0.13),
 }
 
 
@@ -137,6 +140,10 @@ class Voice:
     release_step: float = 0.0
     key_released: bool = False
     started_order: int = 0
+    sample_position: float = 0.0
+    sample_step: float = 1.0
+    sample_index: int = -1
+    sample_length: int = 0
 
 
 @dataclass
@@ -279,6 +286,8 @@ class SoftwareSynthStream:
         self._index_scratch = np.empty(render_shape, dtype=np.intp)
         self._envelope_scratch = np.empty(render_shape, dtype=np.float32)
         self._sample_scratch = np.empty(render_shape, dtype=np.float32)
+        self._sample_interp_scratch = np.empty(render_shape, dtype=np.float32)
+        self._sample_int16_scratch = np.empty(render_shape, dtype=np.int16)
         self._phase_values = np.empty(render_voice_capacity, dtype=np.float32)
         self._phase_steps = np.empty(render_voice_capacity, dtype=np.float32)
         self._amplitudes = np.empty(render_voice_capacity, dtype=np.float32)
@@ -986,6 +995,14 @@ class SoftwareSynthStream:
                 release_seconds=RETRIGGER_RELEASE_SECONDS,
             )
             self._fading_voices.append(previous)
+        sample_index = -1
+        sample_length = 0
+        sample_step = 1.0
+        if source == STARRA_GUITAR_SOURCE:
+            sample = get_starra_guitar_bank().select(note, self.sample_rate)
+            sample_index = sample.bank_index
+            sample_length = sample.sample_length
+            sample_step = sample.playback_step
         self._voices[key] = Voice(
             client_id=client_id,
             channel=channel,
@@ -995,6 +1012,9 @@ class SoftwareSynthStream:
             phase_step=phase_step,
             amplitude=amplitude,
             started_order=self._voice_order,
+            sample_step=sample_step,
+            sample_index=sample_index,
+            sample_length=sample_length,
         )
         self._trim_voices()
         self._trim_fading_voices()
@@ -1219,6 +1239,7 @@ class SoftwareSynthStream:
 
         samples = self._sample_scratch[:voice_count, :frame_count]
         np.take(WAVETABLE_FLAT, sample_indices, out=samples)
+        self._render_sample_bank_voices(samples, voice_count, frame_count)
         samples *= envelope
         samples *= self._amplitudes[:voice_count, np.newaxis]
         mix = self._mix_scratch[:frame_count]
@@ -1233,6 +1254,71 @@ class SoftwareSynthStream:
                 + self._phase_steps[index] * self._rendered_frames[index]
             ) % WAVETABLE_SIZE
         return mix
+
+    def _render_sample_bank_voices(
+        self,
+        samples: np.ndarray,
+        voice_count: int,
+        frame_count: int,
+    ) -> None:
+        bank = None
+        for index in range(voice_count):
+            voice = self._render_voices[index]
+            if voice is None or voice.source != STARRA_GUITAR_SOURCE:
+                continue
+            row = samples[index]
+            if voice.stage == "finished" or voice.sample_position >= voice.sample_length:
+                row.fill(0.0)
+                voice.envelope = 0.0
+                voice.stage = "finished"
+                continue
+            if bank is None:
+                bank = get_starra_guitar_bank()
+            source = bank.samples[voice.sample_index]
+            available_frames = min(
+                frame_count,
+                max(
+                    0,
+                    math.ceil(
+                        (voice.sample_length - voice.sample_position)
+                        / voice.sample_step
+                    ),
+                ),
+            )
+            if available_frames <= 0:
+                row.fill(0.0)
+                voice.envelope = 0.0
+                voice.stage = "finished"
+                continue
+
+            positions = self._phase_scratch[index, :available_frames]
+            np.multiply(
+                self._frame_offsets[:available_frames],
+                voice.sample_step,
+                out=positions,
+            )
+            positions += voice.sample_position
+            lower_indices = self._index_scratch[index, :available_frames]
+            np.copyto(lower_indices, positions, casting="unsafe")
+            fractions = positions
+            fractions -= lower_indices
+            integer_samples = self._sample_int16_scratch[index, :available_frames]
+            np.take(source, lower_indices, out=integer_samples)
+            np.copyto(row[:available_frames], integer_samples, casting="unsafe")
+            upper = self._sample_interp_scratch[index, :available_frames]
+            lower_indices += 1
+            np.minimum(lower_indices, voice.sample_length - 1, out=lower_indices)
+            np.take(source, lower_indices, out=integer_samples)
+            np.copyto(upper, integer_samples, casting="unsafe")
+            upper -= row[:available_frames]
+            upper *= fractions
+            row[:available_frames] += upper
+            row[:available_frames] /= 32_768.0
+            if available_frames < frame_count:
+                row[available_frames:].fill(0.0)
+                voice.envelope = 0.0
+                voice.stage = "finished"
+            voice.sample_position += available_frames * voice.sample_step
 
     def _collect_render_voices(self) -> int:
         voice_index = 0
@@ -1281,6 +1367,14 @@ class SoftwareSynthStream:
         timbre: Timbre,
     ) -> int:
         frame_count = len(row)
+        if (
+            voice.source == STARRA_GUITAR_SOURCE
+            and voice.stage not in ("release", "finished")
+        ):
+            row.fill(1.0)
+            voice.envelope = 1.0
+            voice.stage = "sample"
+            return frame_count
         cursor = 0
         envelope = voice.envelope
         stage = voice.stage

@@ -665,7 +665,7 @@ class AppControllerTests(unittest.TestCase):
         controller = self.make_controller(
             language="ja",
             midi_sound_volume=64,
-            sound_source="organ",
+            sound_source="star_resonance_guitar",
             playback_speed_percent=137,
             transpose_semitones=4,
             octave_shift=-1,
@@ -675,7 +675,7 @@ class AppControllerTests(unittest.TestCase):
 
         self.assertEqual(controller.state.language, "ja")
         self.assertEqual(controller.state.midi_sound_volume, 64)
-        self.assertEqual(controller.state.sound_source, "organ")
+        self.assertEqual(controller.state.sound_source, "star_resonance_guitar")
         self.assertEqual(controller.state.audio_qt_frames, 1_024)
         self.assertEqual(controller.state.audio_buffer_frames, 512)
         self.assertEqual(controller.state.playback_speed_percent, 137)
@@ -1663,12 +1663,15 @@ class AppControllerTests(unittest.TestCase):
         controller.sound_player = sound_player
         controller.realtime_sound_output = realtime_output
 
-        controller.set_option("sound_source", "electric_piano")
+        controller.set_option("sound_source", "star_resonance_guitar")
 
-        self.assertEqual(controller.state.sound_source, "electric_piano")
-        self.assertEqual(controller.current_settings().sound_source, "electric_piano")
-        self.assertEqual(sound_player.sound_source, "electric_piano")
-        self.assertEqual(realtime_output.sound_source, "electric_piano")
+        self.assertEqual(controller.state.sound_source, "star_resonance_guitar")
+        self.assertEqual(
+            controller.current_settings().sound_source,
+            "star_resonance_guitar",
+        )
+        self.assertEqual(sound_player.sound_source, "star_resonance_guitar")
+        self.assertEqual(realtime_output.sound_source, "star_resonance_guitar")
 
     def test_audio_runtime_change_updates_display_state(self) -> None:
         controller = self.make_controller()
@@ -2071,7 +2074,7 @@ class AppControllerTests(unittest.TestCase):
             humanize_timing=True,
             chord_optimization=True,
             repeat_prevention=True,
-            sound_source="organ",
+            sound_source="star_resonance_guitar",
         )
         controller.events = [MidiEvent(0.0, "note_on", 0, 60, 80, track=0)]
         controller._set_enabled_sources(((0, 0),))
@@ -2097,7 +2100,7 @@ class AppControllerTests(unittest.TestCase):
         controller = self.make_controller(
             play_sound=True,
             midi_sound_volume=67,
-            sound_source="organ",
+            sound_source="star_resonance_guitar",
         )
         controller.events = [
             MidiEvent(0.0, "note_on", 0, 60, 80, track=0)
@@ -2129,7 +2132,7 @@ class AppControllerTests(unittest.TestCase):
         )
         self.assertEqual(
             sound_player_class.call_args.kwargs["sound_source"],
-            "organ",
+            "star_resonance_guitar",
         )
         sound_player.play.assert_called_once_with(
             controller.events,
@@ -2438,7 +2441,7 @@ class AppControllerTests(unittest.TestCase):
         self.assertIsNone(controller.midi_input_bridge)
 
     def test_realtime_input_does_not_block_midi_sound_playback(self) -> None:
-        controller = self.make_controller(sound_source="synth")
+        controller = self.make_controller(sound_source="star_resonance_guitar")
         controller.state.midi_input_running = True
         realtime_output = FakeRealtimeSoundOutput()
         controller.realtime_sound_output = realtime_output
@@ -2459,7 +2462,10 @@ class AppControllerTests(unittest.TestCase):
         self.assertTrue(controller.state.midi_input_running)
         self.assertIsNotNone(FakePlayer.instance)
         self.assertEqual(FakePlayer.instance.play_args[0], controller.events)
-        self.assertEqual(FakePlayer.instance.kwargs["sound_source"], "synth")
+        self.assertEqual(
+            FakePlayer.instance.kwargs["sound_source"],
+            "star_resonance_guitar",
+        )
         self.assertIn("on_audio_runtime_changed", FakePlayer.instance.kwargs)
         self.assertEqual(realtime_output.enabled_calls, [])
 
@@ -2534,6 +2540,34 @@ class AppControllerTests(unittest.TestCase):
         controller.process_pending_events()
 
         self.assertEqual(controller.state.status, "waiting..")
+
+    def test_sustain_indicator_combines_playback_and_realtime_sources(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 5
+        controller.midi_input_id = 8
+        controller.worker_queue.put(("playback_sustain", 5, True))
+        controller.worker_queue.put(("midi_sustain", 8, True))
+        controller.worker_queue.put(("playback_sustain", 5, False))
+
+        controller.process_pending_events()
+
+        self.assertTrue(controller.state.sustain_active)
+
+        controller.worker_queue.put(("midi_sustain", 8, False))
+        controller.process_pending_events()
+
+        self.assertFalse(controller.state.sustain_active)
+
+    def test_sustain_indicator_ignores_stale_source_messages(self) -> None:
+        controller = self.make_controller()
+        controller.playback_id = 5
+        controller.midi_input_id = 8
+        controller.worker_queue.put(("playback_sustain", 4, True))
+        controller.worker_queue.put(("midi_sustain", 7, True))
+
+        controller.process_pending_events()
+
+        self.assertFalse(controller.state.sustain_active)
 
     def test_event_dispatch_tracks_final_output_notes_and_ignores_stale_generations(self) -> None:
         controller = self.make_controller()

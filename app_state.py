@@ -105,6 +105,7 @@ class AppState:
     chord_optimization: bool = False
     chord_strum: bool = False
     auto_sustain: bool = False
+    sustain_active: bool = False
     sustain_key: str = "space"
     octave_down_key: str = "<"
     octave_up_key: str = ">"
