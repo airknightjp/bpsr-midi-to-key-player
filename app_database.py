@@ -13,7 +13,7 @@ from midi_parser import MidiSummary, MidiTrackSummary
 
 
 DATABASE_FILE_NAME = "bpsr_midi_to_key_player.db"
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 3
 SQLITE_PARAMETER_BATCH_SIZE = 500
 
 _DATABASE_LOCK = threading.RLock()
@@ -31,6 +31,23 @@ class MidiMetadata:
     note_range: tuple[int, int] | None
     midi_format: int
     file_hash: str
+
+
+@dataclass(frozen=True)
+class MidiIndividualSettings:
+    play_sound: bool
+    auto_fit_note_range: bool
+    repeat_prevention: bool
+    auto_sustain: bool
+    humanize_timing: bool
+    chord_strum: bool
+    chord_optimization: bool
+    use_piano_arrangement: bool
+    playback_speed_percent: int
+    transpose_semitones: int
+    octave_shift: int
+    fit_note_range: tuple[int, int] | None = None
+    track_channels: tuple[tuple[int, int, bool], ...] = ()
 
 
 class ApplicationDatabase:
@@ -146,6 +163,152 @@ class ApplicationDatabase:
                 ),
             )
             connection.commit()
+
+    def load_midi_individual_settings(
+        self,
+        paths: Iterable[Path],
+    ) -> dict[Path, MidiIndividualSettings]:
+        normalized_paths = tuple(dict.fromkeys(Path(path) for path in paths))
+        if not normalized_paths:
+            return {}
+        key_to_path = {
+            self._path_key(path): path
+            for path in normalized_paths
+        }
+        result: dict[Path, MidiIndividualSettings] = {}
+        track_channels_by_key: dict[str, list[tuple[int, int, bool]]] = {}
+        with _DATABASE_LOCK, self._connect() as connection:
+            for key_batch in self._batches(tuple(key_to_path)):
+                placeholders = ",".join("?" for _key in key_batch)
+                rows = connection.execute(
+                    "SELECT path, play_sound, auto_fit_note_range, "
+                    "repeat_prevention, auto_sustain, humanize_timing, "
+                    "chord_strum, chord_optimization, use_piano_arrangement, "
+                    "playback_speed_percent, transpose_semitones, octave_shift, "
+                    "fit_note_min, fit_note_max "
+                    "FROM midi_individual_settings "
+                    f"WHERE path IN ({placeholders})",
+                    key_batch,
+                ).fetchall()
+                for path_key, track_index, channel, enabled in connection.execute(
+                    "SELECT path, track_index, channel, enabled "
+                    "FROM midi_individual_track_channels "
+                    f"WHERE path IN ({placeholders}) "
+                    "ORDER BY path, track_index, channel",
+                    key_batch,
+                ):
+                    track_channels_by_key.setdefault(str(path_key), []).append(
+                        (int(track_index), int(channel), bool(enabled))
+                    )
+                for row in rows:
+                    path = key_to_path.get(str(row[0]))
+                    if path is None:
+                        continue
+                    result[path] = MidiIndividualSettings(
+                        play_sound=bool(row[1]),
+                        auto_fit_note_range=bool(row[2]),
+                        repeat_prevention=bool(row[3]),
+                        auto_sustain=bool(row[4]),
+                        humanize_timing=bool(row[5]),
+                        chord_strum=bool(row[6]),
+                        chord_optimization=bool(row[7]),
+                        use_piano_arrangement=bool(row[8]),
+                        playback_speed_percent=int(row[9]),
+                        transpose_semitones=int(row[10]),
+                        octave_shift=int(row[11]),
+                        fit_note_range=(
+                            (int(row[12]), int(row[13]))
+                            if row[12] is not None and row[13] is not None
+                            else None
+                        ),
+                        track_channels=tuple(
+                            track_channels_by_key.get(str(row[0]), ())
+                        ),
+                    )
+        return result
+
+    def save_midi_individual_settings(
+        self,
+        path: Path,
+        settings: MidiIndividualSettings,
+    ) -> None:
+        with _DATABASE_LOCK, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO midi_individual_settings("
+                "path, play_sound, auto_fit_note_range, repeat_prevention, "
+                "auto_sustain, humanize_timing, chord_strum, "
+                "chord_optimization, use_piano_arrangement, "
+                "playback_speed_percent, transpose_semitones, octave_shift, "
+                "fit_note_min, fit_note_max"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET "
+                "play_sound=excluded.play_sound, "
+                "auto_fit_note_range=excluded.auto_fit_note_range, "
+                "repeat_prevention=excluded.repeat_prevention, "
+                "auto_sustain=excluded.auto_sustain, "
+                "humanize_timing=excluded.humanize_timing, "
+                "chord_strum=excluded.chord_strum, "
+                "chord_optimization=excluded.chord_optimization, "
+                "use_piano_arrangement=excluded.use_piano_arrangement, "
+                "playback_speed_percent=excluded.playback_speed_percent, "
+                "transpose_semitones=excluded.transpose_semitones, "
+                "octave_shift=excluded.octave_shift, "
+                "fit_note_min=excluded.fit_note_min, "
+                "fit_note_max=excluded.fit_note_max",
+                (
+                    self._path_key(path),
+                    int(settings.play_sound),
+                    int(settings.auto_fit_note_range),
+                    int(settings.repeat_prevention),
+                    int(settings.auto_sustain),
+                    int(settings.humanize_timing),
+                    int(settings.chord_strum),
+                    int(settings.chord_optimization),
+                    int(settings.use_piano_arrangement),
+                    int(settings.playback_speed_percent),
+                    int(settings.transpose_semitones),
+                    int(settings.octave_shift),
+                    (
+                        int(settings.fit_note_range[0])
+                        if settings.fit_note_range is not None
+                        else None
+                    ),
+                    (
+                        int(settings.fit_note_range[1])
+                        if settings.fit_note_range is not None
+                        else None
+                    ),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM midi_individual_track_channels WHERE path = ?",
+                (self._path_key(path),),
+            )
+            connection.executemany(
+                "INSERT INTO midi_individual_track_channels("
+                "path, track_index, channel, enabled"
+                ") VALUES (?, ?, ?, ?)",
+                (
+                    (
+                        self._path_key(path),
+                        int(track),
+                        int(channel),
+                        int(enabled),
+                    )
+                    for track, channel, enabled in settings.track_channels
+                ),
+            )
+            connection.commit()
+
+    def delete_midi_individual_settings(self, path: Path) -> bool:
+        with _DATABASE_LOCK, self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM midi_individual_settings WHERE path = ?",
+                (self._path_key(path),),
+            )
+            connection.commit()
+        return cursor.rowcount > 0
 
     def load_valid_midi_metadata(
         self,
@@ -398,6 +561,31 @@ class ApplicationDatabase:
                         REFERENCES midi_tracks(path, track_index)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS midi_individual_settings (
+                    path TEXT PRIMARY KEY REFERENCES midi_metadata(path)
+                        ON DELETE CASCADE,
+                    play_sound INTEGER NOT NULL,
+                    auto_fit_note_range INTEGER NOT NULL,
+                    repeat_prevention INTEGER NOT NULL,
+                    auto_sustain INTEGER NOT NULL,
+                    humanize_timing INTEGER NOT NULL,
+                    chord_strum INTEGER NOT NULL,
+                    chord_optimization INTEGER NOT NULL,
+                    use_piano_arrangement INTEGER NOT NULL,
+                    playback_speed_percent INTEGER NOT NULL,
+                    transpose_semitones INTEGER NOT NULL,
+                    octave_shift INTEGER NOT NULL,
+                    fit_note_min INTEGER,
+                    fit_note_max INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS midi_individual_track_channels (
+                    path TEXT NOT NULL REFERENCES midi_individual_settings(path)
+                        ON DELETE CASCADE,
+                    track_index INTEGER NOT NULL,
+                    channel INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    PRIMARY KEY(path, track_index, channel)
+                );
                 CREATE TABLE IF NOT EXISTS playlists (
                     playlist_id TEXT PRIMARY KEY,
                     position INTEGER NOT NULL UNIQUE,
@@ -414,6 +602,22 @@ class ApplicationDatabase:
                 );
                 """
             )
+            individual_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(midi_individual_settings)"
+                )
+            }
+            if "fit_note_min" not in individual_columns:
+                connection.execute(
+                    "ALTER TABLE midi_individual_settings "
+                    "ADD COLUMN fit_note_min INTEGER"
+                )
+            if "fit_note_max" not in individual_columns:
+                connection.execute(
+                    "ALTER TABLE midi_individual_settings "
+                    "ADD COLUMN fit_note_max INTEGER"
+                )
             connection.execute(
                 f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}"
             )

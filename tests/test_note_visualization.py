@@ -98,6 +98,28 @@ class NoteVisualizationTests(unittest.TestCase):
 
         self.assertEqual([note.note for note in notes], [50])
 
+    def test_applies_selected_fit_range_to_visual_notes(self) -> None:
+        events = [
+            MidiEvent(0.0, "note_on", channel=0, note=72, velocity=90, track=0),
+            MidiEvent(1.0, "note_off", channel=0, note=72, velocity=0, track=0),
+        ]
+
+        notes = build_piano_roll_notes(
+            events,
+            enabled_sources={(0, 0)},
+            auto_fit_note_range=True,
+            fit_note_range=(60, 71),
+        )
+        note_range = build_output_note_range(
+            events,
+            enabled_sources={(0, 0)},
+            auto_fit_note_range=True,
+            fit_note_range=(60, 71),
+        )
+
+        self.assertEqual([note.note for note in notes], [60])
+        self.assertEqual(note_range, (60, 60))
+
     def test_output_range_uses_final_transformed_notes(self) -> None:
         events = [
             MidiEvent(0.0, "note_on", channel=0, note=24, velocity=90, track=0),

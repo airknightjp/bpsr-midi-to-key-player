@@ -16,7 +16,11 @@ from audio_buffer import (
     normalize_audio_response_frames,
     normalize_qt_audio_frames,
 )
-from app_database import ApplicationDatabase, MidiMetadata
+from app_database import (
+    ApplicationDatabase,
+    MidiIndividualSettings,
+    MidiMetadata,
+)
 from app_state import AppState, MidiListRow, TrackChannelItem
 from chord_optimization import ChordOptimizationPlan
 from config import (
@@ -43,6 +47,7 @@ from config import (
     normalized_key_bindings,
     normalize_special_binding,
     normalize_input_conversion_mode,
+    normalize_fit_note_range,
     normalize_midi_column_widths,
     normalize_panel_order,
     normalize_section_visibility,
@@ -89,6 +94,20 @@ OUTPUT_NOTE_MIN_VISIBLE_SECONDS = 0.075
 RHYTHM_HIT_EVENT_HISTORY_LIMIT = 128
 METADATA_SCAN_BATCH_SIZE = 10
 UI_SCALE_PERCENT_OPTIONS = (100, 110, 125, 150, 175, 200)
+MIDI_INDIVIDUAL_SETTING_NAMES = (
+    "play_sound",
+    "auto_fit_note_range",
+    "fit_note_range",
+    "repeat_prevention",
+    "auto_sustain",
+    "humanize_timing",
+    "chord_strum",
+    "chord_optimization",
+    "use_piano_arrangement",
+    "playback_speed_percent",
+    "transpose_semitones",
+    "octave_shift",
+)
 
 
 MidiSortKey = tuple[tuple[str, ...], str, str]
@@ -102,6 +121,7 @@ class StartupFolderScan:
     sort_keys: dict[Path, MidiSortKey]
     rows: tuple[MidiListRow, ...]
     cached_paths: frozenset[Path]
+    individual_settings: dict[Path, MidiIndividualSettings]
 
 
 class ControllerView(Protocol):
@@ -161,6 +181,7 @@ class AppController:
             countdown_sound=self.settings.countdown_sound,
             game_countdown_sound=self.settings.game_countdown_sound,
             auto_fit_note_range=self.settings.auto_fit_note_range,
+            fit_note_range=self.settings.fit_note_range,
             transpose_semitones=self.settings.transpose_semitones,
             octave_shift=self.settings.octave_shift,
             humanize_timing=self.settings.humanize_timing,
@@ -220,6 +241,10 @@ class AppController:
             playlists=playlists,
             selected_playlist_index=0 if playlists else -1,
         )
+        self._normal_midi_setting_values = self._current_midi_setting_values()
+        self._active_individual_settings_path: Path | None = None
+        self._applying_individual_settings = False
+        self._midi_individual_settings: dict[Path, MidiIndividualSettings] = {}
         self.view: ControllerView = NullView()
         self.midi_parser_process = MidiParserProcess()
         self.piano_arrangement_process = PianoArrangementProcess()
@@ -457,6 +482,7 @@ class AppController:
         files = tuple(sorted(discovered, key=sort_keys.__getitem__))
         self._prune_missing_midi_metadata(folder, files)
         cached_metadata = self._load_valid_midi_metadata(file_stats)
+        individual_settings = self._load_midi_individual_settings(files)
         rows = tuple(
             MidiListRow(
                 path=path,
@@ -467,6 +493,7 @@ class AppController:
                     if path in cached_metadata
                     else "--:--"
                 ),
+                has_individual_settings=path in individual_settings,
             )
             for path in files
         )
@@ -477,6 +504,7 @@ class AppController:
             sort_keys=sort_keys,
             rows=rows,
             cached_paths=frozenset(cached_metadata),
+            individual_settings=individual_settings,
         )
 
     def _apply_startup_folder_scan(self, scan: StartupFolderScan) -> None:
@@ -485,6 +513,7 @@ class AppController:
         self._midi_file_stats = scan.file_stats
         self._midi_sort_keys = scan.sort_keys
         self._midi_metadata_complete = set(scan.cached_paths)
+        self._midi_individual_settings = dict(scan.individual_settings)
         self.state.midi_rows = list(scan.rows)
         self.source_events = []
         self.events = []
@@ -576,6 +605,7 @@ class AppController:
 
         self._prune_missing_midi_metadata(folder, files)
         cached_metadata = self._load_valid_midi_metadata(next_stats)
+        individual_settings = self._load_midi_individual_settings(files)
         if not cache_matches:
             self._midi_metadata_complete.clear()
         else:
@@ -587,7 +617,12 @@ class AppController:
         rows = [
             (
                 previous_rows[path]
-                if path in previous_rows and path not in changed_paths
+                if (
+                    path in previous_rows
+                    and path not in changed_paths
+                    and previous_rows[path].has_individual_settings
+                    == (path in individual_settings)
+                )
                 else MidiListRow(
                     path=path,
                     name=path.name,
@@ -597,6 +632,7 @@ class AppController:
                         if path in cached_metadata
                         else "--:--"
                     ),
+                    has_individual_settings=path in individual_settings,
                 )
             )
             for path in files
@@ -613,6 +649,7 @@ class AppController:
         self._midi_cache_root = folder
         self._midi_file_stats = next_stats
         self._midi_sort_keys = next_sort_keys
+        self._midi_individual_settings = individual_settings
         if rows_changed:
             self.state.midi_rows = rows
         if save_folder:
@@ -639,6 +676,7 @@ class AppController:
                 self.state.track_channels = []
                 self.state.status = self.text("waiting")
                 self._set_enabled_sources(())
+                self._apply_midi_individual_settings(None)
             self._notify()
             if show_empty_message:
                 self._message("info", "no_midi_title", self.text("no_midi_files"))
@@ -715,6 +753,7 @@ class AppController:
                 self._notify()
             return
         self.state.selected_midi_index = index
+        self._apply_midi_individual_settings(selected)
         self._update_row_metadata(selected, self.summary)
         if switch_sound and self.sound_player:
             self._next_position_generation()
@@ -1351,6 +1390,7 @@ class AppController:
             enabled_channels=self.enabled_channels,
             enabled_sources=self.enabled_sources,
             auto_fit_note_range=self.state.auto_fit_note_range,
+            fit_note_range=self.state.fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
@@ -1501,6 +1541,7 @@ class AppController:
                 self.state.audio_fallback_interval_ms
             ),
             auto_fit_note_range=self.state.auto_fit_note_range,
+            fit_note_range=self.state.fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             humanize_timing=self.state.humanize_timing,
@@ -1694,6 +1735,8 @@ class AppController:
             ),
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
+            auto_fit_note_range=self.state.auto_fit_note_range,
+            fit_note_range=self.state.fit_note_range,
             auto_sustain=self.state.auto_sustain,
             repeat_prevention=self.state.repeat_prevention,
         )
@@ -1719,6 +1762,7 @@ class AppController:
                 )
             ),
             auto_fit_note_range=self.state.auto_fit_note_range,
+            fit_note_range=self.state.fit_note_range,
             transpose_semitones=self.state.transpose_semitones,
             octave_shift=self.state.octave_shift,
             auto_sustain=self.state.auto_sustain,
@@ -1861,6 +1905,8 @@ class AppController:
             )
         elif name == "octave_shift":
             self.state.octave_shift = self._clamp_int(value, MIN_OCTAVE_SHIFT, MAX_OCTAVE_SHIFT, 0)
+        elif name == "fit_note_range":
+            self.state.fit_note_range = normalize_fit_note_range(value)
         elif name == "window_opacity":
             self.state.window_opacity = self._clamp_int(value, 30, 100, 100)
         elif name == "ui_scale_percent":
@@ -1904,6 +1950,17 @@ class AppController:
         else:
             raise ValueError(f"Unsupported option: {name}")
         self._apply_live_option(name)
+        if self._applying_individual_settings:
+            return
+        if name in MIDI_INDIVIDUAL_SETTING_NAMES:
+            if self._active_individual_settings_path is None:
+                self._normal_midi_setting_values[name] = getattr(
+                    self.state,
+                    name,
+                )
+            else:
+                self._notify()
+                return
         self.request_save()
         self._notify()
 
@@ -2428,12 +2485,137 @@ class AppController:
     def request_save(self) -> None:
         self._settings_dirty = True
 
+    def _current_midi_setting_values(self) -> dict[str, object]:
+        return {
+            name: getattr(self.state, name)
+            for name in MIDI_INDIVIDUAL_SETTING_NAMES
+        }
+
+    @staticmethod
+    def _individual_setting_values(
+        settings: MidiIndividualSettings,
+    ) -> dict[str, object]:
+        return {
+            name: getattr(settings, name)
+            for name in MIDI_INDIVIDUAL_SETTING_NAMES
+        }
+
+    def _apply_midi_individual_settings(self, path: Path | None) -> None:
+        settings = self._midi_individual_settings.get(path) if path else None
+        values = (
+            self._individual_setting_values(settings)
+            if settings is not None
+            else dict(self._normal_midi_setting_values)
+        )
+        if values.get("fit_note_range") is None:
+            values["fit_note_range"] = self._normal_midi_setting_values[
+                "fit_note_range"
+            ]
+        self._active_individual_settings_path = path if settings is not None else None
+        self._applying_individual_settings = True
+        try:
+            for name in MIDI_INDIVIDUAL_SETTING_NAMES:
+                value = values[name]
+                if getattr(self.state, name) != value:
+                    self.set_option(name, value)
+        finally:
+            self._applying_individual_settings = False
+        saved_sources = (
+            {
+                (track, channel): enabled
+                for track, channel, enabled in settings.track_channels
+            }
+            if settings is not None
+            else {}
+        )
+        self.state.track_channels = [
+            replace(
+                item,
+                enabled=saved_sources.get((item.track, item.channel), True),
+            )
+            for item in self.state.track_channels
+        ]
+        self._set_enabled_sources(
+            (item.track, item.channel)
+            for item in self.state.track_channels
+            if item.enabled
+        )
+
+    def _selected_midi_path(self) -> Path | None:
+        index = self.state.selected_midi_index
+        if not 0 <= index < len(self.midi_files):
+            return None
+        return self.midi_files[index]
+
+    def _set_midi_individual_settings_flag(
+        self,
+        path: Path,
+        enabled: bool,
+    ) -> None:
+        for index, row in enumerate(self.state.midi_rows):
+            if row.path != path or row.has_individual_settings == enabled:
+                continue
+            rows = list(self.state.midi_rows)
+            rows[index] = replace(
+                row,
+                has_individual_settings=enabled,
+            )
+            self.state.midi_rows = rows
+            return
+
     def set_midi_column_widths(self, widths: object) -> None:
         normalized = normalize_midi_column_widths(widths)
         if normalized == self.state.midi_column_widths:
             return
         self.state.midi_column_widths = normalized
         self.request_save()
+
+    def save_selected_midi_individual_settings(self) -> bool:
+        path = self._selected_midi_path()
+        if path is None:
+            return False
+        settings = MidiIndividualSettings(
+            **self._current_midi_setting_values(),
+            track_channels=tuple(
+                (item.track, item.channel, item.enabled)
+                for item in self.state.track_channels
+            ),
+        )
+        try:
+            self.database.save_midi_individual_settings(path, settings)
+        except Exception as exc:
+            self._message(
+                "error",
+                "individual_settings_error_title",
+                str(exc),
+            )
+            return False
+        self._midi_individual_settings[path] = settings
+        self._active_individual_settings_path = path
+        self._set_midi_individual_settings_flag(path, True)
+        self._notify()
+        return True
+
+    def delete_selected_midi_individual_settings(self) -> bool:
+        path = self._selected_midi_path()
+        if path is None:
+            return False
+        try:
+            deleted = self.database.delete_midi_individual_settings(path)
+        except Exception as exc:
+            self._message(
+                "error",
+                "individual_settings_error_title",
+                str(exc),
+            )
+            return False
+        self._midi_individual_settings.pop(path, None)
+        self._set_midi_individual_settings_flag(path, False)
+        if self._active_individual_settings_path == path:
+            self._apply_midi_individual_settings(None)
+            self._apply_track_channel_change()
+        self._notify()
+        return deleted
 
     def set_playlist_name_width(self, width: object) -> None:
         normalized = self._clamp_int(width, 80, 2000, 240)
@@ -2463,24 +2645,26 @@ class AppController:
             self.save_settings_now()
 
     def current_settings(self) -> AppSettings:
+        normal = self._normal_midi_setting_values
         return AppSettings(
             countdown_seconds=self.state.countdown_seconds,
             midi_sound_volume=self.state.midi_sound_volume,
             sound_source=self.state.sound_source,
             arrangement_quality=self.state.arrangement_quality,
-            use_piano_arrangement=self.state.use_piano_arrangement,
-            play_sound=self.state.play_sound,
+            use_piano_arrangement=bool(normal["use_piano_arrangement"]),
+            play_sound=bool(normal["play_sound"]),
             countdown_sound=self.state.countdown_sound,
             game_countdown_sound=self.state.game_countdown_sound,
-            auto_fit_note_range=self.state.auto_fit_note_range,
-            transpose_semitones=self.state.transpose_semitones,
-            octave_shift=self.state.octave_shift,
-            humanize_timing=self.state.humanize_timing,
-            chord_optimization=self.state.chord_optimization,
-            chord_strum=self.state.chord_strum,
-            auto_sustain=self.state.auto_sustain,
-            repeat_prevention=self.state.repeat_prevention,
-            playback_speed_percent=self.state.playback_speed_percent,
+            auto_fit_note_range=bool(normal["auto_fit_note_range"]),
+            fit_note_range=normalize_fit_note_range(normal["fit_note_range"]),
+            transpose_semitones=int(normal["transpose_semitones"]),
+            octave_shift=int(normal["octave_shift"]),
+            humanize_timing=bool(normal["humanize_timing"]),
+            chord_optimization=bool(normal["chord_optimization"]),
+            chord_strum=bool(normal["chord_strum"]),
+            auto_sustain=bool(normal["auto_sustain"]),
+            repeat_prevention=bool(normal["repeat_prevention"]),
+            playback_speed_percent=int(normal["playback_speed_percent"]),
             sound_playback_mode=self.state.sound_playback_mode,
             language=self.state.language,
             color_theme=self.state.color_theme,
@@ -2628,9 +2812,23 @@ class AppController:
                 if target:
                     target.set_repeat_prevention(self.state.repeat_prevention)
         elif name == "auto_fit_note_range":
-            for target in (self.player, self.sound_player, self.midi_input_bridge):
+            for target in (
+                self.player,
+                self.sound_player,
+                self.midi_input_bridge,
+                self.realtime_sound_output,
+            ):
                 if target:
                     target.set_auto_fit_note_range(self.state.auto_fit_note_range)
+        elif name == "fit_note_range":
+            for target in (
+                self.player,
+                self.sound_player,
+                self.midi_input_bridge,
+                self.realtime_sound_output,
+            ):
+                if target:
+                    target.set_fit_note_range(self.state.fit_note_range)
         elif name in {"transpose_semitones", "octave_shift"}:
             for target in (self.player, self.sound_player, self.midi_input_bridge, self.realtime_sound_output):
                 if target:
@@ -2923,6 +3121,15 @@ class AppController:
     ) -> dict[Path, MidiMetadata]:
         try:
             return self.database.load_valid_midi_metadata(file_stats)
+        except Exception:
+            return {}
+
+    def _load_midi_individual_settings(
+        self,
+        paths: tuple[Path, ...] | list[Path],
+    ) -> dict[Path, MidiIndividualSettings]:
+        try:
+            return self.database.load_midi_individual_settings(paths)
         except Exception:
             return {}
 

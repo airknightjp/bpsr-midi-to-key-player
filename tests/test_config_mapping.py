@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from config import fit_note_to_base_range, midi_note_to_key, shift_midi_note
+from config import (
+    fit_note_to_base_range,
+    fit_note_to_range,
+    midi_note_to_key,
+    normalize_fit_note_range,
+    shift_midi_note,
+)
 
 
 class ConfigMappingTests(unittest.TestCase):
@@ -42,6 +48,14 @@ class ConfigMappingTests(unittest.TestCase):
         self.assertEqual(fit_note_to_base_range(84), 72)
         self.assertEqual(fit_note_to_base_range(21), 57)
         self.assertEqual(fit_note_to_base_range(108), 72)
+
+    def test_fit_note_to_selected_range_preserves_pitch_class(self) -> None:
+        self.assertEqual(fit_note_to_range(36, (55, 78)), 60)
+        self.assertEqual(fit_note_to_range(96, (55, 78)), 72)
+
+    def test_selected_range_is_clamped_and_keeps_twelve_notes(self) -> None:
+        self.assertEqual(normalize_fit_note_range((60, 60)), (60, 71))
+        self.assertEqual(normalize_fit_note_range((108, 108)), (97, 108))
 
     def test_shift_midi_note_combines_semitones_and_octaves(self) -> None:
         self.assertEqual(shift_midi_note(60, transpose_semitones=2, octave_shift=-1), 50)

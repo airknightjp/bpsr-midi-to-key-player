@@ -17,11 +17,13 @@ from audio_buffer import (
     DEFAULT_QT_AUDIO_FRAMES,
 )
 from config import (
+    DEFAULT_FIT_NOTE_RANGE,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
     MIN_TRANSPOSE_SEMITONES,
-    fit_note_to_base_range,
+    fit_note_to_range,
+    normalize_fit_note_range,
     shift_midi_note,
 )
 from midi_parser import MidiEvent
@@ -60,6 +62,7 @@ class MidiSoundPlayer:
         enabled_sources: SourceProvider | None = None,
         volume: int = 100,
         auto_fit_note_range: bool = False,
+        fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         humanize_timing: bool = False,
@@ -92,6 +95,7 @@ class MidiSoundPlayer:
         self.enabled_sources = enabled_sources
         self._volume = self._clamp_volume(volume)
         self.auto_fit_note_range = auto_fit_note_range
+        self.fit_note_range = normalize_fit_note_range(fit_note_range)
         self.transpose_semitones = max(
             MIN_TRANSPOSE_SEMITONES,
             min(MAX_TRANSPOSE_SEMITONES, int(transpose_semitones)),
@@ -138,6 +142,7 @@ class MidiSoundPlayer:
         self._suppressed_note_offs: dict[tuple[int, int, int], int] = defaultdict(int)
         self._chord_optimization_plan: ChordOptimizationPlan | None = None
         self._chord_optimization_plan_auto_fit: bool | None = None
+        self._chord_optimization_plan_note_range: tuple[int, int] | None = None
         self._chord_optimization_plan_speed: int | None = None
         self._chord_optimization_plan_transpose: int | None = None
         self._chord_optimization_plan_octave: int | None = None
@@ -223,6 +228,17 @@ class MidiSoundPlayer:
             if self.auto_fit_note_range == enabled:
                 return
             self.auto_fit_note_range = enabled
+            self._mark_chord_optimization_dirty_locked()
+            self._remap_active_notes_requested.set()
+            self._release_requested.set()
+        self._schedule_chord_optimization()
+
+    def set_fit_note_range(self, note_range: object) -> None:
+        normalized = normalize_fit_note_range(note_range)
+        with self._state_lock:
+            if self.fit_note_range == normalized:
+                return
+            self.fit_note_range = normalized
             self._mark_chord_optimization_dirty_locked()
             self._remap_active_notes_requested.set()
             self._release_requested.set()
@@ -628,7 +644,7 @@ class MidiSoundPlayer:
         if shifted_note is None:
             return None
         if self.auto_fit_note_range:
-            return fit_note_to_base_range(shifted_note)
+            return fit_note_to_range(shifted_note, self.fit_note_range)
         return shifted_note
 
     def _playable_event_note(self, event: MidiEvent) -> int | None:
@@ -690,6 +706,7 @@ class MidiSoundPlayer:
                 events=self._current_events,
                 options={
                     "auto_fit_note_range": self.auto_fit_note_range,
+                    "fit_note_range": self.fit_note_range,
                     "transpose_semitones": self.transpose_semitones,
                     "octave_shift": self.note_octave_shift,
                     "playback_speed_percent": self.playback_speed_percent,
@@ -712,6 +729,9 @@ class MidiSoundPlayer:
             self._chord_optimization_plan = plan
             self._chord_optimization_plan_auto_fit = bool(
                 request.options["auto_fit_note_range"]
+            )
+            self._chord_optimization_plan_note_range = normalize_fit_note_range(
+                request.options["fit_note_range"]
             )
             self._chord_optimization_plan_speed = int(
                 request.options["playback_speed_percent"]
@@ -736,6 +756,7 @@ class MidiSoundPlayer:
             self.chord_optimization
             and self._chord_optimization_plan is not None
             and self._chord_optimization_plan_auto_fit == self.auto_fit_note_range
+            and self._chord_optimization_plan_note_range == self.fit_note_range
             and self._chord_optimization_plan_speed == self.playback_speed_percent
             and self._chord_optimization_plan_transpose == self.transpose_semitones
             and self._chord_optimization_plan_octave == self.note_octave_shift
@@ -949,6 +970,8 @@ class RealtimeMidiSoundOutput:
         volume: int = 100,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
+        auto_fit_note_range: bool = False,
+        fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
         auto_sustain: bool = False,
         repeat_prevention: bool = False,
         sound_source: str = DEFAULT_SOUND_SOURCE,
@@ -968,6 +991,8 @@ class RealtimeMidiSoundOutput:
             MIN_OCTAVE_SHIFT,
             min(MAX_OCTAVE_SHIFT, int(octave_shift)),
         )
+        self.auto_fit_note_range = bool(auto_fit_note_range)
+        self.fit_note_range = normalize_fit_note_range(fit_note_range)
         self.auto_sustain = bool(auto_sustain)
         self._repeat_guard = RapidRepeatGuard(enabled=repeat_prevention)
         self.sound_source = normalize_sound_source(sound_source)
@@ -1047,6 +1072,26 @@ class RealtimeMidiSoundOutput:
             self.auto_sustain = bool(enabled)
         self._auto_sustain_controller.set_enabled(enabled)
 
+    def set_auto_fit_note_range(self, enabled: bool) -> None:
+        with self._lock:
+            enabled = bool(enabled)
+            if self.auto_fit_note_range == enabled:
+                return
+            if self._synth.is_open:
+                self._release_all_now()
+            self._reset_repeat_state()
+            self.auto_fit_note_range = enabled
+
+    def set_fit_note_range(self, note_range: object) -> None:
+        normalized = normalize_fit_note_range(note_range)
+        with self._lock:
+            if self.fit_note_range == normalized:
+                return
+            if self._synth.is_open:
+                self._release_all_now()
+            self._reset_repeat_state()
+            self.fit_note_range = normalized
+
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
         transpose_semitones = max(
             MIN_TRANSPOSE_SEMITONES,
@@ -1085,6 +1130,10 @@ class RealtimeMidiSoundOutput:
                     )
                     if note is None:
                         return
+                    if self.auto_fit_note_range:
+                        note = fit_note_to_range(note, self.fit_note_range)
+                        if note is None:
+                            return
                     if self._repeat_guard.should_suppress(
                         (channel, note),
                         received_at,
@@ -1110,6 +1159,9 @@ class RealtimeMidiSoundOutput:
                         self.transpose_semitones,
                         self.note_octave_shift,
                     )
+                    if note is not None:
+                        if self.auto_fit_note_range:
+                            note = fit_note_to_range(note, self.fit_note_range)
                     if note is not None:
                         self._send_note_off(channel, note)
                 elif event_type == 0xB0 and data1 == 64:

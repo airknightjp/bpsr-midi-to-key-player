@@ -295,6 +295,24 @@ class KeyPlaybackTests(unittest.TestCase):
         self.assertEqual(output.pressed, ["s"])
         self.assertEqual(output.released, ["s"])
 
+    def test_keyboard_player_folds_notes_into_selected_range(self) -> None:
+        output = FakeOutput()
+        player = MidiKeyboardPlayer(
+            output=output,
+            auto_fit_note_range=True,
+            fit_note_range=(60, 71),
+        )
+
+        player._handle_event(
+            MidiEvent(time=0.0, kind="note_on", channel=0, note=72, velocity=64)
+        )
+        player._handle_event(
+            MidiEvent(time=0.1, kind="note_off", channel=0, note=72, velocity=0)
+        )
+
+        self.assertEqual(output.pressed, ["a"])
+        self.assertEqual(output.released, ["a"])
+
     def test_live_note_shift_remaps_held_key_without_stopping_playback(self) -> None:
         output = FakeOutput()
         player = MidiKeyboardPlayer(output=output, auto_fit_note_range=True)

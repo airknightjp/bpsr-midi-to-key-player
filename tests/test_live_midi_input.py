@@ -268,6 +268,19 @@ class LiveMidiInputTests(unittest.TestCase):
 
         self.assertEqual(output.events, [("press", "q"), ("release", "q")])
 
+    def test_auto_fit_note_range_uses_selected_range(self) -> None:
+        output = FakeOutput()
+        bridge = self._running_bridge(
+            output,
+            auto_fit_note_range=True,
+            fit_note_range=(60, 71),
+        )
+
+        bridge._note_on(channel=0, note=72, velocity=100)
+        bridge._note_off(channel=0, note=72)
+
+        self.assertEqual(output.events, [("press", "a"), ("release", "a")])
+
     def test_auto_fit_overlapping_notes_keep_key_pressed_until_all_are_off(self) -> None:
         output = FakeOutput()
         bridge = self._running_bridge(output, auto_fit_note_range=True)

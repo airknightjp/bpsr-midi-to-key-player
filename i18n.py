@@ -68,7 +68,27 @@ SOUND_SOURCE_NAMES = {
 
 
 RELEASE_NOTES_CONTENT = {
-    "en": """v1.9.0
+    "en": """v1.9.1
+
+This release adds a freely selectable note-fitting range and per-song settings.
+
+[Main changes]
+
+- Added two markers below the keyboard for selecting the target range within
+  A0-C8. The range keeps a minimum width of 12 notes and defaults to C3-B5.
+- Renamed `Fit to 3 octaves` to `Fit to selected range`. MIDI conversion,
+  realtime conversion, sound playback, visualizations, and chord revoicing use
+  the selected range when the option is enabled.
+- Right-click a MIDI name to save or delete per-song settings in the local
+  SQLite database.
+- Per-song settings include the detailed options, playback speed, transpose,
+  octave shift, selected range, and track/channel enabled states.
+- Songs with saved settings are marked with `○` in the MIDI list and their
+  settings are applied when selected.
+
+[v1.9.0]
+
+v1.9.0
 
 This release unifies local data storage and improves startup MIDI-folder
 loading.
@@ -385,7 +405,26 @@ performance visualization, and automatic sustain generation.
   folder. Keep the executable and _internal folder together.
 - Settings and playlists are stored in the local SQLite database in the
   extracted application folder.""",
-    "ja": """v1.9.0
+    "ja": """v1.9.1
+
+音域を自由に指定する機能と、MIDIごとの個別設定を追加しました。
+
+【主な変更】
+
+- 鍵盤下の2つのマーカーで、A0-C8内から音域を指定できるようにしました。
+  最小幅は12音で、初期値はC3-B5です。
+- `音域を3オクターブに縮める`を`音域を指定幅に縮める`へ変更しました。
+  有効時はMIDI入力変換、リアルタイム入力変換、MIDI音源再生、演奏表示、
+  和音の再配置へ指定音域を反映します。
+- MIDI一覧の曲名を右クリックして、曲ごとの設定をローカルSQLite DBへ
+  保存・削除できるようにしました。
+- 個別設定には、詳細設定、速度、トランスポーズ、オクターブシフト、
+  指定音域、トラック／チャンネルの有効状態を保存します。
+- 個別設定がある曲はMIDI一覧へ`○`を表示し、選択時に設定を適用します。
+
+【v1.9.0】
+
+v1.9.0
 
 ローカルデータ保存を統合し、起動時のMIDIフォルダ読込を改善しました。
 
@@ -696,7 +735,24 @@ v1.4.0
 - 配布形式を単体EXEから、インストール不要のフォルダ展開版へ
   変更しました。EXEと_internalフォルダを同じ場所で使用してください。
 - 設定とプレイリストを、アプリの展開先にあるSQLite DBへ保存します。""",
-    "zh": """v1.9.0
+    "zh": """v1.9.1
+
+本版本新增了可自由选择的音域压缩范围和按曲目保存的单曲设置。
+
+【主要变更】
+
+- 在键盘下方新增两个标记，可在A0-C8内选择目标音域。最小宽度为12个
+  音符，默认值为C3-B5。
+- 将`缩小到3个八度`改为`缩小到指定音域`。启用后，MIDI输入转换、
+  实时输入转换、MIDI声音播放、演奏显示及和弦重排都会使用所选音域。
+- 右键单击MIDI名称，可将单曲设置保存到本地SQLite数据库或从中删除。
+- 单曲设置包括详细选项、速度、移调、八度移位、指定音域以及轨道／通道
+  的启用状态。
+- 已保存单曲设置的曲目会在MIDI列表中显示`○`，选中时自动应用设置。
+
+【v1.9.0】
+
+v1.9.0
 
 本版本统一了本地数据存储，并改进启动时的MIDI文件夹加载。
 
@@ -1084,7 +1140,7 @@ TEXT = {
         "auto_sustain": "Automatic sustain generation",
         "repeat_prevention": "Prevent rapid repeats",
         "playback_speed": "Speed",
-        "auto_fit_note_range": "Fit to 3 octaves",
+        "auto_fit_note_range": "Fit to selected range",
         "transpose_semitones": "Transpose",
         "octave_shift": "Octave shift",
         "shortcut_settings": "Shortcut",
@@ -1142,7 +1198,11 @@ TEXT = {
         "midi_list": "MIDI List",
         "name": "Name",
         "folder": "Folder",
+        "individual_settings": "-",
         "duration": "Duration",
+        "save_individual_settings": "Save individual settings",
+        "delete_individual_settings": "Delete individual settings",
+        "individual_settings_error_title": "Individual settings error",
         "no_midi_files": "No MIDI files were found in the selected folder.",
         "select_midi_file": "Select MIDI folder",
         "load_failed_title": "Load failed",
@@ -1283,7 +1343,7 @@ TEXT = {
         "auto_sustain": "\u30b5\u30b9\u30c6\u30a3\u30f3\u306e\u81ea\u52d5\u751f\u6210",
         "repeat_prevention": "\u9023\u6253\u6291\u6b62",
         "playback_speed": "\u901f\u5ea6",
-        "auto_fit_note_range": "\u97f3\u57df\u30923\u30aa\u30af\u30bf\u30fc\u30d6\u306b\u7e2e\u3081\u308b",
+        "auto_fit_note_range": "\u97f3\u57df\u3092\u6307\u5b9a\u5e45\u306b\u7e2e\u3081\u308b",
         "transpose_semitones": "\u30c8\u30e9\u30f3\u30b9\u30dd\u30fc\u30ba",
         "octave_shift": "\u30aa\u30af\u30bf\u30fc\u30d6\u30b7\u30d5\u30c8",
         "shortcut_settings": "\u30b7\u30e7\u30fc\u30c8\u30ab\u30c3\u30c8",
@@ -1341,7 +1401,11 @@ TEXT = {
         "midi_list": "MIDI\u4e00\u89a7",
         "name": "\u540d\u524d",
         "folder": "\u30d5\u30a9\u30eb\u30c0",
+        "individual_settings": "-",
         "duration": "\u9577\u3055",
+        "save_individual_settings": "\u500b\u5225\u306b\u8a2d\u5b9a\u3092\u4fdd\u5b58",
+        "delete_individual_settings": "\u500b\u5225\u306b\u8a2d\u5b9a\u3092\u524a\u9664",
+        "individual_settings_error_title": "\u500b\u5225\u8a2d\u5b9a\u30a8\u30e9\u30fc",
         "no_midi_files": "\u9078\u629e\u3057\u305f\u30d5\u30a9\u30eb\u30c0\u306bMIDI\u30d5\u30a1\u30a4\u30eb\u304c\u3042\u308a\u307e\u305b\u3093\u3002",
         "select_midi_file": "MIDI\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u629e",
         "load_failed_title": "\u8aad\u307f\u8fbc\u307f\u5931\u6557",
@@ -1476,7 +1540,7 @@ TEXT = {
         "auto_sustain": "\u81ea\u52a8\u5ef6\u97f3\u751f\u6210",
         "repeat_prevention": "\u9632\u6b62\u5feb\u901f\u8fde\u51fb",
         "playback_speed": "\u901f\u5ea6",
-        "auto_fit_note_range": "\u7f29\u5c0f\u5230 3 \u4e2a\u516b\u5ea6",
+        "auto_fit_note_range": "\u7f29\u5c0f\u5230\u6307\u5b9a\u97f3\u57df",
         "transpose_semitones": "\u79fb\u8c03",
         "octave_shift": "\u516b\u5ea6\u79fb\u4f4d",
         "shortcut_settings": "\u5feb\u6377\u952e",
@@ -1534,7 +1598,11 @@ TEXT = {
         "midi_list": "MIDI \u5217\u8868",
         "name": "\u540d\u79f0",
         "folder": "\u6587\u4ef6\u5939",
+        "individual_settings": "-",
         "duration": "\u65f6\u957f",
+        "save_individual_settings": "\u4fdd\u5b58\u5355\u66f2\u8bbe\u7f6e",
+        "delete_individual_settings": "\u5220\u9664\u5355\u66f2\u8bbe\u7f6e",
+        "individual_settings_error_title": "\u5355\u66f2\u8bbe\u7f6e\u9519\u8bef",
         "no_midi_files": "\u6240\u9009\u6587\u4ef6\u5939\u4e2d\u6ca1\u6709 MIDI \u6587\u4ef6\u3002",
         "select_midi_file": "\u9009\u62e9 MIDI \u6587\u4ef6\u5939",
         "load_failed_title": "\u52a0\u8f7d\u5931\u8d25",

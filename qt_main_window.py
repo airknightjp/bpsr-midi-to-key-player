@@ -95,11 +95,12 @@ from update_service import (
 )
 
 
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 PROJECT_URL = "https://github.com/airknightjp/bpsr-midi-to-key-player"
 COMPACT_KNOB_DIAMETER = 36
 PLAYER_KNOB_DIAMETER = 33
 KEYBOARD_PANEL_HEIGHT = 71
+KEYBOARD_RANGE_PANEL_HEIGHT = 85
 KEYBOARD_PANEL_MARGIN = 7
 
 
@@ -567,6 +568,9 @@ class MidiMainWindow(QMainWindow):
         self.settings_lower_layout.setContentsMargins(10, 10, 10, 10)
         self.settings_lower_layout.setSpacing(0)
         self.output_keyboard = PianoKeyboardWidget()
+        self.output_keyboard.rangeMarkersChanged.connect(
+            lambda low, high: self._set_option("fit_note_range", (low, high))
+        )
         self.settings_lower_layout.addWidget(self.output_keyboard)
         root_layout.addWidget(self.settings_lower_panel)
         self.settings_gap = self._make_gap(6)
@@ -1330,7 +1334,7 @@ class MidiMainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignBottom,
         )
 
-        self.midi_table = MidiLibraryTable(0, 3)
+        self.midi_table = MidiLibraryTable(0, 4)
         self.midi_header = ColumnSeparatorHeaderView(
             Qt.Orientation.Horizontal,
             self.midi_table,
@@ -1345,7 +1349,7 @@ class MidiMainWindow(QMainWindow):
         midi_header = self.midi_table.horizontalHeader()
         midi_header.setMinimumSectionSize(MIN_MIDI_COLUMN_WIDTH)
         midi_header.setStretchLastSection(False)
-        for column, width in enumerate(self.state.midi_column_widths):
+        for column in range(self.midi_table.columnCount()):
             midi_header.setSectionResizeMode(
                 column,
                 (
@@ -1353,14 +1357,21 @@ class MidiMainWindow(QMainWindow):
                     if column == 1
                     else (
                         QHeaderView.ResizeMode.Fixed
-                        if column == self.midi_table.columnCount() - 1
+                        if column >= 2
                         else QHeaderView.ResizeMode.Interactive
                     )
                 ),
             )
-            if column != 1:
-                self.midi_table.setColumnWidth(column, width)
+        self.midi_table.setColumnWidth(0, self.state.midi_column_widths[0])
+        self.midi_table.setColumnWidth(2, self.state.midi_column_widths[2])
+        self.midi_table.setColumnWidth(3, 80)
         midi_header.sectionResized.connect(self._midi_column_resized)
+        self.midi_table.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.midi_table.customContextMenuRequested.connect(
+            self._show_midi_context_menu
+        )
         self.midi_table.cellClicked.connect(
             lambda row, _column: self._select_midi_row(row)
         )
@@ -1601,6 +1612,7 @@ class MidiMainWindow(QMainWindow):
                 state.input_conversion_mode,
                 state.play_sound,
                 state.auto_fit_note_range,
+                state.fit_note_range,
                 state.repeat_prevention,
                 state.humanize_timing,
                 state.chord_strum,
@@ -1624,6 +1636,7 @@ class MidiMainWindow(QMainWindow):
                     len(self.controller.events),
                     state.track_channels,
                     state.auto_fit_note_range,
+                    state.fit_note_range,
                     state.transpose_semitones,
                     state.octave_shift,
                     state.chord_optimization,
@@ -1638,12 +1651,18 @@ class MidiMainWindow(QMainWindow):
                         enabled_sources=self.controller.enabled_sources(),
                         enabled_channels=self.controller.enabled_channels(),
                         auto_fit_note_range=state.auto_fit_note_range,
+                        fit_note_range=state.fit_note_range,
                         transpose_semitones=state.transpose_semitones,
                         octave_shift=state.octave_shift,
                         chord_optimization_plan=optimization_plan,
                     )
-                    self.output_keyboard.set_used_note_range(output_note_range)
-                    self.piano_roll.set_used_note_range(output_note_range)
+                    displayed_note_range = (
+                        state.fit_note_range
+                        if state.auto_fit_note_range
+                        else output_note_range
+                    )
+                    self.output_keyboard.set_used_note_range(displayed_note_range)
+                    self.piano_roll.set_used_note_range(displayed_note_range)
 
             if state.section_visibility["keyboard"]:
                 keyboard_visual_signature = (
@@ -1668,6 +1687,7 @@ class MidiMainWindow(QMainWindow):
                     len(self.controller.events),
                     state.track_channels,
                     state.auto_fit_note_range,
+                    state.fit_note_range,
                     state.transpose_semitones,
                     state.octave_shift,
                     state.humanize_timing,
@@ -1687,6 +1707,7 @@ class MidiMainWindow(QMainWindow):
                             enabled_sources=self.controller.enabled_sources(),
                             enabled_channels=self.controller.enabled_channels(),
                             auto_fit_note_range=state.auto_fit_note_range,
+                            fit_note_range=state.fit_note_range,
                             transpose_semitones=state.transpose_semitones,
                             octave_shift=state.octave_shift,
                             chord_optimization_plan=optimization_plan,
@@ -1897,11 +1918,17 @@ class MidiMainWindow(QMainWindow):
                 text["name"],
                 text["folder"],
                 text["duration"],
+                text["individual_settings"],
             ]
         )
         for column in range(self.midi_table.columnCount()):
             self.midi_table.horizontalHeaderItem(column).setTextAlignment(
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                (
+                    Qt.AlignmentFlag.AlignCenter
+                    if column == 3
+                    else Qt.AlignmentFlag.AlignLeft
+                    | Qt.AlignmentFlag.AlignVCenter
+                )
             )
         self.playlist_track_table.setHorizontalHeaderLabels(
             [
@@ -1942,7 +1969,7 @@ class MidiMainWindow(QMainWindow):
             px(KEYBOARD_PANEL_MARGIN),
         )
         self.settings_lower_gap.setFixedHeight(px(6))
-        self.settings_lower_panel.setFixedHeight(px(KEYBOARD_PANEL_HEIGHT))
+        self.settings_lower_panel.setFixedHeight(px(KEYBOARD_RANGE_PANEL_HEIGHT))
         self.settings_lower_layout.setContentsMargins(
             px(KEYBOARD_PANEL_MARGIN),
             px(KEYBOARD_PANEL_MARGIN),
@@ -2145,8 +2172,12 @@ class MidiMainWindow(QMainWindow):
                 if column == 0:
                     self.midi_table.setColumnWidth(column, px(width))
             self.midi_table.setColumnWidth(
-                self.midi_table.columnCount() - 1,
+                2,
                 self._midi_duration_column_width(percent),
+            )
+            self.midi_table.setColumnWidth(
+                3,
+                self._midi_individual_settings_column_width(percent),
             )
             midi_header.setFixedHeight(px(24))
         for row in range(self.midi_table.rowCount()):
@@ -2662,6 +2693,8 @@ class MidiMainWindow(QMainWindow):
             (self.auto_sustain_check, state.auto_sustain),
         ):
             self._set_check(check, value)
+        self.output_keyboard.set_range_marker_notes(state.fit_note_range)
+        self.output_keyboard.set_range_markers_enabled(state.auto_fit_note_range)
         unsupported_in_realtime = (
             state.input_conversion_mode == INPUT_CONVERSION_REALTIME
         )
@@ -2979,7 +3012,12 @@ class MidiMainWindow(QMainWindow):
         path_text = str(row.path)
         display_name = Path(row.name).stem
         for column, value in enumerate(
-            (display_name, row.folder, row.duration)
+            (
+                display_name,
+                row.folder,
+                row.duration,
+                "\u25cb" if row.has_individual_settings else "-",
+            )
         ):
             item = self.midi_table.item(row_index, column)
             if item is None:
@@ -2992,6 +3030,14 @@ class MidiMainWindow(QMainWindow):
                 item.setToolTip(tooltip)
             if item.data(Qt.ItemDataRole.UserRole) != path_text:
                 item.setData(Qt.ItemDataRole.UserRole, path_text)
+            item.setTextAlignment(
+                (
+                    Qt.AlignmentFlag.AlignCenter
+                    if column == 3
+                    else Qt.AlignmentFlag.AlignLeft
+                    | Qt.AlignmentFlag.AlignVCenter
+                )
+            )
 
     def _midi_column_resized(
         self,
@@ -3013,9 +3059,7 @@ class MidiMainWindow(QMainWindow):
 
     def _midi_duration_column_width(self, percent: int) -> int:
         scale = max(0.01, percent / 100.0)
-        header_item = self.midi_table.horizontalHeaderItem(
-            self.midi_table.columnCount() - 1
-        )
+        header_item = self.midi_table.horizontalHeaderItem(2)
         header_text = header_item.text() if header_item is not None else ""
         text_width = max(
             self.midi_header.fontMetrics().horizontalAdvance(header_text),
@@ -3025,6 +3069,14 @@ class MidiMainWindow(QMainWindow):
             round(64 * scale),
             text_width + max(4, round(14 * scale)),
         )
+
+    def _midi_individual_settings_column_width(self, percent: int) -> int:
+        scale = max(0.01, percent / 100.0)
+        text_width = max(
+            self.midi_table.fontMetrics().horizontalAdvance("\u25cb"),
+            self.midi_table.fontMetrics().horizontalAdvance("-"),
+        )
+        return text_width + max(2, round(6 * scale))
 
     def _render_midi_selection(self, state: AppState) -> None:
         if 0 <= state.selected_midi_index < self.midi_table.rowCount():
@@ -3405,6 +3457,34 @@ class MidiMainWindow(QMainWindow):
             }}
             """
         )
+
+    def _show_midi_context_menu(self, position: QPoint) -> None:
+        item = self.midi_table.itemAt(position)
+        if item is None or item.column() != 0:
+            return
+        row = item.row()
+        self._select_midi_row(row)
+        if self.state.selected_midi_index != row:
+            return
+        menu = self._build_midi_context_menu(row)
+        menu.exec(self.midi_table.viewport().mapToGlobal(position))
+
+    def _build_midi_context_menu(self, row: int) -> QMenu:
+        text = TEXT[self.state.language]
+        menu = QMenu(self.midi_table)
+        menu.addAction(
+            text["save_individual_settings"],
+            self.controller.save_selected_midi_individual_settings,
+        )
+        delete_action = menu.addAction(
+            text["delete_individual_settings"],
+            self.controller.delete_selected_midi_individual_settings,
+        )
+        delete_action.setEnabled(
+            0 <= row < len(self.state.midi_rows)
+            and self.state.midi_rows[row].has_individual_settings
+        )
+        return menu
 
     def _select_midi_row(self, row: int) -> None:
         if (

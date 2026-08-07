@@ -95,6 +95,7 @@ class SettingsTests(unittest.TestCase):
                     countdown_sound=True,
                     game_countdown_sound=True,
                     auto_fit_note_range=True,
+                    fit_note_range=(36, 59),
                     transpose_semitones=-7,
                     octave_shift=2,
                     humanize_timing=True,
@@ -179,6 +180,7 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(loaded.game_countdown_sound)
         self.assertFalse(loaded.play_sound)
         self.assertTrue(loaded.auto_fit_note_range)
+        self.assertEqual(loaded.fit_note_range, (36, 59))
         self.assertEqual(loaded.transpose_semitones, -7)
         self.assertEqual(loaded.octave_shift, 2)
         self.assertTrue(loaded.humanize_timing)

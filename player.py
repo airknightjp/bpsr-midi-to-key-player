@@ -10,6 +10,7 @@ from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, plan_auto_sustain
 from chord_optimization import ChordOptimizationPlan
 from chord_optimization_planner import ChordOptimizationPlanner, ChordOptimizationRequest
 from config import (
+    DEFAULT_FIT_NOTE_RANGE,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
@@ -19,9 +20,10 @@ from config import (
     OCTAVE_SWITCH_SETTLE_SECONDS,
     OCTAVE_UP_KEY,
     SUSTAIN_KEY,
-    fit_note_to_base_range,
+    fit_note_to_range,
     midi_note_to_key,
     normalized_key_bindings,
+    normalize_fit_note_range,
     shift_midi_note,
 )
 from keyboard_output import KeyboardOutput
@@ -57,6 +59,7 @@ class MidiKeyboardPlayer:
         enabled_channels: EnabledChannelsCallback | None = None,
         enabled_sources: EnabledSourcesCallback | None = None,
         auto_fit_note_range: bool = False,
+        fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         humanize_timing: bool = False,
@@ -86,6 +89,7 @@ class MidiKeyboardPlayer:
         self.enabled_channels = enabled_channels
         self.enabled_sources = enabled_sources
         self.auto_fit_note_range = auto_fit_note_range
+        self.fit_note_range = normalize_fit_note_range(fit_note_range)
         self.transpose_semitones = max(
             MIN_TRANSPOSE_SEMITONES,
             min(MAX_TRANSPOSE_SEMITONES, int(transpose_semitones)),
@@ -120,6 +124,7 @@ class MidiKeyboardPlayer:
         self._octave_shift = 0
         self._chord_optimization_plan: ChordOptimizationPlan | None = None
         self._chord_optimization_plan_auto_fit: bool | None = None
+        self._chord_optimization_plan_note_range: tuple[int, int] | None = None
         self._chord_optimization_plan_speed: int | None = None
         self._chord_optimization_plan_transpose: int | None = None
         self._chord_optimization_plan_octave: int | None = None
@@ -188,6 +193,17 @@ class MidiKeyboardPlayer:
             if self.auto_fit_note_range == enabled:
                 return
             self.auto_fit_note_range = enabled
+            self._mark_chord_optimization_dirty_locked()
+            self._remap_active_notes_requested.set()
+            self._release_requested.set()
+        self._schedule_chord_optimization()
+
+    def set_fit_note_range(self, note_range: object) -> None:
+        normalized = normalize_fit_note_range(note_range)
+        with self._config_lock:
+            if self.fit_note_range == normalized:
+                return
+            self.fit_note_range = normalized
             self._mark_chord_optimization_dirty_locked()
             self._remap_active_notes_requested.set()
             self._release_requested.set()
@@ -529,10 +545,11 @@ class MidiKeyboardPlayer:
                 self.note_octave_shift,
             )
             auto_fit_note_range = self.auto_fit_note_range
+            fit_note_range = self.fit_note_range
         if shifted_note is None:
             return None
         if auto_fit_note_range:
-            return fit_note_to_base_range(shifted_note)
+            return fit_note_to_range(shifted_note, fit_note_range)
         return shifted_note
 
     def _playable_event_note(self, event: MidiEvent) -> int | None:
@@ -595,6 +612,7 @@ class MidiKeyboardPlayer:
                 events=self._current_events,
                 options={
                     "auto_fit_note_range": self.auto_fit_note_range,
+                    "fit_note_range": self.fit_note_range,
                     "transpose_semitones": self.transpose_semitones,
                     "octave_shift": self.note_octave_shift,
                     "playback_speed_percent": self.playback_speed_percent,
@@ -617,6 +635,9 @@ class MidiKeyboardPlayer:
             self._chord_optimization_plan = plan
             self._chord_optimization_plan_auto_fit = bool(
                 request.options["auto_fit_note_range"]
+            )
+            self._chord_optimization_plan_note_range = normalize_fit_note_range(
+                request.options["fit_note_range"]
             )
             self._chord_optimization_plan_speed = int(
                 request.options["playback_speed_percent"]
@@ -641,6 +662,7 @@ class MidiKeyboardPlayer:
             self.chord_optimization
             and self._chord_optimization_plan is not None
             and self._chord_optimization_plan_auto_fit == self.auto_fit_note_range
+            and self._chord_optimization_plan_note_range == self.fit_note_range
             and self._chord_optimization_plan_speed == self.playback_speed_percent
             and self._chord_optimization_plan_transpose == self.transpose_semitones
             and self._chord_optimization_plan_octave == self.note_octave_shift

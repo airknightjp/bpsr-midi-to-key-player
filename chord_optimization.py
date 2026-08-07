@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from config import shift_midi_note
+from config import DEFAULT_FIT_NOTE_RANGE, normalize_fit_note_range, shift_midi_note
 from midi_parser import MidiEvent
 from playback_timing import MAX_PLAYBACK_SPEED_PERCENT, MIN_PLAYBACK_SPEED_PERCENT
 
@@ -33,7 +33,6 @@ PLAYABLE_WINDOWS = (
     (0, 48, 83),
     (1, 84, 108),
 )
-BASE_WINDOW = ((0, 48, 83),)
 
 
 class ChordOptimizationCancelled(Exception):
@@ -73,6 +72,7 @@ def build_chord_optimization_plan(
     events: Iterable[MidiEvent],
     *,
     auto_fit_note_range: bool,
+    fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
     transpose_semitones: int = 0,
     octave_shift: int = 0,
     playback_speed_percent: int = 100,
@@ -81,6 +81,7 @@ def build_chord_optimization_plan(
     cancel_callback: CancelCallback | None = None,
 ) -> ChordOptimizationPlan:
     ordered_events = list(events)
+    normalized_fit_note_range = normalize_fit_note_range(fit_note_range)
     enabled = event_enabled or (lambda _event: True)
     playback_speed_ratio = max(
         MIN_PLAYBACK_SPEED_PERCENT,
@@ -149,6 +150,7 @@ def build_chord_optimization_plan(
                 group,
                 shifted_notes,
                 auto_fit_note_range=auto_fit_note_range,
+                fit_note_range=normalized_fit_note_range,
                 current_state=current_state,
                 last_state_change_time=last_state_change_time,
                 previous_targets=previous_targets,
@@ -234,6 +236,7 @@ def _optimize_group(
     shifted_notes: dict[int, int | None],
     *,
     auto_fit_note_range: bool,
+    fit_note_range: tuple[int, int],
     current_state: int,
     last_state_change_time: float | None,
     previous_targets: tuple[int, ...],
@@ -276,7 +279,7 @@ def _optimize_group(
         return group_targets, _GroupChoice((), current_state, 0.0)
 
     if auto_fit_note_range:
-        windows = BASE_WINDOW
+        windows = ((0, fit_note_range[0], fit_note_range[1]),)
     elif occupied_targets:
         windows = tuple(
             window

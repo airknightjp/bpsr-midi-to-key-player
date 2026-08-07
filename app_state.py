@@ -12,6 +12,7 @@ from audio_buffer import (
 )
 from config import (
     DEFAULT_INPUT_CONVERSION_MODE,
+    DEFAULT_FIT_NOTE_RANGE,
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
     DEFAULT_KEYBOARD_PLAY_SHORTCUT,
     DEFAULT_KEYBOARD_STOP_SHORTCUT,
@@ -29,6 +30,7 @@ class MidiListRow:
     name: str
     folder: str = ""
     duration: str = "--:--"
+    has_individual_settings: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,7 @@ class AppState:
     countdown_sound: bool = False
     game_countdown_sound: bool = False
     auto_fit_note_range: bool = False
+    fit_note_range: tuple[int, int] = DEFAULT_FIT_NOTE_RANGE
     transpose_semitones: int = 0
     octave_shift: int = 0
     humanize_timing: bool = False

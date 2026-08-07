@@ -51,7 +51,13 @@ from PySide6.QtWidgets import (
 )
 
 from app_state import TrackChannelItem
-from config import PIANO_NOTE_MAX, PIANO_NOTE_MIN
+from config import (
+    DEFAULT_FIT_NOTE_RANGE,
+    MIN_FIT_NOTE_RANGE_NOTES,
+    PIANO_NOTE_MAX,
+    PIANO_NOTE_MIN,
+    normalize_fit_note_range,
+)
 from note_visualization import PianoRollNote
 from source_colors import contrasting_text_color, track_channel_color
 
@@ -1004,9 +1010,14 @@ class ThemedBackground(QWidget):
 
 
 class PianoKeyboardWidget(QWidget):
+    rangeMarkersChanged = Signal(int, int)
+
     NOTE_MIN = PIANO_NOTE_MIN
     NOTE_MAX = PIANO_NOTE_MAX
-    BASE_HEIGHT = 57
+    KEYBOARD_BASE_HEIGHT = 57
+    RANGE_MARKER_BASE_HEIGHT = 14
+    BASE_HEIGHT = KEYBOARD_BASE_HEIGHT + RANGE_MARKER_BASE_HEIGHT
+    DEFAULT_RANGE_MARKER_NOTES = DEFAULT_FIT_NOTE_RANGE
     UNUSED_KEY_COLOR = "#000000"
     UNUSED_HATCH_COLOR = "#FFFFFF"
     UNUSED_HATCH_ALPHA = 72
@@ -1020,6 +1031,7 @@ class PianoKeyboardWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("OutputPianoKeyboard")
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._active_notes: frozenset[int] = frozenset()
         self._note_sources: dict[int, tuple[tuple[int, int], ...]] = {}
@@ -1051,6 +1063,20 @@ class PianoKeyboardWidget(QWidget):
                 and note - 1 in white_indexes
             )
         )
+        self._note_center_ratios = {
+            note: (index + 0.5) / len(self._white_notes)
+            for index, note in enumerate(self._white_notes)
+        }
+        self._note_center_ratios.update(
+            {
+                note: position / len(self._white_notes)
+                for note, position in self._black_note_positions
+            }
+        )
+        self._range_marker_notes = self.DEFAULT_RANGE_MARKER_NOTES
+        self._range_markers_enabled = False
+        self._dragged_range_marker: int | None = None
+        self._update_range_marker_tooltip()
         self._label_specs = tuple(
             (
                 index,
@@ -1084,6 +1110,14 @@ class PianoKeyboardWidget(QWidget):
     @property
     def used_note_range(self) -> tuple[int, int] | None:
         return self._used_note_range
+
+    @property
+    def range_marker_notes(self) -> tuple[int, int]:
+        return self._range_marker_notes
+
+    @property
+    def range_markers_enabled(self) -> bool:
+        return self._range_markers_enabled
 
     @property
     def rendering_enabled(self) -> bool:
@@ -1161,6 +1195,171 @@ class PianoKeyboardWidget(QWidget):
             self._used_note_range = normalized
             self._refresh_note_range_colors()
             self.update()
+
+    def set_range_marker_notes(self, note_range: object) -> None:
+        normalized = normalize_fit_note_range(note_range)
+        if normalized == self._range_marker_notes:
+            return
+        self._range_marker_notes = normalized
+        self._update_range_marker_tooltip()
+        self.update()
+
+    def set_range_markers_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._range_markers_enabled:
+            return
+        self._range_markers_enabled = enabled
+        if not enabled:
+            self._dragged_range_marker = None
+            self.unsetCursor()
+        self.update()
+
+    @staticmethod
+    def _note_name(note: int) -> str:
+        names = (
+            "C",
+            "C#",
+            "D",
+            "D#",
+            "E",
+            "F",
+            "F#",
+            "G",
+            "G#",
+            "A",
+            "A#",
+            "B",
+        )
+        return f"{names[note % 12]}{note // 12 - 1}"
+
+    def _update_range_marker_tooltip(self) -> None:
+        low, high = self._range_marker_notes
+        self.setToolTip(f"{self._note_name(low)} - {self._note_name(high)}")
+
+    def _range_marker_x(self, note: int) -> float:
+        width = max(1.0, float(self.width() - 1))
+        return self._note_center_ratios[note] * width
+
+    def _range_marker_radius(self) -> float:
+        return max(
+            3.5,
+            min(8.0, self._range_marker_strip_height() * 0.30),
+        )
+
+    def _range_marker_strip_height(self) -> float:
+        total_height = max(1.0, float(self.height() - 1))
+        return total_height * self.RANGE_MARKER_BASE_HEIGHT / self.BASE_HEIGHT
+
+    @property
+    def keyboard_area_height(self) -> float:
+        total_height = max(1.0, float(self.height() - 1))
+        return max(1.0, total_height - self._range_marker_strip_height())
+
+    def _range_marker_center_y(self) -> float:
+        return self.keyboard_area_height + self._range_marker_strip_height() / 2.0
+
+    def _range_marker_rect(self, marker_index: int) -> QRectF:
+        radius = self._range_marker_radius()
+        note = self._range_marker_notes[marker_index]
+        return QRectF(
+            self._range_marker_x(note) - radius,
+            self._range_marker_center_y() - radius,
+            radius * 2.0,
+            radius * 2.0,
+        )
+
+    def _range_marker_at(self, position: QPointF) -> int | None:
+        if not self._range_markers_enabled:
+            return None
+        hit_padding = max(3.0, self._range_marker_radius() * 0.65)
+        candidates = [
+            index
+            for index in (0, 1)
+            if self._range_marker_rect(index)
+            .adjusted(-hit_padding, -hit_padding, hit_padding, hit_padding)
+            .contains(position)
+        ]
+        if not candidates:
+            return None
+        if len(candidates) == 2:
+            shared_center_x = self._range_marker_rect(0).center().x()
+            return 0 if position.x() < shared_center_x else 1
+        return min(
+            candidates,
+            key=lambda index: abs(
+                position.x() - self._range_marker_rect(index).center().x()
+            ),
+        )
+
+    def _note_nearest_x(self, x_position: float) -> int:
+        width = max(1.0, float(self.width() - 1))
+        normalized_x = max(0.0, min(1.0, x_position / width))
+        return min(
+            self._note_center_ratios,
+            key=lambda note: abs(self._note_center_ratios[note] - normalized_x),
+        )
+
+    def _move_range_marker(self, marker_index: int, x_position: float) -> None:
+        if not self._range_markers_enabled:
+            return
+        low, high = self._range_marker_notes
+        note = self._note_nearest_x(x_position)
+        minimum_span = MIN_FIT_NOTE_RANGE_NOTES - 1
+        if marker_index == 0:
+            normalized = (min(note, high - minimum_span), high)
+        else:
+            normalized = (low, max(note, low + minimum_span))
+        if normalized == self._range_marker_notes:
+            return
+        self._range_marker_notes = normalized
+        self._update_range_marker_tooltip()
+        self.rangeMarkersChanged.emit(*normalized)
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            marker_index = self._range_marker_at(event.position())
+            if marker_index is not None:
+                self._dragged_range_marker = marker_index
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._dragged_range_marker is not None:
+            self._move_range_marker(
+                self._dragged_range_marker,
+                event.position().x(),
+            )
+            event.accept()
+            return
+        if self._range_marker_at(event.position()) is not None:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._dragged_range_marker is not None
+        ):
+            self._move_range_marker(
+                self._dragged_range_marker,
+                event.position().x(),
+            )
+            self._dragged_range_marker = None
+            if self._range_marker_at(event.position()) is None:
+                self.unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        if self._dragged_range_marker is None:
+            self.unsetCursor()
+        super().leaveEvent(event)
 
     def _note_is_used(self, note: int) -> bool:
         return (
@@ -1282,7 +1481,7 @@ class PianoKeyboardWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         width = max(1.0, float(self.width() - 1))
-        height = max(1.0, float(self.height() - 1))
+        height = self.keyboard_area_height
         painter.fillRect(self.rect(), self._surface)
         white_notes = self._white_notes
         white_width = width / len(white_notes)
@@ -1373,6 +1572,57 @@ class PianoKeyboardWidget(QWidget):
             )
             painter.drawRect(key_rect)
 
+        painter.setPen(QPen(self._border, 1.0))
+        painter.drawLine(QPointF(0.0, height), QPointF(width, height))
+
+        marker_y = self._range_marker_center_y()
+        marker_radius = self._range_marker_radius()
+        rail_color = QColor(self._border)
+        rail_color.setAlpha(185)
+        painter.setPen(
+            QPen(
+                rail_color,
+                max(1.0, marker_radius * 0.28),
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        painter.drawLine(
+            QPointF(marker_radius, marker_y),
+            QPointF(width - marker_radius, marker_y),
+        )
+
+        low_x = self._range_marker_x(self._range_marker_notes[0])
+        high_x = self._range_marker_x(self._range_marker_notes[1])
+        active_color = QColor(self._accent if self._range_markers_enabled else self._border)
+        active_border = QColor(
+            self._accent_border if self._range_markers_enabled else self._text
+        )
+        if not self._range_markers_enabled:
+            active_color.setAlpha(105)
+            active_border.setAlpha(125)
+        painter.setPen(
+            QPen(
+                active_color,
+                max(2.0, marker_radius * 0.48),
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        painter.drawLine(QPointF(low_x, marker_y), QPointF(high_x, marker_y))
+
+        for marker_index in (0, 1):
+            marker_rect = self._range_marker_rect(marker_index)
+            painter.setPen(QPen(active_border, max(1.0, marker_radius * 0.22)))
+            painter.setBrush(active_color)
+            painter.drawEllipse(marker_rect)
+            painter.setPen(QPen(active_border, max(1.0, marker_radius * 0.18)))
+            grip_half_height = marker_radius * 0.42
+            painter.drawLine(
+                QPointF(marker_rect.center().x(), marker_y - grip_half_height),
+                QPointF(marker_rect.center().x(), marker_y + grip_half_height),
+            )
+
         painter.end()
 
 
@@ -1396,7 +1646,7 @@ class _RhythmLaneFade:
 class FallingNotesWidget(QWidget):
     NOTE_MIN = PIANO_NOTE_MIN
     NOTE_MAX = PIANO_NOTE_MAX
-    BASE_HEIGHT = PianoKeyboardWidget.BASE_HEIGHT
+    BASE_HEIGHT = PianoKeyboardWidget.KEYBOARD_BASE_HEIGHT
     PREVIEW_SECONDS = 1.0
     IMPACT_DURATION_SECONDS = {
         "PERFECT": 0.24,

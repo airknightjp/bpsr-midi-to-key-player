@@ -97,6 +97,18 @@ class RealtimeMidiSoundOutputTests(unittest.TestCase):
 
         self.assertEqual(output.messages[:2], [(0x90, 62, 100), (0x80, 62, 0)])
 
+    def test_selected_note_range_is_applied_to_realtime_sound(self) -> None:
+        output = RecordingRealtimeMidiSoundOutput(
+            auto_fit_note_range=True,
+            fit_note_range=(60, 71),
+        )
+        output.set_enabled(True)
+
+        output.process_message(0x90, 0, 72, 100)
+        output.process_message(0x80, 0, 72, 0)
+
+        self.assertEqual(output.messages[:2], [(0x90, 60, 100), (0x80, 60, 0)])
+
     def test_repeat_prevention_suppresses_realtime_sound_and_consumes_note_off(self) -> None:
         output = RecordingRealtimeMidiSoundOutput(repeat_prevention=True)
         output.set_enabled(True)

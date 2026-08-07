@@ -8,6 +8,8 @@ BASE_NOTE_MIN = 48
 BASE_NOTE_MAX = 83
 PIANO_NOTE_MIN = 21
 PIANO_NOTE_MAX = 108
+MIN_FIT_NOTE_RANGE_NOTES = 12
+DEFAULT_FIT_NOTE_RANGE = (BASE_NOTE_MIN, BASE_NOTE_MAX)
 MIN_TRANSPOSE_SEMITONES = -12
 MAX_TRANSPOSE_SEMITONES = 12
 MIN_OCTAVE_SHIFT = -3
@@ -224,12 +226,42 @@ def midi_note_to_key(note: int, key_bindings: dict[int, str] | None = None) -> K
 
 def fit_note_to_base_range(note: int) -> int:
     """Move a MIDI note by octaves until it fits in C3-B5."""
-    fitted = int(note)
-    while fitted < BASE_NOTE_MIN:
-        fitted += 12
-    while fitted > BASE_NOTE_MAX:
-        fitted -= 12
+    fitted = fit_note_to_range(note, DEFAULT_FIT_NOTE_RANGE)
+    if fitted is None:
+        raise ValueError("The default note range must contain every pitch class")
     return fitted
+
+
+def normalize_fit_note_range(value: object) -> tuple[int, int]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return DEFAULT_FIT_NOTE_RANGE
+    try:
+        low, high = (int(value[0]), int(value[1]))
+    except (TypeError, ValueError):
+        return DEFAULT_FIT_NOTE_RANGE
+    low = max(PIANO_NOTE_MIN, min(PIANO_NOTE_MAX, low))
+    high = max(PIANO_NOTE_MIN, min(PIANO_NOTE_MAX, high))
+    if low > high:
+        low, high = high, low
+    minimum_span = MIN_FIT_NOTE_RANGE_NOTES - 1
+    if high - low < minimum_span:
+        high = min(PIANO_NOTE_MAX, low + minimum_span)
+        low = max(PIANO_NOTE_MIN, high - minimum_span)
+    return low, high
+
+
+def fit_note_to_range(
+    note: int,
+    note_range: object = DEFAULT_FIT_NOTE_RANGE,
+) -> int | None:
+    """Move a MIDI note by octaves until it fits in the selected range."""
+    low, high = normalize_fit_note_range(note_range)
+    fitted = int(note)
+    while fitted < low:
+        fitted += 12
+    while fitted > high:
+        fitted -= 12
+    return fitted if low <= fitted <= high else None
 
 
 def shift_midi_note(

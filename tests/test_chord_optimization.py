@@ -112,6 +112,22 @@ class ChordOptimizationTests(unittest.TestCase):
             [event.note % 12 for event in events],
         )
 
+    def test_auto_fit_optimization_uses_the_selected_range(self) -> None:
+        events = [note_on(0.0, note) for note in (24, 52, 79, 108)]
+
+        plan = build_chord_optimization_plan(
+            events,
+            auto_fit_note_range=True,
+            fit_note_range=(60, 83),
+        )
+        targets = planned_notes(plan, events)
+
+        self.assertTrue(all(60 <= target <= 83 for target in targets if target is not None))
+        self.assertEqual(
+            [target % 12 for target in targets if target is not None],
+            [event.note % 12 for event in events],
+        )
+
     def test_held_notes_prevent_an_external_range_change(self) -> None:
         first_on = note_on(0.0, 60)
         high_chord = [note_on(0.5, note) for note in (96, 100, 103)]

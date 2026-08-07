@@ -10,8 +10,8 @@ from unittest.mock import call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QImage, QKeyEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -664,7 +664,7 @@ class QtUiTests(unittest.TestCase):
         self.assertEqual(self.window.output_keyboard.active_notes, frozenset())
 
     def test_app_version_matches_documented_release_version(self) -> None:
-        self.assertEqual(qt_main_window.APP_VERSION, "1.9.0")
+        self.assertEqual(qt_main_window.APP_VERSION, "1.9.1")
         expected = f"v{qt_main_window.APP_VERSION}"
         project_root = Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -2352,24 +2352,79 @@ class QtUiTests(unittest.TestCase):
         self.controller._notify()
         self.application.processEvents()
 
-        self.assertEqual(self.window.midi_table.columnCount(), 3)
+        self.assertEqual(self.window.midi_table.columnCount(), 4)
         self.assertEqual(
             [
                 self.window.midi_table.horizontalHeaderItem(column).text()
-                for column in range(3)
+                for column in range(4)
             ],
-            ["Name", "Folder", "Duration"],
+            ["Name", "Folder", "Duration", "-"],
         )
         self.assertEqual(
             [
                 self.window.midi_table.item(0, column).text()
-                for column in range(3)
+                for column in range(4)
             ],
-            ["song", "Library > Album", "01:23"],
+            ["song", "Library > Album", "01:23", "-"],
         )
         self.assertEqual(
             self.window.midi_table.item(0, 1).toolTip(),
             "Library > Album",
+        )
+        self.assertEqual(
+            self.window.midi_table.horizontalHeaderItem(3).textAlignment(),
+            int(Qt.AlignmentFlag.AlignCenter),
+        )
+
+    def test_midi_individual_settings_column_and_context_actions(self) -> None:
+        path = Path("song.mid")
+        self.controller.midi_files = [path]
+        self.controller.state.selected_midi_index = 0
+        self.controller.state.midi_rows = [
+            MidiListRow(
+                path=path,
+                name=path.name,
+                has_individual_settings=True,
+            )
+        ]
+        self.controller._notify()
+        self.application.processEvents()
+
+        self.assertEqual(
+            self.window.midi_table.contextMenuPolicy(),
+            Qt.ContextMenuPolicy.CustomContextMenu,
+        )
+        self.assertEqual(self.window.midi_table.item(0, 3).text(), "\u25cb")
+        with (
+            patch.object(
+                self.controller,
+                "save_selected_midi_individual_settings",
+            ) as save_settings,
+            patch.object(
+                self.controller,
+                "delete_selected_midi_individual_settings",
+            ) as delete_settings,
+        ):
+            menu = self.window._build_midi_context_menu(0)
+            actions = menu.actions()
+            self.assertEqual(
+                [action.text() for action in actions],
+                ["Save individual settings", "Delete individual settings"],
+            )
+            self.assertTrue(actions[1].isEnabled())
+            actions[0].trigger()
+            actions[1].trigger()
+            save_settings.assert_called_once_with()
+            delete_settings.assert_called_once_with()
+
+        self.controller.state.midi_rows = [
+            MidiListRow(path=path, name=path.name)
+        ]
+        self.controller._notify()
+        self.application.processEvents()
+        self.assertEqual(self.window.midi_table.item(0, 3).text(), "-")
+        self.assertFalse(
+            self.window._build_midi_context_menu(0).actions()[1].isEnabled()
         )
 
     def test_midi_list_updates_only_the_changed_row(self) -> None:
@@ -2481,7 +2536,11 @@ class QtUiTests(unittest.TestCase):
             QHeaderView.ResizeMode.Fixed,
         )
         self.assertEqual(
-            header.sectionViewportPosition(2) + header.sectionSize(2),
+            header.sectionResizeMode(3),
+            QHeaderView.ResizeMode.Fixed,
+        )
+        self.assertEqual(
+            header.sectionViewportPosition(3) + header.sectionSize(3),
             header.viewport().width(),
         )
 
@@ -2561,7 +2620,7 @@ class QtUiTests(unittest.TestCase):
             duration_width,
         )
         self.assertEqual(
-            header.sectionViewportPosition(2) + header.sectionSize(2),
+            header.sectionViewportPosition(3) + header.sectionSize(3),
             header.viewport().width(),
         )
 
@@ -3778,7 +3837,7 @@ class QtUiTests(unittest.TestCase):
             ),
             52,
         )
-        self.assertEqual(self.window.output_keyboard.height(), 57)
+        self.assertEqual(self.window.output_keyboard.height(), 71)
         self.assertEqual(
             self.window.output_keyboard.width(),
             self.window.settings_lower_panel.width() - 14,
@@ -3786,21 +3845,108 @@ class QtUiTests(unittest.TestCase):
 
         self.controller.set_option("ui_scale_percent", 200)
         self.application.processEvents()
-        self.assertEqual(self.window.output_keyboard.height(), 114)
+        self.assertEqual(self.window.output_keyboard.height(), 142)
         self.assertEqual(
             self.window.output_keyboard.width(),
             self.window.settings_lower_panel.width() - 28,
         )
 
+    def test_full_keyboard_range_markers_start_at_the_current_three_octaves(self) -> None:
+        keyboard = self.window.output_keyboard
+
+        self.assertEqual(keyboard.range_marker_notes, (48, 83))
+        self.assertFalse(keyboard.range_markers_enabled)
+        self.assertEqual(keyboard.toolTip(), "C3 - B5")
+        self.assertGreaterEqual(
+            keyboard._range_marker_rect(0).top(),
+            keyboard.keyboard_area_height,
+        )
+
+        keyboard.set_range_marker_notes((50, 81))
+
+        self.assertEqual(keyboard.range_marker_notes, (50, 81))
+        self.assertEqual(keyboard.toolTip(), "D3 - A5")
+
+    def test_full_keyboard_range_markers_drag_with_a_twelve_note_minimum(self) -> None:
+        keyboard = self.window.output_keyboard
+        self.controller.set_option("auto_fit_note_range", True)
+        self.application.processEvents()
+        keyboard.resize(1040, keyboard.height())
+        keyboard.show()
+        self.application.processEvents()
+        changed: list[tuple[int, int]] = []
+        keyboard.rangeMarkersChanged.connect(
+            lambda low, high: changed.append((low, high))
+        )
+
+        low_marker = keyboard._range_marker_rect(0).center().toPoint()
+        target_x = round(keyboard._range_marker_x(52))
+        QTest.mousePress(
+            keyboard,
+            Qt.MouseButton.LeftButton,
+            pos=low_marker,
+        )
+        QTest.mouseMove(
+            keyboard,
+            QPoint(target_x, low_marker.y()),
+        )
+        QTest.mouseRelease(
+            keyboard,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(target_x, low_marker.y()),
+        )
+
+        self.assertEqual(keyboard.range_marker_notes, (52, 83))
+        self.assertEqual(changed[-1], (52, 83))
+        self.assertEqual(self.controller.state.fit_note_range, (52, 83))
+
+        keyboard._move_range_marker(0, keyboard.width())
+        self.assertEqual(keyboard.range_marker_notes, (72, 83))
+
+        keyboard.set_range_marker_notes((48, 83))
+        keyboard._move_range_marker(1, 0)
+        self.assertEqual(keyboard.range_marker_notes, (48, 59))
+
+    def test_range_markers_are_disabled_with_the_fit_option(self) -> None:
+        keyboard = self.window.output_keyboard
+        keyboard.resize(1040, keyboard.height())
+        keyboard.show()
+        self.application.processEvents()
+        marker_center = keyboard._range_marker_rect(0).center()
+
+        self.assertIsNone(keyboard._range_marker_at(marker_center))
+        keyboard._move_range_marker(0, keyboard.width())
+        self.assertEqual(keyboard.range_marker_notes, (48, 83))
+
+        self.controller.set_option("auto_fit_note_range", True)
+        self.application.processEvents()
+        marker_center = keyboard._range_marker_rect(0).center()
+        keyboard.mouseMoveEvent(
+            QMouseEvent(
+                QEvent.Type.MouseMove,
+                marker_center,
+                QPointF(keyboard.mapToGlobal(marker_center.toPoint())),
+                Qt.MouseButton.NoButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+
+        self.assertTrue(keyboard.range_markers_enabled)
+        self.assertEqual(keyboard.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        self.assertEqual(keyboard.used_note_range, (48, 83))
+
     def test_piano_roll_panel_matches_the_keyboard_panel(self) -> None:
         self.window.show()
         self.application.processEvents()
 
-        self.assertEqual(
-            self.window.piano_roll_panel.size(),
-            self.window.settings_lower_panel.size(),
-        )
         self.assertEqual(self.window.piano_roll.height(), 57)
+        self.assertEqual(self.window.output_keyboard.height(), 71)
+        self.assertEqual(
+            self.window.settings_lower_panel.height()
+            - self.window.piano_roll_panel.height(),
+            14,
+        )
         self.assertEqual(
             self.window.piano_roll.width(),
             self.window.output_keyboard.width(),
@@ -3812,11 +3958,13 @@ class QtUiTests(unittest.TestCase):
 
         self.controller.set_option("ui_scale_percent", 200)
         self.application.processEvents()
-        self.assertEqual(
-            self.window.piano_roll_panel.size(),
-            self.window.settings_lower_panel.size(),
-        )
         self.assertEqual(self.window.piano_roll.height(), 114)
+        self.assertEqual(self.window.output_keyboard.height(), 142)
+        self.assertEqual(
+            self.window.settings_lower_panel.height()
+            - self.window.piano_roll_panel.height(),
+            28,
+        )
         self.assertEqual(
             self.window.piano_roll.width(),
             self.window.output_keyboard.width(),
@@ -4303,11 +4451,11 @@ class QtUiTests(unittest.TestCase):
                 float(roll.height() - 1),
             )
 
-    def test_keyboard_panel_uses_reduced_height_and_full_settings_width(self) -> None:
+    def test_keyboard_panel_includes_range_markers_and_uses_full_settings_width(self) -> None:
         self.window.show()
         self.application.processEvents()
 
-        self.assertEqual(self.window.settings_lower_panel.height(), 71)
+        self.assertEqual(self.window.settings_lower_panel.height(), 85)
         self.assertEqual(
             self.window.settings_lower_panel.width(),
             self.window.settings_panel.width(),
@@ -4320,7 +4468,7 @@ class QtUiTests(unittest.TestCase):
 
         self.controller.set_option("ui_scale_percent", 200)
         self.application.processEvents()
-        self.assertEqual(self.window.settings_lower_panel.height(), 142)
+        self.assertEqual(self.window.settings_lower_panel.height(), 170)
         self.assertEqual(
             self.window.settings_lower_panel.width(),
             self.window.settings_panel.width(),
@@ -4377,14 +4525,14 @@ class QtUiTests(unittest.TestCase):
         self.controller.state.auto_fit_note_range = True
         self.controller._notify()
 
-        self.assertEqual(self.window.output_keyboard.used_note_range, (48, 72))
-        self.assertEqual(self.window.piano_roll.used_note_range, (48, 72))
+        self.assertEqual(self.window.output_keyboard.used_note_range, (48, 83))
+        self.assertEqual(self.window.piano_roll.used_note_range, (48, 83))
 
         self.controller.set_option("transpose_semitones", 2)
         self.application.processEvents()
 
-        self.assertEqual(self.window.output_keyboard.used_note_range, (50, 74))
-        self.assertEqual(self.window.piano_roll.used_note_range, (50, 74))
+        self.assertEqual(self.window.output_keyboard.used_note_range, (48, 83))
+        self.assertEqual(self.window.piano_roll.used_note_range, (48, 83))
 
     def test_unused_final_output_range_is_visually_dimmed(self) -> None:
         keyboard = PianoKeyboardWidget()
@@ -4558,7 +4706,7 @@ class QtUiTests(unittest.TestCase):
         white_width = (keyboard.width() - 1) / len(white_notes)
         for note in notes:
             x = round((white_notes.index(note) + 0.5) * white_width)
-            y = keyboard.height() - 8
+            y = round(keyboard.keyboard_area_height) - 8
             self.assertNotEqual(
                 released.pixelColor(x, y),
                 held.pixelColor(x, y),

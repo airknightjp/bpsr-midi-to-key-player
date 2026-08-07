@@ -77,6 +77,21 @@ class RecordingShortMessageSoundPlayer(MidiSoundPlayer):
 
 
 class MidiSwitchTests(unittest.TestCase):
+    def test_sound_player_folds_notes_into_selected_range(self) -> None:
+        player = RecordingShortMessageSoundPlayer(
+            auto_fit_note_range=True,
+            fit_note_range=(60, 71),
+        )
+
+        player._handle_event(
+            MidiEvent(0.0, "note_on", channel=0, note=72, velocity=80, track=0)
+        )
+        player._handle_event(
+            MidiEvent(0.5, "note_off", channel=0, note=72, velocity=0, track=0)
+        )
+
+        self.assertEqual(player.messages[:2], [(0x90, 60, 80), (0x80, 60, 0)])
+
     def test_sound_player_reports_track_channel_for_output_notes(self) -> None:
         source_events: list[tuple[int, int, int, bool]] = []
         player = RecordingShortMessageSoundPlayer(

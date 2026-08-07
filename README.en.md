@@ -41,8 +41,9 @@ The `_internal` folder contains files required by the application. Do not move t
 - Adjust the volume slider, mute state, playback position, and playback speed (10-200%). Double-click the speed knob to reset it to 100%.
 - Adjust UI scale (100-200%) and window opacity from the View menu.
 - Adjust transpose (-12 to +12 semitones) and octave shift (-3 to +3) above the player. Double-click either knob to reset it to 0.
-- Optionally fit notes into the C3-B5 three-octave range.
-- Handle notes outside C3-B5 with octave-switch keys when range fitting is disabled.
+- Set the target fitting range from A0-C8 with the two markers below the keyboard. The minimum width is 12 notes.
+- Enable `Fit to selected range` to move out-of-range notes by octaves into the selected range.
+- Right-click a MIDI name to save or delete per-song detailed options, speed, transpose, octave shift, selected range, and track/channel states. A saved song is marked with `○` in the list.
 - Configure timing variation, chord spread, chord revoicing, and automatic sustain generation.
 - Configure rapid-repeat prevention.
 - Display used track/channel combinations as circular buttons in `11` format.
@@ -68,7 +69,7 @@ The `_internal` folder contains files required by the application. Do not move t
 - Choose from multiple color themes, including Sky Blue. Sky Blue is the default for new settings.
 - Save always-on-top, window size including enlarged layouts, and the last loaded MIDI folder.
 - Reorder the five main panels by drag and drop and show or hide them from the View menu.
-- `Analysis beta` remains unavailable in v1.9.0 while its internal workflow is being finalized.
+- `Analysis beta` remains unavailable in v1.9.1 while its internal workflow is being finalized.
 - Support `[Close] to tray`.
 - Prevent duplicate instances.
 - Check, download, verify, install, and restart updates through GitHub Releases.
@@ -132,7 +133,8 @@ The base BPSR keyboard range is C3-B5.
 - Notes in C3-B5 are played directly.
 - Lower notes can be played by switching to the low octave range.
 - Higher notes can be played by switching to the high octave range.
-- When `Fit to 3 octaves` is enabled, notes outside C3-B5 are moved by octaves until they fit inside C3-B5.
+- When `Fit to selected range` is enabled, notes outside the range selected by the two markers below the keyboard are moved by octaves into that range.
+- The range can be adjusted within A0-C8, keeps a minimum width of 12 notes, and defaults to C3-B5.
 
 Transpose and octave shift apply to MIDI file keyboard conversion, realtime input conversion, MIDI sound playback, and realtime preview sound. Range fitting or normal out-of-range handling is applied after the pitch shift.
 
@@ -141,7 +143,7 @@ Transpose and octave shift apply to MIDI file keyboard conversion, realtime inpu
 When `Chord revoicing` is enabled, notes starting within approximately 35 ms are analyzed as a chord and moved by octaves into a playable layout.
 
 - The top voice, bass, common tones, voice order, and smooth movement between adjacent chords are considered while excessive spacing, physical-key collisions, and frequent range switches are discouraged.
-- With `Fit to 3 octaves` enabled, the result stays inside C3-B5. Otherwise, low, normal, and high ranges are compared and range-switch keys are used only where needed.
+- With `Fit to selected range` enabled, the result stays inside the selected range. Otherwise, low, normal, and high ranges are compared and range-switch keys are used only where needed.
 - Available switching time is evaluated using the current playback speed, allowing a wider range at slower speeds and discouraging frequent switches at faster speeds.
 - This applies to MIDI-file keyboard conversion and MIDI sound playback, not realtime input conversion.
 
@@ -218,7 +220,7 @@ Normal setting changes are saved together when the application exits. Use `File 
 
 ## Version
 
-v1.9.0
+v1.9.1
 
 ## Copyright
 

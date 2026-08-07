@@ -7,7 +7,13 @@ from dataclasses import dataclass
 
 from auto_sustain import AUTO_SUSTAIN_EVENT_KIND, plan_auto_sustain
 from chord_optimization import ChordOptimizationPlan
-from config import PIANO_NOTE_MAX, PIANO_NOTE_MIN, fit_note_to_base_range, shift_midi_note
+from config import (
+    DEFAULT_FIT_NOTE_RANGE,
+    PIANO_NOTE_MAX,
+    PIANO_NOTE_MIN,
+    fit_note_to_range,
+    shift_midi_note,
+)
 from midi_parser import MidiEvent
 from playback_timing import PlaybackTimeline, prepare_playback_events
 from repeat_guard import RAPID_REPEAT_MIN_INTERVAL_SECONDS
@@ -27,6 +33,7 @@ def build_output_note_range(
     enabled_sources: set[tuple[int, int]] | None = None,
     enabled_channels: set[int] | None = None,
     auto_fit_note_range: bool = False,
+    fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
     transpose_semitones: int = 0,
     octave_shift: int = 0,
     chord_optimization_plan: ChordOptimizationPlan | None = None,
@@ -43,6 +50,7 @@ def build_output_note_range(
         note = _visual_note(
             event,
             auto_fit_note_range=auto_fit_note_range,
+            fit_note_range=fit_note_range,
             transpose_semitones=transpose_semitones,
             octave_shift=octave_shift,
             chord_optimization_plan=chord_optimization_plan,
@@ -60,6 +68,7 @@ def build_piano_roll_notes(
     enabled_sources: set[tuple[int, int]] | None = None,
     enabled_channels: set[int] | None = None,
     auto_fit_note_range: bool = False,
+    fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
     transpose_semitones: int = 0,
     octave_shift: int = 0,
     chord_optimization_plan: ChordOptimizationPlan | None = None,
@@ -131,6 +140,7 @@ def build_piano_roll_notes(
             note = _visual_note(
                 event,
                 auto_fit_note_range=auto_fit_note_range,
+                fit_note_range=fit_note_range,
                 transpose_semitones=transpose_semitones,
                 octave_shift=octave_shift,
                 chord_optimization_plan=chord_optimization_plan,
@@ -271,6 +281,7 @@ def _visual_note(
     event: MidiEvent,
     *,
     auto_fit_note_range: bool,
+    fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
     transpose_semitones: int,
     octave_shift: int,
     chord_optimization_plan: ChordOptimizationPlan | None = None,
@@ -287,5 +298,7 @@ def _visual_note(
     if shifted is None:
         return None
     if auto_fit_note_range:
-        shifted = fit_note_to_base_range(shifted)
+        shifted = fit_note_to_range(shifted, fit_note_range)
+        if shifted is None:
+            return None
     return shifted if PIANO_NOTE_MIN <= shifted <= PIANO_NOTE_MAX else None

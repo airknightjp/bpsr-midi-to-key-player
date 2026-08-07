@@ -9,6 +9,7 @@ from ctypes import wintypes
 
 from auto_sustain import RealtimeAutoSustain
 from config import (
+    DEFAULT_FIT_NOTE_RANGE,
     MAX_OCTAVE_SHIFT,
     MAX_TRANSPOSE_SEMITONES,
     MIN_OCTAVE_SHIFT,
@@ -17,9 +18,10 @@ from config import (
     OCTAVE_SWITCH_SETTLE_SECONDS,
     OCTAVE_UP_KEY,
     SUSTAIN_KEY,
-    fit_note_to_base_range,
+    fit_note_to_range,
     midi_note_to_key,
     normalized_key_bindings,
+    normalize_fit_note_range,
     shift_midi_note,
 )
 from keyboard_output import KeyboardOutput
@@ -84,6 +86,7 @@ class MidiInputKeyboardBridge:
         on_output_note: OutputNoteCallback | None = None,
         on_output_source_note: OutputSourceNoteCallback | None = None,
         auto_fit_note_range: bool = False,
+        fit_note_range: object = DEFAULT_FIT_NOTE_RANGE,
         transpose_semitones: int = 0,
         octave_shift: int = 0,
         auto_sustain: bool = False,
@@ -105,6 +108,7 @@ class MidiInputKeyboardBridge:
             or (lambda _note, _track, _channel, _pressed: None)
         )
         self.auto_fit_note_range = auto_fit_note_range
+        self.fit_note_range = normalize_fit_note_range(fit_note_range)
         self.transpose_semitones = max(
             MIN_TRANSPOSE_SEMITONES,
             min(MAX_TRANSPOSE_SEMITONES, int(transpose_semitones)),
@@ -219,6 +223,20 @@ class MidiInputKeyboardBridge:
             self._auto_sustain_channels.clear()
             self._reset_repeat_state()
             self.auto_fit_note_range = bool(enabled)
+
+    def set_fit_note_range(self, note_range: object) -> None:
+        normalized = normalize_fit_note_range(note_range)
+        with self._lock:
+            if self.fit_note_range == normalized:
+                return
+            self._release_active_note_keys()
+            self.output.release_all()
+            self._auto_sustain_controller.reset()
+            self._sustain_channels.clear()
+            self._manual_sustain_channels.clear()
+            self._auto_sustain_channels.clear()
+            self._reset_repeat_state()
+            self.fit_note_range = normalized
 
     def set_note_shift(self, transpose_semitones: int, octave_shift: int) -> None:
         transpose_semitones = max(
@@ -450,10 +468,11 @@ class MidiInputKeyboardBridge:
                 self.note_octave_shift,
             )
             auto_fit_note_range = self.auto_fit_note_range
+            fit_note_range = self.fit_note_range
         if shifted_note is None:
             return None
         if auto_fit_note_range:
-            return fit_note_to_base_range(shifted_note)
+            return fit_note_to_range(shifted_note, fit_note_range)
         return shifted_note
 
     def _move_to_octave_shift(self, target_shift: int) -> None:

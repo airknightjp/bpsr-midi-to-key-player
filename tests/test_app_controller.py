@@ -1562,7 +1562,12 @@ class AppControllerTests(unittest.TestCase):
             (
                 "auto_fit_note_range",
                 "set_auto_fit_note_range",
-                ("player", "sound_player", "midi_input_bridge"),
+                (
+                    "player",
+                    "sound_player",
+                    "midi_input_bridge",
+                    "realtime_sound_output",
+                ),
             ),
             (
                 "repeat_prevention",
@@ -1616,6 +1621,23 @@ class AppControllerTests(unittest.TestCase):
                 for target_name in target_names:
                     method = getattr(getattr(controller, target_name), method_name)
                     method.assert_called_once_with(True)
+
+    def test_selected_fit_range_is_persistent_and_updates_all_active_outputs(self) -> None:
+        controller = self.make_controller()
+        targets = [MagicMock(), MagicMock(), MagicMock(), MagicMock()]
+        (
+            controller.player,
+            controller.sound_player,
+            controller.midi_input_bridge,
+            controller.realtime_sound_output,
+        ) = targets
+
+        controller.set_option("fit_note_range", (65, 65))
+
+        self.assertEqual(controller.state.fit_note_range, (65, 76))
+        self.assertEqual(controller.current_settings().fit_note_range, (65, 76))
+        for target in targets:
+            target.set_fit_note_range.assert_called_once_with((65, 76))
 
     def test_play_sound_updates_realtime_preview_without_disabling_key_output(
         self,
@@ -2710,6 +2732,92 @@ class AppControllerTests(unittest.TestCase):
         controller.stop_midi_input()
 
         self.assertEqual(controller.state.active_output_notes, frozenset())
+
+    def test_midi_individual_settings_apply_on_selection_and_delete_to_normal(
+        self,
+    ) -> None:
+        controller = self.make_controller()
+        root = Path(controller.database.path).parent
+        first_path = root / "first.mid"
+        second_path = root / "second.mid"
+        for path in (first_path, second_path):
+            path.write_bytes(b"midi")
+            stat = path.stat()
+            controller.database.save_midi_metadata(
+                path,
+                (stat.st_size, stat.st_mtime_ns),
+                MidiSummary(
+                    path=path,
+                    duration=1.0,
+                    channels=(0, 1),
+                    event_count=2,
+                ),
+            )
+        controller.midi_files = [first_path, second_path]
+        controller.state.midi_rows = [
+            app_controller.MidiListRow(first_path, first_path.name),
+            app_controller.MidiListRow(second_path, second_path.name),
+        ]
+
+        def load_midi(path: Path, *, stop_playback: bool) -> bool:
+            del stop_playback
+            controller.summary = MidiSummary(
+                path=path,
+                duration=1.0,
+                channels=(0, 1),
+                event_count=2,
+                tracks=(
+                    MidiTrackSummary(index=0, channels=(0, 1)),
+                ),
+            )
+            controller._set_track_channels(controller.summary)
+            return True
+
+        controller._load_midi_file = MagicMock(side_effect=load_midi)
+        controller.select_midi(0)
+        controller.set_option("play_sound", False)
+        controller.set_option("playback_speed_percent", 140)
+        controller.set_option("transpose_semitones", 4)
+        controller.set_option("octave_shift", 1)
+        controller.set_option("fit_note_range", (40, 76))
+        controller.toggle_track_channel(0, 1)
+
+        self.assertTrue(controller.save_selected_midi_individual_settings())
+        self.assertTrue(controller.state.midi_rows[0].has_individual_settings)
+        controller._midi_individual_settings = (
+            controller.database.load_midi_individual_settings(
+                (first_path, second_path)
+            )
+        )
+
+        controller.select_midi(1)
+        controller.set_option("play_sound", True)
+        controller.set_option("playback_speed_percent", 90)
+        controller.set_option("transpose_semitones", 1)
+        controller.set_option("octave_shift", 0)
+        controller.set_option("fit_note_range", (48, 83))
+        controller.select_midi(0)
+
+        self.assertFalse(controller.state.play_sound)
+        self.assertEqual(controller.state.playback_speed_percent, 140)
+        self.assertEqual(controller.state.transpose_semitones, 4)
+        self.assertEqual(controller.state.octave_shift, 1)
+        self.assertEqual(controller.state.fit_note_range, (40, 76))
+        self.assertEqual(
+            [item.enabled for item in controller.state.track_channels],
+            [True, False],
+        )
+        self.assertEqual(controller.current_settings().playback_speed_percent, 90)
+        self.assertEqual(controller.current_settings().fit_note_range, (48, 83))
+
+        self.assertTrue(controller.delete_selected_midi_individual_settings())
+        self.assertFalse(controller.state.midi_rows[0].has_individual_settings)
+        self.assertTrue(controller.state.play_sound)
+        self.assertEqual(controller.state.playback_speed_percent, 90)
+        self.assertEqual(controller.state.transpose_semitones, 1)
+        self.assertEqual(controller.state.octave_shift, 0)
+        self.assertEqual(controller.state.fit_note_range, (48, 83))
+        self.assertTrue(all(item.enabled for item in controller.state.track_channels))
 
 if __name__ == "__main__":
     unittest.main()

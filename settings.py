@@ -7,6 +7,7 @@ from pathlib import Path
 from app_database import ApplicationDatabase, DATABASE_FILE_NAME
 from config import (
     DEFAULT_COUNTDOWN_SECONDS,
+    DEFAULT_FIT_NOTE_RANGE,
     DEFAULT_INPUT_CONVERSION_MODE,
     DEFAULT_KEY_BINDINGS,
     DEFAULT_KEYBOARD_PAUSE_SHORTCUT,
@@ -23,6 +24,7 @@ from config import (
     normalized_key_bindings,
     normalize_special_binding,
     normalize_input_conversion_mode,
+    normalize_fit_note_range,
     normalize_midi_column_widths,
     normalize_panel_order,
     normalize_section_visibility,
@@ -60,6 +62,7 @@ class AppSettings:
     countdown_sound: bool = False
     game_countdown_sound: bool = False
     auto_fit_note_range: bool = False
+    fit_note_range: tuple[int, int] = DEFAULT_FIT_NOTE_RANGE
     transpose_semitones: int = 0
     octave_shift: int = 0
     humanize_timing: bool = False
@@ -161,6 +164,7 @@ def load_settings() -> AppSettings:
         countdown_sound=_parse_bool(data.get("countdown_sound"), default=False),
         game_countdown_sound=_parse_bool(data.get("game_countdown_sound"), default=False),
         auto_fit_note_range=_parse_bool(data.get("auto_fit_note_range"), default=False),
+        fit_note_range=normalize_fit_note_range(data.get("fit_note_range")),
         transpose_semitones=_clamp_int(
             data.get("transpose_semitones"),
             minimum=MIN_TRANSPOSE_SEMITONES,
@@ -267,6 +271,7 @@ def save_settings(settings: AppSettings) -> None:
         "countdown_sound": settings.countdown_sound,
         "game_countdown_sound": settings.game_countdown_sound,
         "auto_fit_note_range": settings.auto_fit_note_range,
+        "fit_note_range": list(normalize_fit_note_range(settings.fit_note_range)),
         "transpose_semitones": settings.transpose_semitones,
         "octave_shift": settings.octave_shift,
         "humanize_timing": settings.humanize_timing,
