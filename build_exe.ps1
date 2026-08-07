@@ -40,73 +40,89 @@ $env:PYTHONPATH = (Resolve-Path ".build_deps").Path
 $OutputDir = "dist\BPSR_MIDI_to_KEY_Player"
 $OutputExe = Join-Path $OutputDir "BPSR_MIDI_to_KEY_Player.exe"
 $OutputReadme = Join-Path $OutputDir "readme.txt"
+$OutputDatabase = Join-Path $OutputDir "bpsr_midi_to_key_player.db"
 $LegacySingleFileExe = "dist\BPSR_MIDI_to_KEY_Player.exe"
-if (Test-Path $OutputDir) {
-    Remove-Item -LiteralPath $OutputDir -Recurse -Force
+$DatabaseBackup = $null
+if (Test-Path -LiteralPath $OutputDatabase) {
+    $DatabaseBackup = [System.IO.Path]::GetTempFileName()
+    Copy-Item -LiteralPath $OutputDatabase -Destination $DatabaseBackup -Force
 }
-if (Test-Path $LegacySingleFileExe) {
-    Remove-Item -LiteralPath $LegacySingleFileExe -Force
-}
-
-$ArgsList = @(
-    "--noconfirm",
-    "--clean",
-    "--onedir",
-    "--contents-directory",
-    "_internal",
-    "--windowed",
-    "--icon",
-    "assets\app_icon_whale.ico",
-    "--add-data",
-    "assets\app_icon_whale.ico;assets",
-    "--add-data",
-    "assets\app_icon_whale.png;assets",
-    "--add-data",
-    "assets\whale_slider_frame_0.png;assets",
-    "--add-data",
-    "assets\whale_slider_frame_1.png;assets",
-    "--add-data",
-    "assets\whale_slider_frame_2.png;assets",
-    "--add-data",
-    "assets\check_white.svg;assets",
-    "--name",
-    "BPSR_MIDI_to_KEY_Player",
-    "main.py"
-)
-
-& $Python -c "import sys; from PyInstaller.__main__ import run; run(sys.argv[1:])" @ArgsList
-
-$SpecPath = "BPSR_MIDI_to_KEY_Player.spec"
-if (Test-Path $SpecPath) {
-    $SpecContent = [System.IO.File]::ReadAllText($SpecPath).Replace("`r`n", "`n")
-    $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($SpecPath, $SpecContent, $Utf8NoBom)
-}
-
-if (-not (Test-Path $OutputExe)) {
-    throw "Build failed: $OutputExe was not created."
-}
-
-$UnusedRuntimePaths = @(
-    (Join-Path $OutputDir "_internal\PySide6\QtMultimediaWidgets.pyd"),
-    (Join-Path $OutputDir "_internal\PySide6\plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll"),
-    (Join-Path $OutputDir "_internal\Qt6MultimediaWidgets.dll"),
-    (Join-Path $OutputDir "_internal\Qt6VirtualKeyboard.dll"),
-    (Join-Path $OutputDir "_internal\Qt6Quick.dll"),
-    (Join-Path $OutputDir "_internal\Qt6Qml.dll"),
-    (Join-Path $OutputDir "_internal\Qt6QmlMeta.dll"),
-    (Join-Path $OutputDir "_internal\Qt6QmlModels.dll"),
-    (Join-Path $OutputDir "_internal\Qt6QmlWorkerScript.dll")
-)
-foreach ($UnusedRuntimePath in $UnusedRuntimePaths) {
-    if (Test-Path -LiteralPath $UnusedRuntimePath) {
-        Remove-Item -LiteralPath $UnusedRuntimePath -Force
+try {
+    if (Test-Path $OutputDir) {
+        Remove-Item -LiteralPath $OutputDir -Recurse -Force
     }
-}
+    if (Test-Path $LegacySingleFileExe) {
+        Remove-Item -LiteralPath $LegacySingleFileExe -Force
+    }
 
-Copy-Item -LiteralPath "readme.txt" -Destination $OutputReadme -Force
-if (-not (Test-Path $OutputReadme)) {
-    throw "Build failed: $OutputReadme was not created."
+    $ArgsList = @(
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--contents-directory",
+        "_internal",
+        "--windowed",
+        "--icon",
+        "assets\app_icon_whale.ico",
+        "--add-data",
+        "assets\app_icon_whale.ico;assets",
+        "--add-data",
+        "assets\app_icon_whale.png;assets",
+        "--add-data",
+        "assets\whale_slider_frame_0.png;assets",
+        "--add-data",
+        "assets\whale_slider_frame_1.png;assets",
+        "--add-data",
+        "assets\whale_slider_frame_2.png;assets",
+        "--add-data",
+        "assets\check_white.svg;assets",
+        "--name",
+        "BPSR_MIDI_to_KEY_Player",
+        "main.py"
+    )
+
+    & $Python -c "import sys; from PyInstaller.__main__ import run; run(sys.argv[1:])" @ArgsList
+
+    $SpecPath = "BPSR_MIDI_to_KEY_Player.spec"
+    if (Test-Path $SpecPath) {
+        $SpecContent = [System.IO.File]::ReadAllText($SpecPath).Replace("`r`n", "`n")
+        $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($SpecPath, $SpecContent, $Utf8NoBom)
+    }
+
+    if (-not (Test-Path $OutputExe)) {
+        throw "Build failed: $OutputExe was not created."
+    }
+
+    $UnusedRuntimePaths = @(
+        (Join-Path $OutputDir "_internal\PySide6\QtMultimediaWidgets.pyd"),
+        (Join-Path $OutputDir "_internal\PySide6\plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll"),
+        (Join-Path $OutputDir "_internal\Qt6MultimediaWidgets.dll"),
+        (Join-Path $OutputDir "_internal\Qt6VirtualKeyboard.dll"),
+        (Join-Path $OutputDir "_internal\Qt6Quick.dll"),
+        (Join-Path $OutputDir "_internal\Qt6Qml.dll"),
+        (Join-Path $OutputDir "_internal\Qt6QmlMeta.dll"),
+        (Join-Path $OutputDir "_internal\Qt6QmlModels.dll"),
+        (Join-Path $OutputDir "_internal\Qt6QmlWorkerScript.dll")
+    )
+    foreach ($UnusedRuntimePath in $UnusedRuntimePaths) {
+        if (Test-Path -LiteralPath $UnusedRuntimePath) {
+            Remove-Item -LiteralPath $UnusedRuntimePath -Force
+        }
+    }
+
+    Copy-Item -LiteralPath "readme.txt" -Destination $OutputReadme -Force
+    if (-not (Test-Path $OutputReadme)) {
+        throw "Build failed: $OutputReadme was not created."
+    }
+} finally {
+    if ($DatabaseBackup -and (Test-Path -LiteralPath $DatabaseBackup)) {
+        if (-not (Test-Path -LiteralPath $OutputDir)) {
+            New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $DatabaseBackup -Destination $OutputDatabase -Force
+        Remove-Item -LiteralPath $DatabaseBackup -Force
+    }
 }
 
 Write-Host ""

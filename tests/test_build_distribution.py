@@ -42,6 +42,21 @@ class BuildDistributionTests(unittest.TestCase):
         self.assertNotIn('"assets\\fonts;assets\\fonts"', self.script)
         self.assertFalse((self.project_root / "assets" / "fonts").exists())
 
+    def test_build_preserves_the_existing_application_database(self) -> None:
+        self.assertIn(
+            '$OutputDatabase = Join-Path $OutputDir "bpsr_midi_to_key_player.db"',
+            self.script,
+        )
+        self.assertIn(
+            "Copy-Item -LiteralPath $OutputDatabase -Destination $DatabaseBackup -Force",
+            self.script,
+        )
+        self.assertIn(
+            "Copy-Item -LiteralPath $DatabaseBackup -Destination $OutputDatabase -Force",
+            self.script,
+        )
+        self.assertIn("} finally {", self.script)
+
     def test_build_removes_unused_qml_and_widget_runtimes(self) -> None:
         for name in (
             "QtMultimediaWidgets.pyd",

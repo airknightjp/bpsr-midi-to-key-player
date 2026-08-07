@@ -27,9 +27,9 @@ class AutoSustainPlanTests(unittest.TestCase):
 
         self.assertEqual([event.value for event in pedal], [127, 0, 127, 0])
         self.assertAlmostEqual(pedal[0].time, 0.075)
-        self.assertAlmostEqual(pedal[1].time, 0.775)
+        self.assertAlmostEqual(pedal[1].time, 0.675)
         self.assertAlmostEqual(pedal[2].time, 0.875)
-        self.assertAlmostEqual(pedal[3].time, 1.55)
+        self.assertAlmostEqual(pedal[3].time, 1.38)
 
     def test_plan_keeps_pedal_for_a_repeated_pitch(self) -> None:
         events = [
@@ -47,7 +47,35 @@ class AutoSustainPlanTests(unittest.TestCase):
 
         self.assertEqual([event.value for event in pedal], [127, 0])
         self.assertAlmostEqual(pedal[0].time, 0.075)
-        self.assertAlmostEqual(pedal[1].time, 1.325)
+        self.assertAlmostEqual(pedal[1].time, 0.675)
+
+    def test_plan_repedals_when_a_chord_changes_with_common_tones(self) -> None:
+        events = [
+            MidiEvent(0.0, "note_on", channel=0, note=60, velocity=90, track=0),
+            MidiEvent(0.0, "note_on", channel=0, note=64, velocity=90, track=0),
+            MidiEvent(0.0, "note_on", channel=0, note=67, velocity=90, track=0),
+            MidiEvent(0.35, "note_off", channel=0, note=60, track=0),
+            MidiEvent(0.35, "note_off", channel=0, note=64, track=0),
+            MidiEvent(0.35, "note_off", channel=0, note=67, track=0),
+            MidiEvent(0.45, "note_on", channel=0, note=60, velocity=90, track=0),
+            MidiEvent(0.45, "note_on", channel=0, note=64, velocity=90, track=0),
+            MidiEvent(0.45, "note_on", channel=0, note=69, velocity=90, track=0),
+            MidiEvent(0.85, "note_off", channel=0, note=60, track=0),
+            MidiEvent(0.85, "note_off", channel=0, note=64, track=0),
+            MidiEvent(0.85, "note_off", channel=0, note=69, track=0),
+        ]
+
+        pedal = [
+            event
+            for event in plan_auto_sustain(events)
+            if event.kind == AUTO_SUSTAIN_EVENT_KIND
+        ]
+
+        self.assertEqual([event.value for event in pedal], [127, 0, 127, 0])
+        self.assertAlmostEqual(pedal[0].time, 0.075)
+        self.assertAlmostEqual(pedal[1].time, 0.425)
+        self.assertAlmostEqual(pedal[2].time, 0.525)
+        self.assertAlmostEqual(pedal[3].time, 1.03)
 
     def test_plan_preserves_short_staccato(self) -> None:
         events = [

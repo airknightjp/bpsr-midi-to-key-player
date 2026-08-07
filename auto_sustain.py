@@ -14,9 +14,10 @@ CHORD_WINDOW_SECONDS = 0.035
 PEDAL_DEPRESSION_DELAY_SECONDS = 0.075
 PEDAL_RELEASE_LEAD_SECONDS = 0.025
 MIN_PEDALLED_NOTE_SECONDS = 0.09
-MAX_PEDAL_HOLD_SECONDS = 1.25
-FINAL_RELEASE_TAIL_SECONDS = 0.35
-MAX_RETAINED_NOTES = 8
+MIN_HARMONY_REPEDAL_SECONDS = 0.18
+MAX_PEDAL_HOLD_SECONDS = 0.60
+FINAL_RELEASE_TAIL_SECONDS = 0.18
+MAX_RETAINED_NOTES = 6
 PERCUSSION_CHANNEL = 9
 
 
@@ -357,7 +358,8 @@ def _should_clear_pedal(
 ) -> bool:
     if not sustained_notes:
         return False
-    if now - pedal_started_at >= MAX_PEDAL_HOLD_SECONDS:
+    pedal_age = now - pedal_started_at
+    if pedal_age >= MAX_PEDAL_HOLD_SECONDS:
         return True
     if len(sustained_notes) + len(incoming_notes) > MAX_RETAINED_NOTES:
         return True
@@ -377,6 +379,20 @@ def _should_clear_pedal(
                 conflicts += 1
     if conflicts >= max(2, len(incoming_notes)):
         return True
+
+    if pedal_age >= MIN_HARMONY_REPEDAL_SECONDS:
+        retained_pitch_classes = {note % 12 for note in sustained_notes}
+        incoming_pitch_classes = {note % 12 for note in incoming_notes}
+        if retained_pitch_classes != incoming_pitch_classes:
+            if len(retained_pitch_classes) > 1 or len(incoming_pitch_classes) > 1:
+                return True
+            old_pitch = sustained_notes[-1]
+            new_pitch = incoming_notes[0]
+            pitch_class_distance = abs(new_pitch - old_pitch) % 12
+            pitch_class_distance = min(pitch_class_distance, 12 - pitch_class_distance)
+            if pitch_class_distance >= 3:
+                return True
+
     combined = sustained_notes + incoming_notes
     return bool(combined) and max(combined) - min(combined) > 36
 
